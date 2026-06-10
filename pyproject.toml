@@ -1,0 +1,18 @@
+﻿[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "master-duel-recorder-lite"
+version = "0.1.0"
+description = "OBSに依存しないMaster Duel向け軽量録画支援ツール"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Tao-pyth" }]
+
+[project.scripts]
+mdrl = "master_duel_recorder_lite.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
