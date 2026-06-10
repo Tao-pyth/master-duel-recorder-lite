@@ -1,4 +1,4 @@
-﻿# master-duel-recorder-lite
+# master-duel-recorder-lite
 
 master-duel-recorder-lite は、OBS に依存しない Yu-Gi-Oh! Master Duel 向け録画支援ツールを目指す実験的な Python プロジェクトです。
 
@@ -14,7 +14,7 @@ master-duel-recorder-lite は、OBS に依存しない Yu-Gi-Oh! Master Duel 向
 
 ## 現在の状態
 
-このリポジトリは初期設計段階です。最初の実装は、録画そのものではなく、設定・保存先・設計ドキュメントの土台作りから始めます。これは、録画処理は環境依存が強く、先に保存先や責務分離を決めておかないと後から安全に変更しにくいためです。
+このリポジトリは初期設計段階です。現在は `user_data/` の標準ディレクトリ作成と、非シークレット設定 `user_data/config/app.toml` の読み書きに対応しています。録画本体はまだ実装していません。
 
 ## 開発メモ
 
@@ -23,6 +23,8 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
 python -m master_duel_recorder_lite
+python -m master_duel_recorder_lite --init-user-data --write-default-config --show-config
+python -m unittest discover -s tests
 ```
 
 ## ライセンス

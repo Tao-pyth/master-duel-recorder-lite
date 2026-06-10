@@ -1,4 +1,4 @@
-﻿# 実行時データ方針
+# 実行時データ方針
 
 ## 保存先
 
@@ -8,14 +8,21 @@
 user_data/
   config/
   data/
+    db/
+    recordings/
+    screenshots/
+    exports/
+    queue/
   logs/
-  recordings/
-  queue/
 ```
 
 ## Git に含めない理由
 
 `user_data/` には、録画ファイル、SQLiteデータベース、OAuthトークン、アップロードキュー、ログが入る可能性があります。これらはユーザー固有の情報なので GitHub に上げてはいけません。
+
+## 上書き方法
+
+開発や検証で保存先を変えたい場合は、環境変数 `MDRL_USER_DATA_DIR` を使います。CLIから一時的に変える場合は `--user-data-dir` を使います。
 
 ## 復旧方針
 

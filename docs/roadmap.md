@@ -1,9 +1,10 @@
-﻿# Roadmap
+# Roadmap
 
 ## v0.1.0: 土台作成
 
 - Python パッケージ構成を作る
 - `user_data/` の保存先を定義する
+- 非シークレット設定 `user_data/config/app.toml` を読み書きする
 - 設計ドキュメントを追加する
 - 最小CLIで実行確認できるようにする
 
