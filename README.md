@@ -20,7 +20,7 @@ V1.0.0までに、次の中核機能を段階的に提供します。
 
 ## 現在の状態
 
-現在のバージョンは `0.8.0`、「設定・運用CLI」です。V1候補の中核機能として、安全な設定操作、全サブシステムの状態診断、機械可読JSON、共通終了コード、録画IDを引き継ぐ操作体系を利用できます。現段階の自動検出は可視ウィンドウの存在判定です。外部サービスへの直接アップロード、OAuth、GUIは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
+現在のバージョンは `0.9.0`、「Windows EXE配布」です。Pythonを別途導入せず、GitHub Releaseから取得した単一EXEで設定、診断、録画、履歴、復旧、アップロード準備を操作できます。現段階の自動検出は可視ウィンドウの存在判定です。外部サービスへの直接アップロード、OAuth、GUIは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
 
 開発計画は [docs/roadmap.md](docs/roadmap.md)、バージョンごとの変更は [docs/release-notes.md](docs/release-notes.md) を参照してください。ロードマップ作業は実装前にGitHub Issueへ登録し、バージョンラベルとMilestoneへ接続します。
 
@@ -34,14 +34,45 @@ V1.0.0までに、次の中核機能を段階的に提供します。
 - 直接アップロードとOAuthはV1.0.0の中核範囲に含めず、まず安全なアップロード準備までを提供する
 - V1.0.0の操作面は拡張CLIとし、GUIはV1.0.0以降の候補とする
 
-## 開発
+## Windows EXEの導入
+
+Windows 10/11 x64では、[GitHub Releases](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/latest)から次の2ファイルをダウンロードします。Pythonのインストールは不要です。
+
+- `master-duel-recorder-lite.exe`
+- `master-duel-recorder-lite.exe.sha256`
+
+同じフォルダでPowerShellを開き、公開ハッシュとダウンロードしたEXEを照合します。
+
+```powershell
+$expected = (Get-Content .\master-duel-recorder-lite.exe.sha256).Split()[0]
+$actual = (Get-FileHash .\master-duel-recorder-lite.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256が一致しません" }
+```
+
+一致を確認したら初期化と環境診断を実行します。
+
+```powershell
+.\master-duel-recorder-lite.exe --version
+.\master-duel-recorder-lite.exe config init
+.\master-duel-recorder-lite.exe doctor
+```
+
+EXEにはPythonランタイムを含みますが、FFmpegは含みません。録画にはFFmpeg 6.0以上を別途導入してPATHへ追加するか、`config set recorder.ffmpeg_path`で指定してください。
+
+EXEはコード署名されていないため、Windows SmartScreenが警告する場合があります。GitHub Releaseの公開元、SHA-256、必要に応じて`gh attestation verify master-duel-recorder-lite.exe --repo Tao-pyth/master-duel-recorder-lite`でbuild provenanceを確認してください。確認できないEXEは実行しないでください。
+
+EXE実行時の既定データ保存先は、EXEと同じフォルダの`user_data/`です。更新時はアプリを終了し、`user_data/`を残したままEXEだけを置き換えます。別フォルダへ移す場合はEXEと`user_data/`を一緒に移してください。
+
+詳細は[Windows EXE配布設計](docs/architecture/windows-distribution.md)を参照してください。
+
+## 開発者向けセットアップ
 
 Python 3.11以上が必要です。
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e .
+python -m pip install -e ".[dev]"
 python -m master_duel_recorder_lite
 python -m master_duel_recorder_lite --version
 python -m master_duel_recorder_lite config init
@@ -62,7 +93,7 @@ python -m master_duel_recorder_lite prepare run
 python -m unittest discover -s tests
 ```
 
-既定ではリポジトリ直下の `user_data/` を使用します。検証用の保存先は環境変数 `MDRL_USER_DATA_DIR` または `--user-data-dir` で変更できます。
+Python実行では既定でカレントプロジェクト直下、EXE実行ではEXE配置フォルダ直下の `user_data/` を使用します。検証用の保存先は環境変数 `MDRL_USER_DATA_DIR` または `--user-data-dir` で変更できます。
 
 ## 設定・運用CLI
 

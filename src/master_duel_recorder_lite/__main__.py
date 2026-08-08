@@ -35,7 +35,13 @@ from .recorder import (
 )
 from .recording_session import RecordingResult, RecordingState
 from .recovery import InterruptedDetectionKind, RecoveryError, RecoveryManager
-from .runtime_paths import RuntimePathError, RuntimePaths, default_runtime_paths, ensure_runtime_dirs
+from .runtime_paths import (
+    RuntimePathError,
+    RuntimePaths,
+    application_project_root,
+    default_runtime_paths,
+    ensure_runtime_dirs,
+)
 from .upload_export import UploadExporter
 from .upload_manifest import UploadManifestWriter
 from .upload_media import UploadMediaValidator, find_ffprobe
@@ -84,7 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--init-user-data", action="store_true", help="user_data フォルダを作成します。")
     parser.add_argument("--write-default-config", action="store_true", help="既定の app.toml を作成します。")
     parser.add_argument("--show-config", action="store_true", help="現在の設定読み込み結果を表示します。")
-    parser.add_argument("--project-root", type=Path, default=Path.cwd(), help="user_data を作成する基準フォルダです。")
+    parser.add_argument(
+        "--project-root",
+        type=Path,
+        default=application_project_root(),
+        help="user_data を作成する基準フォルダです。EXEではEXE配置フォルダが既定です。",
+    )
     parser.add_argument("--user-data-dir", type=Path, default=None, help="user_data の場所を直接指定します。")
     parser.add_argument("--verbose", action="store_true", help="失敗時に内部診断を追加表示します。")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")

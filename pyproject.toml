@@ -4,12 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "master-duel-recorder-lite"
-version = "0.8.0"
+version = "0.9.0"
 description = "OBSに依存しないMaster Duel向け軽量録画支援ツール"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Tao-pyth" }]
+
+[project.optional-dependencies]
+build = ["pyinstaller==6.21.0", "pyinstaller-hooks-contrib==2026.6"]
+dev = ["ruff==0.15.21"]
 
 [project.scripts]
 mdrl = "master_duel_recorder_lite.__main__:main"

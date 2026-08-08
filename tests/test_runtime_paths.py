@@ -3,7 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
+from master_duel_recorder_lite.runtime_paths import (
+    application_project_root,
+    default_runtime_paths,
+    ensure_runtime_dirs,
+)
 
 
 class RuntimePathsTest(unittest.TestCase):
@@ -44,6 +48,28 @@ class RuntimePathsTest(unittest.TestCase):
             self.assertTrue(paths.db.is_dir())
             self.assertTrue(paths.recordings.is_dir())
             self.assertTrue(paths.queue.is_dir())
+
+    def test_frozen_application_uses_executable_directory(self) -> None:
+        executable = Path("distribution") / "master-duel-recorder-lite.exe"
+
+        root = application_project_root(
+            frozen=True,
+            executable=executable,
+            current_directory=Path("ignored"),
+        )
+
+        self.assertEqual(root, executable.resolve().parent)
+
+    def test_python_application_uses_current_directory(self) -> None:
+        current = Path("development")
+
+        root = application_project_root(
+            frozen=False,
+            executable=Path("ignored.exe"),
+            current_directory=current,
+        )
+
+        self.assertEqual(root, current.resolve())
 
 
 if __name__ == "__main__":

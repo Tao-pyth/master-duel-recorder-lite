@@ -2,6 +2,28 @@
 
 バージョンは `メジャー.マイナー.Fix` で管理します。`main` への通常pushではFixを1つ増やし、中核機能を完了するpushでは次のマイナーバージョンの `.0` を設定します。すべてのバージョン変更をこの文書へ新しい順で記録します。
 
+## V0.9.0: Windows EXE配布 - 2026-08-08
+
+### 変更
+
+- PyInstaller 6.21.0とhooks contrib 2026.6を固定し、Windows x64向けone-fileコンソールEXEのビルドスクリプトを追加した
+- EXEへFileVersion `0.9.0.0`、ProductVersion `0.9.0`、製品名、著作権情報を埋め込むようにした
+- PyInstaller凍結時はEXE配置フォルダ、Python実行時はカレントディレクトリを既定のプロジェクト基準にした
+- `--version`、`--help`、読取専用の設定JSONを検証するEXEスモークを追加した
+- `main`のWindows CIと、タグpush時のテスト、ビルド、スモーク、SHA-256、build provenance、GitHub Release公開を追加した
+- GitHub Actionsを検証済みリリースのcommit SHAへ固定した
+- タグ、`pyproject.toml`、`__version__`の一致検証を追加し、不一致時はReleaseを中止するようにした
+- Python不要のダウンロード、ハッシュ確認、初回起動、更新手順をREADMEへ追加した
+
+### 互換性とデータ影響
+
+- Pythonモジュールと既存CLIの引数・終了コードは変更しない
+- EXE実行時だけ既定の`user_data/`をEXEと同じフォルダへ置く
+- `MDRL_USER_DATA_DIR`と`--user-data-dir`による明示指定を引き続き優先する
+- EXE更新時も`user_data/`を削除・上書きしない
+- FFmpegはライセンス、サイズ、独立更新のためEXEへ同梱しない
+- EXEはコード署名されていないため、SmartScreen警告とSHA-256・build provenance確認手順を明記する
+
 ## V0.8.0: 設定・運用CLI - 2026-08-08
 
 ### 変更

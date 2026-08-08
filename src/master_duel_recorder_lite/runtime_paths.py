@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 
 USER_DATA_ENV = "MDRL_USER_DATA_DIR"
@@ -27,6 +28,21 @@ class RuntimePaths:
     queue: Path
 
 
+def application_project_root(
+    *,
+    frozen: bool | None = None,
+    executable: Path | None = None,
+    current_directory: Path | None = None,
+) -> Path:
+    """実行形態に応じた既定のプロジェクト基準フォルダを返します。"""
+
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    if is_frozen:
+        executable_path = executable or Path(sys.executable)
+        return executable_path.expanduser().resolve().parent
+    return (current_directory or Path.cwd()).expanduser().resolve()
+
+
 def default_runtime_root(project_root: Path | None = None) -> Path:
     """既定の user_data ルートを返します。
 
@@ -36,7 +52,7 @@ def default_runtime_root(project_root: Path | None = None) -> Path:
     override = os.getenv(USER_DATA_ENV)
     if override:
         return Path(override).expanduser().resolve()
-    return (project_root or Path.cwd()).resolve() / "user_data"
+    return (project_root or application_project_root()).resolve() / "user_data"
 
 
 def default_runtime_paths(project_root: Path | None = None, user_data_dir: Path | None = None) -> RuntimePaths:
