@@ -57,6 +57,19 @@ EXIT_ATTENTION = 4
 EXIT_INTERRUPTED = 130
 
 
+def configure_standard_streams() -> None:
+    """地域設定に依存せずCLIのUnicode出力を扱えるようにします。"""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
 class CliArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         self.print_usage(sys.stderr)
@@ -211,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_standard_streams()
     parser = build_parser()
     args = parser.parse_args(argv)
     paths = default_runtime_paths(project_root=args.project_root, user_data_dir=args.user_data_dir)

@@ -132,9 +132,9 @@
 - タグとコード内バージョンが一致する場合だけGitHub Releaseを作成する
 - Python不要の導入、更新、FFmpeg要件、SmartScreen制約を文書化する
 
-追跡: [V0.9.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/9)、Issue #53 - #59
+追跡: [V0.9.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/9)のIssue #53 - #59、および[V0.9.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/10)のIssue #60 - #61
 
-完了条件: `v0.9.0`のGitHub ReleaseからEXEとSHA-256を取得でき、ダウンロードしたEXEが`0.9.0`を表示し、ハッシュが一致すること。
+完了条件: `v0.9.1`のGitHub ReleaseからEXEとSHA-256を取得でき、ダウンロードしたEXEが`0.9.1`を表示し、ハッシュが一致すること。
 
 ## V1.0.0: 中核機能完成
 

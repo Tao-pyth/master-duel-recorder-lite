@@ -10,8 +10,8 @@ EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lit
 
 ビルド依存はPyInstaller 6.21.0とpyinstaller-hooks-contrib 2026.6へ固定します。Windows実行ファイルはWindows上でのみ生成し、UPXは使用しません。EXEには次のWindowsリソースを埋め込みます。
 
-- FileVersion: `0.9.0.0`
-- ProductVersion: `0.9.0`
+- FileVersion: `0.9.1.0`
+- ProductVersion: `0.9.1`
 - ProductName: `master-duel-recorder-lite`
 - OriginalFilename: `master-duel-recorder-lite.exe`
 
@@ -33,7 +33,7 @@ EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lit
 python -m pip install -e ".[build,dev]"
 python -W error::ResourceWarning -m unittest discover -s tests
 python scripts/build_windows_exe.py
-.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.9.0
+.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.9.1
 ```
 
 スモークは`--version`、`--help`、`config show --json`を実EXEから実行し、読取操作が`user_data/`を作成しないことも確認します。

@@ -1,11 +1,25 @@
 import io
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
-from master_duel_recorder_lite.__main__ import build_parser
+from master_duel_recorder_lite.__main__ import build_parser, configure_standard_streams
 
 
 class CliContractTest(unittest.TestCase):
+    def test_standard_stream_configuration_handles_japanese_on_cp1252(self) -> None:
+        output = io.BytesIO()
+        stream = io.TextIOWrapper(output, encoding="cp1252", errors="strict")
+
+        with patch.object(sys, "stdout", stream):
+            configure_standard_streams()
+            print("日本語ヘルプ")
+            stream.flush()
+
+        self.assertEqual(stream.encoding, "utf-8")
+        self.assertEqual(output.getvalue().decode("utf-8").splitlines(), ["日本語ヘルプ"])
+
     def test_root_help_lists_core_commands_and_safety_notice(self) -> None:
         help_text = build_parser().format_help()
 
