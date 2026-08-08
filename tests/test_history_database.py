@@ -1,0 +1,160 @@
+from contextlib import closing
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+from master_duel_recorder_lite.history_database import (
+    CURRENT_SCHEMA_VERSION,
+    HistoryDatabaseError,
+    _migrate_to_v1,
+    initialize_history_database,
+)
+
+
+def create_version_zero_database(path: Path) -> None:
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute(
+            "CREATE TABLE schema_version "
+            "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+        )
+        connection.execute("INSERT INTO schema_version(singleton, version) VALUES (1, 0)")
+        connection.execute("CREATE TABLE legacy_marker (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO legacy_marker(value) VALUES ('preserve-me')")
+
+
+class HistoryDatabaseTest(unittest.TestCase):
+    def test_new_database_is_initialized_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "db" / "history.sqlite3"
+            first = initialize_history_database(path)
+            second = initialize_history_database(path)
+            with closing(sqlite3.connect(path)) as connection:
+                version = connection.execute(
+                    "SELECT version FROM schema_version WHERE singleton = 1"
+                ).fetchone()[0]
+                recording_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'recordings'"
+                ).fetchone()
+
+        self.assertEqual(first.version, CURRENT_SCHEMA_VERSION)
+        self.assertIsNone(first.backup_path)
+        self.assertIsNone(second.backup_path)
+        self.assertEqual(version, CURRENT_SCHEMA_VERSION)
+        self.assertIsNotNone(recording_table)
+
+    def test_existing_old_database_is_backed_up_before_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            create_version_zero_database(path)
+
+            info = initialize_history_database(path)
+            assert info.backup_path is not None
+            with closing(sqlite3.connect(info.backup_path)) as backup:
+                backup_version = backup.execute(
+                    "SELECT version FROM schema_version WHERE singleton = 1"
+                ).fetchone()[0]
+                marker = backup.execute("SELECT value FROM legacy_marker").fetchone()[0]
+            backup_exists = info.backup_path.exists()
+
+        self.assertTrue(backup_exists)
+        self.assertEqual(backup_version, 0)
+        self.assertEqual(marker, "preserve-me")
+
+    def test_failed_migration_rolls_back_original_database(self) -> None:
+        def fail_after_change(connection: sqlite3.Connection) -> None:
+            connection.execute("CREATE TABLE must_rollback (value TEXT)")
+            raise RuntimeError("injected failure")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            create_version_zero_database(path)
+
+            with self.assertRaises(HistoryDatabaseError):
+                initialize_history_database(
+                    path,
+                    migrations={1: lambda _connection: None, 2: fail_after_change},
+                )
+
+            with closing(sqlite3.connect(path)) as connection:
+                version = connection.execute(
+                    "SELECT version FROM schema_version WHERE singleton = 1"
+                ).fetchone()[0]
+                rolled_back = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'must_rollback'"
+                ).fetchone()
+                marker = connection.execute("SELECT value FROM legacy_marker").fetchone()[0]
+            backups = tuple(path.parent.glob("*.backup.sqlite3"))
+
+        self.assertEqual(version, 0)
+        self.assertIsNone(rolled_back)
+        self.assertEqual(marker, "preserve-me")
+        self.assertEqual(len(backups), 1)
+
+    def test_newer_schema_is_rejected_without_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE schema_version "
+                    "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO schema_version(singleton, version) VALUES (1, ?)",
+                    (CURRENT_SCHEMA_VERSION + 1,),
+                )
+
+            with self.assertRaisesRegex(HistoryDatabaseError, "未対応"):
+                initialize_history_database(path)
+
+            self.assertEqual(tuple(path.parent.glob("*.backup.sqlite3")), ())
+
+    def test_current_version_without_required_schema_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE schema_version "
+                    "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO schema_version(singleton, version) VALUES (1, ?)",
+                    (CURRENT_SCHEMA_VERSION,),
+                )
+
+            with self.assertRaisesRegex(HistoryDatabaseError, "recordings"):
+                initialize_history_database(path)
+
+    def test_version_one_failed_record_is_migrated_to_pending_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE schema_version "
+                    "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+                )
+                connection.execute("INSERT INTO schema_version VALUES (1, 1)")
+                _migrate_to_v1(connection)
+                connection.execute(
+                    """
+                    INSERT INTO recordings (
+                        recording_id, state, source, output_path, container,
+                        created_at, error, diagnostics_json, updated_at
+                    ) VALUES ('legacy', 'failed', 'manual', 'legacy.mkv', 'mkv',
+                              '2026-08-08T00:00:00+00:00', 'old failure', '[]',
+                              '2026-08-08T00:00:00+00:00')
+                    """
+                )
+
+            info = initialize_history_database(path)
+            with closing(sqlite3.connect(path)) as connection:
+                row = connection.execute(
+                    "SELECT failure_code, recovery_policy, recovery_state FROM recordings"
+                ).fetchone()
+
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
+        self.assertEqual(row, ("legacy_failure", "manual_review", "pending"))
+
+
+if __name__ == "__main__":
+    unittest.main()

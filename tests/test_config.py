@@ -14,6 +14,16 @@ class AppConfigTest(unittest.TestCase):
         self.assertFalse(loaded.config_loaded)
         self.assertEqual(loaded.config.ffmpeg_path, "ffmpeg")
         self.assertEqual(loaded.config.recording_format, "mkv")
+        self.assertEqual(loaded.config.screen_input, "desktop")
+        self.assertEqual(loaded.config.screen_input_format, "gdigrab")
+        self.assertEqual(loaded.config.audio_input, "")
+        self.assertEqual(loaded.config.audio_input_format, "dshow")
+        self.assertEqual(loaded.config.video_encoder, "libx264")
+        self.assertEqual(loaded.config.game_process_name, "masterduel.exe")
+        self.assertTrue(loaded.config.auto_start_recording)
+        self.assertTrue(loaded.config.auto_stop_recording)
+        self.assertEqual(loaded.config.start_confirmations, 3)
+        self.assertEqual(loaded.config.stop_confirmations, 5)
         self.assertEqual(loaded.config.upload_privacy_status, "private")
 
     def test_save_and_load_config(self) -> None:
@@ -25,6 +35,25 @@ class AppConfigTest(unittest.TestCase):
                 config=AppConfig(
                     ffmpeg_path="C:/Tools/ffmpeg.exe",
                     recording_format="mp4",
+                    screen_input="desktop",
+                    screen_input_format="gdigrab",
+                    audio_input="マイク (Realtek Audio)",
+                    audio_input_format="dshow",
+                    video_encoder="h264_nvenc",
+                    frame_rate=60,
+                    capture_width=1920,
+                    capture_height=1080,
+                    video_bitrate_kbps=12_000,
+                    audio_bitrate_kbps=256,
+                    game_process_name="masterduel-test.exe",
+                    game_window_title_contains="Master Duel",
+                    auto_start_recording=False,
+                    auto_stop_recording=True,
+                    start_confirmations=2,
+                    stop_confirmations=4,
+                    detection_minimum_confidence=0.7,
+                    detection_poll_interval_seconds=0.5,
+                    detection_cooldown_seconds=20.0,
                     upload_privacy_status="unlisted",
                     auto_create_user_data=False,
                 ),
@@ -35,6 +64,21 @@ class AppConfigTest(unittest.TestCase):
         self.assertTrue(loaded.config_loaded)
         self.assertEqual(loaded.config.ffmpeg_path, "C:/Tools/ffmpeg.exe")
         self.assertEqual(loaded.config.recording_format, "mp4")
+        self.assertEqual(loaded.config.audio_input, "マイク (Realtek Audio)")
+        self.assertEqual(loaded.config.video_encoder, "h264_nvenc")
+        self.assertEqual(loaded.config.frame_rate, 60)
+        self.assertEqual(loaded.config.capture_width, 1920)
+        self.assertEqual(loaded.config.capture_height, 1080)
+        self.assertEqual(loaded.config.video_bitrate_kbps, 12_000)
+        self.assertEqual(loaded.config.audio_bitrate_kbps, 256)
+        self.assertEqual(loaded.config.game_process_name, "masterduel-test.exe")
+        self.assertEqual(loaded.config.game_window_title_contains, "Master Duel")
+        self.assertFalse(loaded.config.auto_start_recording)
+        self.assertEqual(loaded.config.start_confirmations, 2)
+        self.assertEqual(loaded.config.stop_confirmations, 4)
+        self.assertEqual(loaded.config.detection_minimum_confidence, 0.7)
+        self.assertEqual(loaded.config.detection_poll_interval_seconds, 0.5)
+        self.assertEqual(loaded.config.detection_cooldown_seconds, 20.0)
         self.assertEqual(loaded.config.upload_privacy_status, "unlisted")
         self.assertFalse(loaded.config.auto_create_user_data)
 
@@ -47,6 +91,112 @@ class AppConfigTest(unittest.TestCase):
 
             with self.assertRaises(AppConfigError):
                 load_app_config(user_data_dir=paths.root)
+
+    def test_old_config_uses_new_recording_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[recorder]\nrecording_format = "mkv"\n', encoding="utf-8")
+
+            loaded = load_app_config(user_data_dir=paths.root)
+
+        self.assertEqual(loaded.config.screen_input, "desktop")
+        self.assertEqual(loaded.config.screen_input_format, "gdigrab")
+        self.assertEqual(loaded.config.audio_input, "")
+        self.assertEqual(loaded.config.video_encoder, "libx264")
+
+    def test_invalid_screen_input_format_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[recorder]\nscreen_input_format = "x11grab"\n', encoding="utf-8")
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_blank_required_recording_value_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[recorder]\nscreen_input = "  "\n', encoding="utf-8")
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_non_ascii_encoder_name_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[recorder]\nvideo_encoder = "エンコーダー"\n', encoding="utf-8")
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_partial_resolution_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[recorder]\ncapture_width = 1920\n', encoding="utf-8")
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_out_of_range_frame_rate_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[recorder]\nframe_rate = 0\n', encoding="utf-8")
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_invalid_game_process_name_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[detection]\ngame_process_name = "master duel.exe"\n', encoding="utf-8")
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_out_of_range_detection_interval_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[detection]\npoll_interval_seconds = 0.0\n', encoding="utf-8")
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_save_rejects_boolean_recording_number(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+
+            with self.assertRaises(ValueError):
+                save_app_config(paths=paths, config=AppConfig(frame_rate=True))
+
+    def test_control_characters_round_trip_through_toml(self) -> None:
+        title = 'Master "Duel"\nWindow\tTitle\\Suffix'
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            save_app_config(
+                paths=paths,
+                config=AppConfig(game_window_title_contains=title),
+            )
+
+            loaded = load_app_config(user_data_dir=paths.root)
+
+        self.assertEqual(loaded.config.game_window_title_contains, title)
 
 
 if __name__ == "__main__":

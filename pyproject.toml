@@ -1,10 +1,10 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "master-duel-recorder-lite"
-version = "0.1.0"
+version = "0.8.0"
 description = "OBSに依存しないMaster Duel向け軽量録画支援ツール"
 readme = "README.md"
 requires-python = ">=3.11"
