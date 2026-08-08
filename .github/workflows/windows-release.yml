@@ -47,26 +47,33 @@ jobs:
         run: python -W error::ResourceWarning -m unittest discover -s tests
       - name: Build Windows EXE
         run: python scripts/build_windows_exe.py
-      - name: Smoke test Windows EXE
+      - name: Smoke test Windows EXEs
         shell: pwsh
         run: |
           ./scripts/smoke_windows_exe.ps1 `
             -ExePath ./dist/master-duel-recorder-lite.exe `
             -ExpectedVersion $env:MDRL_VERSION
-      - name: Create SHA-256 file
+          ./scripts/smoke_windows_gui.ps1 `
+            -ExePath ./dist/master-duel-recorder-lite-gui.exe `
+            -ExpectedVersion $env:MDRL_VERSION
+      - name: Create SHA-256 files
         shell: pwsh
         run: |
-          $path = "dist/master-duel-recorder-lite.exe"
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
-          [System.IO.File]::WriteAllText(
-            "dist/master-duel-recorder-lite.exe.sha256",
-            "$hash  master-duel-recorder-lite.exe`n",
-            [System.Text.Encoding]::ASCII
-          )
+          foreach ($name in @("master-duel-recorder-lite.exe", "master-duel-recorder-lite-gui.exe")) {
+            $path = "dist/$name"
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+            [System.IO.File]::WriteAllText(
+              "$path.sha256",
+              "$hash  $name`n",
+              [System.Text.Encoding]::ASCII
+            )
+          }
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/master-duel-recorder-lite.exe
+          subject-path: |
+            dist/master-duel-recorder-lite.exe
+            dist/master-duel-recorder-lite-gui.exe
       - name: Upload workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -74,6 +81,8 @@ jobs:
           path: |
             dist/master-duel-recorder-lite.exe
             dist/master-duel-recorder-lite.exe.sha256
+            dist/master-duel-recorder-lite-gui.exe
+            dist/master-duel-recorder-lite-gui.exe.sha256
           if-no-files-found: error
           retention-days: 30
       - name: Publish GitHub Release
@@ -89,6 +98,8 @@ jobs:
           gh release create "${{ github.ref_name }}" `
             "dist/master-duel-recorder-lite.exe" `
             "dist/master-duel-recorder-lite.exe.sha256" `
+            "dist/master-duel-recorder-lite-gui.exe" `
+            "dist/master-duel-recorder-lite-gui.exe.sha256" `
             --verify-tag `
             --title "master-duel-recorder-lite ${{ github.ref_name }}" `
             --notes-file $notes

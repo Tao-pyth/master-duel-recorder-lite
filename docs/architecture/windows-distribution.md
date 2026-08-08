@@ -2,7 +2,7 @@
 
 ## 目的と対象
 
-V0.9.0ではPythonを導入していない利用者向けに、Windows 10/11 x64で動作するone-fileコンソールEXEをGitHub Releaseから配布します。既存CLIの全コマンド、引数、終了コードをそのまま提供します。GUI化は行いません。
+V0.12.0ではPythonを導入していない利用者向けに、Windows 10/11 x64で動作するone-fileのCLI版とGUI版をGitHub Releaseから配布します。CLI版は既存の全コマンド、引数、終了コードを維持し、GUI版は中核操作を画面から提供します。
 
 ## 同梱範囲
 
@@ -10,10 +10,12 @@ EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lit
 
 ビルド依存はPyInstaller 6.21.0とpyinstaller-hooks-contrib 2026.6へ固定します。Windows実行ファイルはWindows上でのみ生成し、UPXは使用しません。EXEには次のWindowsリソースを埋め込みます。
 
-- FileVersion: `0.9.1.0`
-- ProductVersion: `0.9.1`
+- FileVersion: `0.12.0.0`
+- ProductVersion: `0.12.0`
 - ProductName: `master-duel-recorder-lite`
 - OriginalFilename: `master-duel-recorder-lite.exe`
+
+GUI版のOriginalFilenameは`master-duel-recorder-lite-gui.exe`で、コンソールウィンドウを表示しません。
 
 ## 実行時データ
 
@@ -33,10 +35,11 @@ EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lit
 python -m pip install -e ".[build,dev]"
 python -W error::ResourceWarning -m unittest discover -s tests
 python scripts/build_windows_exe.py
-.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.9.1
+.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.12.0
+.\scripts\smoke_windows_gui.ps1 -ExePath .\dist\master-duel-recorder-lite-gui.exe -ExpectedVersion 0.12.0
 ```
 
-スモークは`--version`、`--help`、`config show --json`を実EXEから実行し、読取操作が`user_data/`を作成しないことも確認します。
+CLIスモークは`--version`、`--help`、`config show --json`を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。どちらも読取操作だけで`user_data/`を作成しないことを確認します。
 
 ## GitHub Release
 

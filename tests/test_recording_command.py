@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from master_duel_recorder_lite.capture_targets import CaptureInput
 from master_duel_recorder_lite.recording_command import RecordingCommandError, build_recording_command
 from master_duel_recorder_lite.recording_profile import RecordingProfile
 
@@ -77,6 +78,40 @@ class RecordingCommandTest(unittest.TestCase):
                     output_path=output,
                     recordings_root=root,
                 )
+
+    def test_window_target_uses_hwnd_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "recordings"
+            root.mkdir()
+            command = build_recording_command(
+                executable=Path("C:/ffmpeg/bin/ffmpeg.exe"),
+                profile=RecordingProfile(),
+                capture_input=CaptureInput("gdigrab", "hwnd=4242"),
+                output_path=root / "window.mkv",
+                recordings_root=root,
+            )
+
+        self.assertIn("hwnd=4242", command)
+        self.assertNotIn("desktop", command)
+
+    def test_monitor_target_places_region_options_before_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "recordings"
+            root.mkdir()
+            command = build_recording_command(
+                executable=Path("C:/ffmpeg/bin/ffmpeg.exe"),
+                profile=RecordingProfile(),
+                capture_input=CaptureInput(
+                    "gdigrab",
+                    "desktop",
+                    ("-offset_x", "1920", "-offset_y", "0", "-video_size", "1920x1080"),
+                ),
+                output_path=root / "monitor.mkv",
+                recordings_root=root,
+            )
+
+        self.assertLess(command.index("-offset_x"), command.index("-i"))
+        self.assertIn("1920x1080", command)
 
 
 if __name__ == "__main__":

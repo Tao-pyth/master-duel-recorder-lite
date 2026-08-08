@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .capture_targets import CaptureInput, CaptureTargetError, resolve_configured_capture
 from .config import AppConfig
 from .ffmpeg import discover_ffmpeg
 from .recording_command import RecordingCommandError, build_recording_command
@@ -133,21 +134,38 @@ class PreparedRecording:
         self.lock.release()
 
 
-def prepare_recording(*, paths: RuntimePaths, config: AppConfig) -> PreparedRecording:
+def prepare_recording(
+    *,
+    paths: RuntimePaths,
+    config: AppConfig,
+    capture_input: CaptureInput | None = None,
+    master_duel_window_handle: int | None = None,
+) -> PreparedRecording:
     discovery = discover_ffmpeg(config.ffmpeg_path)
     if not discovery.found or discovery.executable is None:
         raise RecordingPreparationError("FFmpegを再検出できません。doctorを再実行してください")
 
     try:
         profile = RecordingProfile.from_config(config)
+        selected_input = capture_input or resolve_configured_capture(
+            config,
+            master_duel_window_handle=master_duel_window_handle,
+        )
         target = create_recording_target(paths, profile)
         command = build_recording_command(
             executable=discovery.executable,
             profile=profile,
+            capture_input=selected_input,
             output_path=target.path,
             recordings_root=paths.recordings,
         )
-    except (RecordingProfileError, RecordingPathError, RecordingCommandError, OSError) as exc:
+    except (
+        CaptureTargetError,
+        RecordingProfileError,
+        RecordingPathError,
+        RecordingCommandError,
+        OSError,
+    ) as exc:
         raise RecordingPreparationError(f"録画を準備できません: {exc}") from exc
 
     try:

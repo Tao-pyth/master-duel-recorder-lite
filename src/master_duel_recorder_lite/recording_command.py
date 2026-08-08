@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .capture_targets import CaptureInput
 from .recording_profile import RecordingProfile
 
 
@@ -13,6 +14,7 @@ def build_recording_command(
     *,
     executable: Path,
     profile: RecordingProfile,
+    capture_input: CaptureInput | None = None,
     output_path: Path,
     recordings_root: Path,
 ) -> tuple[str, ...]:
@@ -25,6 +27,11 @@ def build_recording_command(
     if output.exists():
         raise RecordingCommandError("既存の録画ファイルは上書きできません")
 
+    selected_input = capture_input or CaptureInput(
+        profile.screen_input_format,
+        profile.screen_input,
+        label=profile.screen_input,
+    )
     command = [
         str(executable.resolve()),
         "-hide_banner",
@@ -34,12 +41,12 @@ def build_recording_command(
         "-thread_queue_size",
         "512",
         "-f",
-        profile.screen_input_format,
+        selected_input.input_format,
         "-framerate",
         str(profile.frame_rate),
-        "-i",
-        profile.screen_input,
     ]
+    command.extend(selected_input.options)
+    command.extend(["-i", selected_input.input_name])
     if profile.has_audio:
         command.extend(
             [

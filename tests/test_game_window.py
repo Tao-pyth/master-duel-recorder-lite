@@ -94,10 +94,11 @@ class GameWindowMonitorTest(unittest.TestCase):
             backend=FakeBackend((process,), (WindowSnapshot(2, 42, "Master Duel", True, True, 1920, 1080),))  # type: ignore[arg-type]
         )
 
-        visible_signal = MasterDuelWindowDetector(visible).observe().signal
+        visible_observation = MasterDuelWindowDetector(visible).observe()
         minimized_signal = MasterDuelWindowDetector(minimized).observe().signal
 
-        self.assertIs(visible_signal, DetectionSignal.PRESENT)
+        self.assertIs(visible_observation.signal, DetectionSignal.PRESENT)
+        self.assertEqual(visible_observation.capture_window_handle, 2)
         self.assertIs(minimized_signal, DetectionSignal.ABSENT)
 
 

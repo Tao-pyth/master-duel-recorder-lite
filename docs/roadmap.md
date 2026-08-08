@@ -136,6 +136,42 @@
 
 完了条件: `v0.9.1`のGitHub ReleaseからEXEとSHA-256を取得でき、ダウンロードしたEXEが`0.9.1`を表示し、ハッシュが一致すること。
 
+## V0.10.0: 録画対象の明示化
+
+状態: 完了
+
+- Windowsのモニターと可視ウィンドウを列挙する
+- Master Duel、任意ウィンドウ、モニター、デスクトップを共通モデルで扱う
+- 選択対象をFFmpeg gdigrab入力へ安全に変換する
+- CLIと設定から録画対象を確認・保存できるようにする
+- 自動検出したMaster Duelウィンドウを実際の録画入力へ接続する
+
+追跡: [V0.10.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/11)、Issue #62 - #67
+
+## V0.11.0: Windows GUI
+
+状態: 完了
+
+- CLIと共通のアプリケーションサービスを設ける
+- 録画対象、診断、手動録画、自動監視を非同期GUIから操作する
+- 履歴、復旧、アップロード準備、主要設定をGUIへ統合する
+- 実行状態、エラー、終了処理を画面上で追跡できるようにする
+
+追跡: [V0.11.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/12)、Issue #68 - #73
+
+## V0.12.0: GUI配布品質
+
+状態: 完了
+
+- コンソールを表示しないone-file GUI EXEを追加する
+- CLI版とGUI版を同じGitHub Releaseで配布する
+- GUIの起動、主要部品、終了、バージョンを実EXEでスモーク検証する
+- 両EXEへ個別のSHA-256とbuild provenanceを提供する
+
+追跡: [V0.12.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/13)、Issue #74 - #77
+
+完了条件: GitHub Releaseから両EXEを取得でき、CLI操作とGUI起動をPython不要で確認できること。
+
 ## V1.0.0: 中核機能完成
 
-V0.2.0からV0.9.0までの中核機能が完了しても、自動ではV1.0.0へ更新しません。全完了条件を確認したうえで、ユーザーが明示的に「V1.0.0に変更せよ」と依頼した場合のみ更新します。
+V0.2.0からV0.12.0までの中核機能が完了しても、自動ではV1.0.0へ更新しません。全完了条件を確認したうえで、ユーザーが明示的に「V1.0.0に変更せよ」と依頼した場合のみ更新します。

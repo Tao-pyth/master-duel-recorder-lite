@@ -16,7 +16,7 @@ from .recorder import PreparedRecording, RecordingPreparationError, RecordingTra
 from .recording_session import RecordingResult, RecordingState
 
 
-RecordingFactory = Callable[[], PreparedRecording]
+RecordingFactory = Callable[[DuelObservation], PreparedRecording]
 
 
 class AutoRecordingEventAction(str, Enum):
@@ -98,7 +98,7 @@ class AutoRecordingController:
                 recording_id=self.current.target.recording_id,
             )
         try:
-            prepared = self.recording_factory()
+            prepared = self.recording_factory(observation)
         except RecordingPreparationError as exc:
             self.state_machine.mark_manual_stopped(observation.observed_at)
             return AutoRecordingEvent(

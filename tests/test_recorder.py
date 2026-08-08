@@ -31,7 +31,7 @@ class RecorderPreparationTest(unittest.TestCase):
                 attempts=(),
             )
             with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
-                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable)))
+                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"))
                 prepared.release()
 
         self.assertTrue(prepared.target.path.is_relative_to(paths.recordings.resolve()))
@@ -61,10 +61,10 @@ class RecorderPreparationTest(unittest.TestCase):
                 attempts=(),
             )
             with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
-                first = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable)))
+                first = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"))
                 try:
                     with self.assertRaises(RecordingPreparationError):
-                        prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable)))
+                        prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"))
                 finally:
                     first.release()
 
@@ -89,7 +89,7 @@ class RecorderPreparationTest(unittest.TestCase):
                 ),
             ):
                 with self.assertRaisesRegex(RecordingPreparationError, "録画ロック"):
-                    prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable)))
+                    prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"))
 
     def test_prepared_recording_persists_successful_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -105,7 +105,7 @@ class RecorderPreparationTest(unittest.TestCase):
                 attempts=(),
             )
             with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
-                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable)))
+                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"))
             prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
             try:
                 state = prepared.start(source="manual", detection_reason="test")
@@ -138,7 +138,7 @@ class RecorderPreparationTest(unittest.TestCase):
                 attempts=(),
             )
             with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
-                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable)))
+                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"))
             prepared.session = FakeLifecycleSession(  # type: ignore[assignment]
                 prepared.target.path,
                 fail_start=True,
@@ -171,7 +171,7 @@ class RecorderPreparationTest(unittest.TestCase):
                 attempts=(),
             )
             with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
-                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable)))
+                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"))
             prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
             try:
                 with patch.object(

@@ -20,7 +20,14 @@ class MasterDuelWindowDetector:
     def observe(self) -> DuelObservation:
         game = self.monitor.observe()
         if game.status is GameWindowStatus.VISIBLE:
-            return DuelObservation(DetectionSignal.PRESENT, 0.7, game.message, self.clock())
+            assert game.window is not None
+            return DuelObservation(
+                DetectionSignal.PRESENT,
+                0.7,
+                game.message,
+                self.clock(),
+                capture_window_handle=game.window.handle,
+            )
         if game.status in {
             GameWindowStatus.NOT_RUNNING,
             GameWindowStatus.RUNNING_NO_WINDOW,

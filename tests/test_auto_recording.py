@@ -82,7 +82,7 @@ class AutoRecordingControllerTest(unittest.TestCase):
         prepared = FakePrepared()
         controller = AutoRecordingController(
             state_machine=machine,
-            recording_factory=lambda: prepared,  # type: ignore[arg-type]
+            recording_factory=lambda _observation: prepared,
         )
 
         first = controller.process(observation(DetectionSignal.PRESENT, 0))
@@ -104,7 +104,7 @@ class AutoRecordingControllerTest(unittest.TestCase):
     def test_preparation_failure_rolls_back_detection_state(self) -> None:
         machine = DuelDetectionStateMachine(DetectionPolicy(start_confirmations=1))
 
-        def fail() -> object:
+        def fail(_observation: DuelObservation) -> object:
             raise RecordingPreparationError("busy")
 
         controller = AutoRecordingController(
@@ -122,7 +122,7 @@ class AutoRecordingControllerTest(unittest.TestCase):
         prepared = FakePrepared(session=FakeSession(start_state=RecordingState.FAILED))
         controller = AutoRecordingController(
             state_machine=machine,
-            recording_factory=lambda: prepared,  # type: ignore[arg-type]
+            recording_factory=lambda _observation: prepared,
         )
 
         event = controller.process(observation(DetectionSignal.PRESENT, 0))
@@ -136,7 +136,7 @@ class AutoRecordingControllerTest(unittest.TestCase):
         prepared = FakePrepared()
         controller = AutoRecordingController(
             state_machine=machine,
-            recording_factory=lambda: prepared,  # type: ignore[arg-type]
+            recording_factory=lambda _observation: prepared,
         )
         controller.process(observation(DetectionSignal.PRESENT, 0))
         prepared.session.state = RecordingState.FAILED
@@ -154,7 +154,7 @@ class AutoRecordingControllerTest(unittest.TestCase):
         prepared = FakePrepared()
         controller = AutoRecordingController(
             state_machine=machine,
-            recording_factory=lambda: prepared,  # type: ignore[arg-type]
+            recording_factory=lambda _observation: prepared,
         )
 
         started = controller.manual_start(BASE_TIME)

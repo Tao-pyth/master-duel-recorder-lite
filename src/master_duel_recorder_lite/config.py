@@ -14,6 +14,7 @@ ALLOWED_PRIVACY_STATUSES = {"private", "unlisted"}
 ALLOWED_RECORDING_FORMATS = {"mkv", "mp4"}
 ALLOWED_SCREEN_INPUT_FORMATS = {"gdigrab"}
 ALLOWED_AUDIO_INPUT_FORMATS = {"dshow"}
+ALLOWED_CAPTURE_MODES = {"master_duel", "window", "monitor", "desktop"}
 
 
 class AppConfigError(RuntimeError):
@@ -31,6 +32,8 @@ class AppConfig:
     recording_format: str = "mkv"
     screen_input: str = "desktop"
     screen_input_format: str = "gdigrab"
+    capture_mode: str = "master_duel"
+    capture_target_id: str = ""
     audio_input: str = ""
     audio_input_format: str = "dshow"
     video_encoder: str = "libx264"
@@ -95,6 +98,12 @@ def load_app_config(
                 _required_string_value(recorder_table, "screen_input_format", AppConfig.screen_input_format),
                 allowed=ALLOWED_SCREEN_INPUT_FORMATS,
                 key="screen_input_format",
+            ),
+            capture_mode=_capture_mode(
+                _string_value(recorder_table, "capture_mode", AppConfig.capture_mode)
+            ),
+            capture_target_id=_optional_string_value(
+                recorder_table, "capture_target_id", AppConfig.capture_target_id
             ),
             audio_input=_optional_string_value(recorder_table, "audio_input", AppConfig.audio_input),
             audio_input_format=_input_format(
@@ -173,6 +182,9 @@ def validate_app_config(config: AppConfig) -> None:
     _recording_format(config.recording_format)
     _required_value(config.screen_input, "screen_input")
     _input_format(config.screen_input_format, allowed=ALLOWED_SCREEN_INPUT_FORMATS, key="screen_input_format")
+    _capture_mode(config.capture_mode)
+    if config.capture_mode in {"window", "monitor"}:
+        _required_value(config.capture_target_id, "capture_target_id")
     _input_format(config.audio_input_format, allowed=ALLOWED_AUDIO_INPUT_FORMATS, key="audio_input_format")
     _encoder_name(config.video_encoder)
     _recording_number_values(config)
@@ -217,6 +229,8 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"recording_format = {_toml_string(config.recording_format)}",
                 f"screen_input = {_toml_string(config.screen_input)}",
                 f"screen_input_format = {_toml_string(config.screen_input_format)}",
+                f"capture_mode = {_toml_string(config.capture_mode)}",
+                f"capture_target_id = {_toml_string(config.capture_target_id)}",
                 f"audio_input = {_toml_string(config.audio_input)}",
                 f"audio_input_format = {_toml_string(config.audio_input_format)}",
                 f"video_encoder = {_toml_string(config.video_encoder)}",
@@ -327,6 +341,13 @@ def _recording_format(value: str) -> str:
     normalized = value.lower()
     if normalized not in ALLOWED_RECORDING_FORMATS:
         raise ValueError("recording_format は mkv または mp4 である必要があります")
+    return normalized
+
+
+def _capture_mode(value: str) -> str:
+    normalized = value.lower()
+    if normalized not in ALLOWED_CAPTURE_MODES:
+        raise ValueError("capture_modeはmaster_duel、window、monitor、desktopのいずれかである必要があります")
     return normalized
 
 

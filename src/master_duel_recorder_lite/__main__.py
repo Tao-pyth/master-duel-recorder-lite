@@ -10,6 +10,7 @@ import time
 
 from . import __version__
 from .auto_recording import AutoRecordingController, AutoRecordingEvent, AutoRecordingEventAction
+from .capture_targets import CaptureTargetCatalog
 from .config import AppConfig, AppConfigError, LoadedAppConfig, load_app_config, save_app_config
 from .config_management import ConfigValueError, config_value, config_values, updated_config
 from .detection import DetectionPolicy, DuelDetectionStateMachine
@@ -127,6 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status_parser.add_argument("--json", action="store_true", help="機械可読JSONで表示します。")
     subparsers.add_parser("list-inputs", help="Windowsの画面・音声入力候補を表示します。")
+    targets_parser = subparsers.add_parser(
+        "targets",
+        help="録画可能なデスクトップ、モニター、ウィンドウを表示します。",
+    )
+    targets_parser.add_argument("--json", action="store_true", help="機械可読JSONで表示します。")
     config_parser = subparsers.add_parser(
         "config",
         help="非シークレット設定を安全に管理します。",
@@ -273,6 +279,49 @@ def main(argv: Sequence[str] | None = None) -> int:
         for error in inputs.errors:
             _print_cli_error("E_INPUT_ENUMERATION", error, "doctorでFFmpegと入力設定を確認してください。")
         return 0 if inputs.succeeded else 2
+
+    if args.command == "targets":
+        loaded = _load_config_or_report(args.project_root, args.user_data_dir)
+        if loaded is None:
+            return 2
+        try:
+            monitor = GameWindowMonitor(
+                process_name=loaded.config.game_process_name,
+                title_contains=loaded.config.game_window_title_contains,
+            )
+            targets = CaptureTargetCatalog().list_targets(master_duel_monitor=monitor)
+        except (OSError, RuntimeError, ValueError) as exc:
+            _print_cli_error(
+                "E_CAPTURE_TARGETS",
+                str(exc),
+                "Windowsの画面構成と実行権限を確認してください。",
+            )
+            return 2
+        if args.json:
+            document = [
+                {
+                    "mode": target.mode.value,
+                    "id": target.identifier,
+                    "label": target.label,
+                    "available": target.available,
+                    "detail": target.detail,
+                }
+                for target in targets
+            ]
+            print(json.dumps(document, ensure_ascii=False, sort_keys=True))
+        else:
+            for target in targets:
+                selected = target.mode.value == loaded.config.capture_mode and (
+                    not loaded.config.capture_target_id
+                    or target.identifier == loaded.config.capture_target_id
+                )
+                marker = "*" if selected else " "
+                state = "利用可" if target.available else "利用不可"
+                print(
+                    f"{marker} [{target.mode.value}] {target.identifier} | "
+                    f"{state} | {target.label} | {target.detail}"
+                )
+        return 0
 
     if args.command == "config":
         return _run_config_command(paths=paths, args=args)
@@ -974,7 +1023,11 @@ def _run_watch_command(*, project_root: Path, user_data_dir: Path | None, once: 
     )
     controller = AutoRecordingController(
         state_machine=state_machine,
-        recording_factory=lambda: prepare_recording(paths=paths, config=config),
+        recording_factory=lambda observation: prepare_recording(
+            paths=paths,
+            config=config,
+            master_duel_window_handle=observation.capture_window_handle,
+        ),
     )
     print("Master Duelウィンドウの監視を開始しました。停止するにはCtrl+Cを押してください。")
     try:

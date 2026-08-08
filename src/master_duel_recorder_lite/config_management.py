@@ -54,6 +54,8 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
         "recorder.recording_format": ConfigField("recording_format", _lower_text),
         "recorder.screen_input": ConfigField("screen_input", _stripped_text),
         "recorder.screen_input_format": ConfigField("screen_input_format", _lower_text),
+        "recorder.capture_mode": ConfigField("capture_mode", _lower_text),
+        "recorder.capture_target_id": ConfigField("capture_target_id", _stripped_text),
         "recorder.audio_input": ConfigField("audio_input", _stripped_text),
         "recorder.audio_input_format": ConfigField("audio_input_format", _lower_text),
         "recorder.video_encoder": ConfigField("video_encoder", _stripped_text),

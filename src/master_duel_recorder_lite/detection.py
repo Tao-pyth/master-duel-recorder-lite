@@ -23,6 +23,7 @@ class DuelObservation:
     confidence: float
     reason: str
     observed_at: datetime
+    capture_window_handle: int | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
@@ -31,6 +32,8 @@ class DuelObservation:
             raise ValueError("observed_at にはタイムゾーンが必要です")
         if not self.reason.strip():
             raise ValueError("reason は空にできません")
+        if self.capture_window_handle is not None and self.capture_window_handle <= 0:
+            raise ValueError("capture_window_handleは正数である必要があります")
 
 
 @dataclass(frozen=True)
