@@ -30,6 +30,7 @@ from .recording_session import RecordingState
 
 
 T = TypeVar("T")
+WAITING_ACTIVITY_PREFIX = "対戦開始を判定中です"
 
 
 @dataclass(frozen=True)
@@ -1316,7 +1317,18 @@ class RecorderGui:
                 event = self.watch_events.get_nowait()
             except queue.Empty:
                 break
-            self._activity(event.message)
+            if (
+                event.kind == "visual"
+                and event.state == "waiting"
+                and event.message.startswith(WAITING_ACTIVITY_PREFIX)
+            ):
+                self._activity(event.message, replace_prefix=WAITING_ACTIVITY_PREFIX)
+            else:
+                if event.kind == "visual" or (
+                    event.kind == "watch" and event.state == "stopped"
+                ):
+                    self._remove_activity(WAITING_ACTIVITY_PREFIX)
+                self._activity(event.message)
             if event.kind == "started":
                 self.record_state_var.set("自動録画中")
                 self.record_detail_var.set(f"録画ID: {event.recording_id or '-'}\n保存先: 履歴で確認")
@@ -1400,10 +1412,17 @@ class RecorderGui:
         if not self.smoke_mode:
             messagebox.showerror("操作を完了できません", str(error), parent=self.root)
 
-    def _activity(self, message: str) -> None:
+    def _activity(self, message: str, *, replace_prefix: str | None = None) -> None:
+        if replace_prefix is not None:
+            self._remove_activity(replace_prefix)
         self.activity_list.insert(0, message)
         if self.activity_list.size() > 100:
             self.activity_list.delete(100, "end")
+
+    def _remove_activity(self, prefix: str) -> None:
+        for index in range(self.activity_list.size() - 1, -1, -1):
+            if str(self.activity_list.get(index)).startswith(prefix):
+                self.activity_list.delete(index)
 
     def _selected_id(self, tree: ttk.Treeview) -> str | None:
         selection = tree.selection()

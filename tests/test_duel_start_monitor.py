@@ -86,11 +86,26 @@ class MasterDuelStartMonitorTest(unittest.TestCase):
         latched = monitor.observe()
 
         self.assertIs(before_duel.signal, DetectionSignal.UNKNOWN)
+        self.assertEqual(monitor.status.message, "対戦開始を確認しました")
         self.assertIs(started.signal, DetectionSignal.PRESENT)
         self.assertIs(latched.signal, DetectionSignal.PRESENT)
         self.assertEqual(started.capture_target_key, (10, 100))
         self.assertEqual(monitor.status.processed_frames, 2)
         self.assertEqual(monitor.status.candidate_count, 1)
+
+    def test_waiting_status_includes_elapsed_seconds(self) -> None:
+        captures = [sample(0), sample(4)]
+        monitor = MasterDuelStartMonitor(
+            SequenceWindowDetector([visible(0), visible(4)]),  # type: ignore[arg-type]
+            capture=lambda _window: FrameCaptureResult(captures.pop(0), None),
+            pipeline_factory=lambda: SequencePipeline([(), ()]),  # type: ignore[arg-type]
+        )
+
+        monitor.observe()
+        self.assertEqual(monitor.status.message, "対戦開始を判定中です (0s)")
+
+        monitor.observe()
+        self.assertEqual(monitor.status.message, "対戦開始を判定中です (4s)")
 
     def test_capture_failure_is_unknown_and_does_not_start(self) -> None:
         pipeline_count = 0

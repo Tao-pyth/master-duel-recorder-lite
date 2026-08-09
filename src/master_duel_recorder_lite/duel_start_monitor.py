@@ -123,7 +123,8 @@ class MasterDuelStartMonitor:
             None,
         )
         if self._candidate is None:
-            self._publish("waiting", "対戦開始を判定中です")
+            elapsed_seconds = elapsed_ms // 1000
+            self._publish("waiting", f"対戦開始を判定中です ({elapsed_seconds}s)")
             return replace(
                 observation,
                 signal=DetectionSignal.UNKNOWN,
