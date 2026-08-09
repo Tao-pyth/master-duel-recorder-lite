@@ -1,4 +1,6 @@
+import queue
 import unittest
+from unittest.mock import Mock
 
 from master_duel_recorder_lite.gui import RecorderGui, WAITING_ACTIVITY_PREFIX
 
@@ -52,6 +54,20 @@ class GuiActivityTest(unittest.TestCase):
         self.gui._remove_activity(WAITING_ACTIVITY_PREFIX)
 
         self.assertEqual(self.gui.activity_list.items, ["録画対象を保存しました"])
+
+    def test_runtime_poll_does_not_call_service_while_operation_is_busy(self) -> None:
+        gui = RecorderGui.__new__(RecorderGui)
+        gui.watch_events = queue.Queue()
+        gui.busy_operations = 1
+        gui.closing = False
+        gui.service = Mock()
+        gui.root = Mock()
+
+        gui._poll_runtime()
+
+        gui.service.recording_snapshot.assert_not_called()
+        gui.service.visual_detection_status.assert_not_called()
+        gui.root.after.assert_called_once_with(500, gui._poll_runtime)
 
 
 if __name__ == "__main__":

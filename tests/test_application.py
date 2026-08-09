@@ -1,4 +1,6 @@
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +22,130 @@ from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
+    def test_manual_start_reservation_is_released_after_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(
+                user_data_dir=Path(tmp_dir) / "user_data"
+            )
+            target = CaptureTarget(
+                CaptureMode.DESKTOP, "desktop", "デスクトップ全体"
+            )
+            failed_report = PreflightReport(
+                (
+                    PreflightCheck(
+                        "capture",
+                        "録画入力",
+                        CheckStatus.ERROR,
+                        "利用できません",
+                    ),
+                )
+            )
+            passed_report = PreflightReport(
+                (PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),)
+            )
+            with (
+                patch(
+                    "master_duel_recorder_lite.application.run_preflight",
+                    side_effect=(failed_report, passed_report),
+                ),
+                patch(
+                    "master_duel_recorder_lite.application.prepare_recording",
+                    side_effect=RuntimeError("retry reached preparation"),
+                ),
+            ):
+                with self.assertRaises(ApplicationOperationError):
+                    service.start_recording(target)
+                with self.assertRaisesRegex(RuntimeError, "retry reached preparation"):
+                    service.start_recording(target)
+
+    def test_slow_manual_start_does_not_hold_service_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "user_data"
+            output = root / "data" / "recordings" / "recording.mkv"
+            now = datetime.now(timezone.utc)
+            result = RecordingResult(
+                RecordingState.COMPLETED,
+                output,
+                0,
+                now,
+                now,
+                100,
+                None,
+                (),
+            )
+            session = SimpleNamespace(
+                state=RecordingState.RECORDING,
+                started_at=now,
+                result=None,
+            )
+            prepared = SimpleNamespace(
+                target=SimpleNamespace(recording_id="recording-id", path=output),
+                session=session,
+                start=lambda **_kwargs: RecordingState.RECORDING,
+                poll=lambda: session.state,
+                stop=lambda: result,
+                release=lambda: None,
+                visual_detection_status=VisualDetectionStatus(
+                    "disabled", "disabled", 0, 0, 0
+                ),
+            )
+            report = PreflightReport(
+                (PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),)
+            )
+            entered_preflight = threading.Event()
+            continue_preflight = threading.Event()
+            failures: list[BaseException] = []
+
+            def delayed_preflight(**_kwargs: object) -> PreflightReport:
+                entered_preflight.set()
+                if not continue_preflight.wait(2):
+                    raise TimeoutError("test did not release preflight")
+                return report
+
+            service = RecorderApplicationService(user_data_dir=root)
+            target = CaptureTarget(CaptureMode.DESKTOP, "desktop", "デスクトップ全体")
+
+            def start() -> None:
+                try:
+                    service.start_recording(target)
+                except BaseException as exc:
+                    failures.append(exc)
+
+            with (
+                patch(
+                    "master_duel_recorder_lite.application.run_preflight",
+                    side_effect=delayed_preflight,
+                ),
+                patch(
+                    "master_duel_recorder_lite.application.prepare_recording",
+                    return_value=prepared,
+                ),
+            ):
+                thread = threading.Thread(target=start)
+                thread.start()
+                self.assertTrue(entered_preflight.wait(1))
+
+                before = time.monotonic()
+                snapshot = service.recording_snapshot()
+                elapsed = time.monotonic() - before
+
+                self.assertFalse(snapshot.active)
+                self.assertLess(elapsed, 0.25)
+                with self.assertRaisesRegex(ApplicationOperationError, "開始処理"):
+                    service.start_recording(target)
+                with self.assertRaisesRegex(ApplicationOperationError, "開始処理中"):
+                    service.start_watch()
+                with self.assertRaisesRegex(ApplicationOperationError, "開始処理中"):
+                    service.close()
+
+                continue_preflight.set()
+                thread.join(2)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(failures, [])
+            self.assertTrue(service.recording_snapshot().active)
+            service.stop_recording()
+
     def test_select_capture_target_persists_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")

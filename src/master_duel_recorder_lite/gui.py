@@ -1295,6 +1295,14 @@ class RecorderGui:
     def request_close(self) -> None:
         if self.closing:
             return
+        if self.busy_operations > 0:
+            if not self.smoke_mode:
+                messagebox.showinfo(
+                    "処理中",
+                    "実行中の処理が完了してから終了してください。",
+                    parent=self.root,
+                )
+            return
         active = self.service.watch_active
         try:
             active = active or self.service.recording_snapshot().active
@@ -1342,7 +1350,8 @@ class RecorderGui:
                 self._watch_stopped()
             elif event.kind == "visual":
                 self.visual_status_var.set(f"自動判定: {event.message}")
-        if not self.service.watch_active and not self.closing:
+        can_poll_service = self.busy_operations == 0 and not self.closing
+        if can_poll_service and not self.service.watch_active:
             try:
                 snapshot = self.service.recording_snapshot()
             except Exception as exc:
@@ -1350,12 +1359,13 @@ class RecorderGui:
             else:
                 self._render_recording(snapshot)
         if not self.closing:
-            status = self.service.visual_detection_status()
-            self.visual_status_var.set(
-                "自動判定: "
-                f"{status.message} / 候補 {status.candidate_count} / "
-                f"処理 {status.processed_frames} / 破棄 {status.dropped_frames}"
-            )
+            if can_poll_service:
+                status = self.service.visual_detection_status()
+                self.visual_status_var.set(
+                    "自動判定: "
+                    f"{status.message} / 候補 {status.candidate_count} / "
+                    f"処理 {status.processed_frames} / 破棄 {status.dropped_frames}"
+                )
             self.root.after(500, self._poll_runtime)
 
     def _render_recording(self, snapshot: RecordingSnapshot) -> None:

@@ -97,6 +97,7 @@ class RecorderApplicationService:
         self._ffmpeg_installer = ffmpeg_installer or FfmpegInstaller()
         self._lock = threading.RLock()
         self._current: PreparedRecording | None = None
+        self._manual_starting = False
         self._watch_thread: threading.Thread | None = None
         self._watch_stop = threading.Event()
         self._visual_status = VisualDetectionStatus(
@@ -160,10 +161,16 @@ class RecorderApplicationService:
     def start_recording(self, target: CaptureTarget | None = None) -> RecordingSnapshot:
         with self._lock:
             self._collect_manual_terminal_locked()
+            if self._manual_starting:
+                raise ApplicationOperationError("録画の開始処理はすでに実行中です")
             if self._current is not None:
                 raise ApplicationOperationError("録画はすでに実行中です")
             if self.watch_active:
                 raise ApplicationOperationError("自動監視中は手動録画を開始できません")
+            self._manual_starting = True
+
+        prepared: PreparedRecording | None = None
+        try:
             loaded = self.load_config()
             report = run_preflight(
                 paths=self.paths,
@@ -186,25 +193,31 @@ class RecorderApplicationService:
                     if target.mode is CaptureMode.MASTER_DUEL
                     else capture_input_for_target(target)
                 )
-            try:
-                prepared = prepare_recording(
-                    paths=self.paths,
-                    config=loaded.config,
-                    capture_input=capture_input,
-                    enable_visual_detection=False,
-                )
-                state = prepared.start(source="gui", detection_reason="GUIによる手動録画")
-            except Exception:
-                if "prepared" in locals():
-                    prepared.release()
-                raise
+            prepared = prepare_recording(
+                paths=self.paths,
+                config=loaded.config,
+                capture_input=capture_input,
+                enable_visual_detection=False,
+            )
+            state = prepared.start(source="gui", detection_reason="GUIによる手動録画")
             if state is RecordingState.FAILED:
                 result = prepared.session.result
-                prepared.release()
-                raise ApplicationOperationError(result.error if result and result.error else "録画を開始できません")
-            self._current = prepared
-            self._visual_status = prepared.visual_detection_status
-            return self._manual_snapshot_locked()
+                raise ApplicationOperationError(
+                    result.error if result and result.error else "録画を開始できません"
+                )
+            with self._lock:
+                self._current = prepared
+                self._visual_status = prepared.visual_detection_status
+                self._manual_starting = False
+                return self._manual_snapshot_locked()
+        except BaseException:
+            try:
+                if prepared is not None:
+                    prepared.release()
+            finally:
+                with self._lock:
+                    self._manual_starting = False
+            raise
 
     def recording_snapshot(self) -> RecordingSnapshot:
         with self._lock:
@@ -221,6 +234,8 @@ class RecorderApplicationService:
 
     def stop_recording(self) -> RecordingSnapshot:
         with self._lock:
+            if self._manual_starting:
+                raise ApplicationOperationError("録画の開始処理中は停止できません")
             if self._current is None:
                 raise ApplicationOperationError("実行中の手動録画はありません")
             prepared = self._current
@@ -247,6 +262,8 @@ class RecorderApplicationService:
     def start_watch(self, callback: EventCallback | None = None) -> None:
         with self._lock:
             self._collect_manual_terminal_locked()
+            if self._manual_starting:
+                raise ApplicationOperationError("手動録画の開始処理中は自動監視を開始できません")
             if self._current is not None:
                 raise ApplicationOperationError("手動録画中は自動監視を開始できません")
             if self.watch_active:
@@ -394,6 +411,9 @@ class RecorderApplicationService:
         return self._upload_preparation_service().process(queue_id)
 
     def close(self) -> None:
+        with self._lock:
+            if self._manual_starting:
+                raise ApplicationOperationError("録画の開始処理中は終了できません")
         if self.watch_active:
             self.stop_watch()
         with self._lock:
