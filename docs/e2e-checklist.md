@@ -9,7 +9,7 @@
 
 ## 手順
 
-1. `python -m pip install -e ".[build,dev]"`が成功し、`python -m master_duel_recorder_lite --version`が`0.16.9`を表示する。
+1. `python -m pip install -e ".[build,dev]"`が成功し、`python -m master_duel_recorder_lite --version`が`0.16.10`を表示する。
 2. `config init`が`app.toml`を作成し、2回目は終了コード4で既存設定を保持する。
 3. `config set`、`config get`、`config show --json`で値とJSONを確認し、不正値で元設定が変わらないことを確認する。
 4. `doctor`と`list-inputs`で画面入力、任意の音声入力、エンコーダー、保存先を確認する。
@@ -27,8 +27,8 @@
 16. GUIの対戦記録で日本語選択、デッキ名・タグの自由入力と再選択、前回値引継ぎ、既存記録の固有値維持を確認する。
 17. サイドメニューの「デッキ名・タグ」で追加・名称変更・削除し、過去の対戦記録が変わらないことを確認する。
 18. 検証用録画履歴を削除し、元録画、復旧成果物、対戦記録、タイムラインが消え、履歴と復旧一覧から除外されることを確認する。
-19. `python scripts/build_windows_exe.py`、CLI・GUIのスモークが成功し、両方のPEバージョンが`0.16.9`、EXE隣接`user_data/`なし、既定先がLocalAppData配下であることを確認する。
-20. `v0.16.9`のGitHub ReleaseからCLI・GUI EXEとSHA-256を再取得し、ハッシュ一致、CLIの`--version`、GUI起動を確認する。
+19. `python scripts/build_windows_exe.py`、CLI・GUIのスモークが成功し、両方のPEバージョンが`0.16.10`、EXE隣接`user_data/`なし、既定先がLocalAppData配下であることを確認する。
+20. `v0.16.10`のGitHub ReleaseからCLI・GUI EXEとSHA-256を再取得し、ハッシュ一致、CLIの`--version`、GUI起動を確認する。
 
 ## 自動検証との対応
 
@@ -45,4 +45,4 @@
 
 ## V1.0.0判断
 
-V0.16.9までの中核機能と検証証拠が揃っても、自動でV1.0.0へ更新しません。既知制約を確認し、ユーザーが明示的に「V1.0.0に変更せよ」と依頼するまで`0.x`を維持します。
+V0.16.10までの中核機能と検証証拠が揃っても、自動でV1.0.0へ更新しません。既知制約を確認し、ユーザーが明示的に「V1.0.0に変更せよ」と依頼するまで`0.x`を維持します。

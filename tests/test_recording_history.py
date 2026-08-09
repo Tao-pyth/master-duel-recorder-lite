@@ -300,7 +300,7 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
                 }
 
         self.assertEqual(result.recording_id, "delete-me")
-        self.assertEqual(set(result.deleted_files), {output, recovered})
+        self.assertEqual(set(result.deleted_files), {output.resolve(), recovered.resolve()})
         self.assertFalse(output.exists())
         self.assertFalse(recovered.exists())
         self.assertIsNone(repository.get("delete-me"))
@@ -322,7 +322,7 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
 
             result = repository.delete("missing")
 
-        self.assertEqual(result.missing_files, (output,))
+        self.assertEqual(result.missing_files, (output.resolve(),))
         self.assertIsNone(repository.get("missing"))
 
     def test_delete_staging_failure_preserves_history_and_file(self) -> None:
