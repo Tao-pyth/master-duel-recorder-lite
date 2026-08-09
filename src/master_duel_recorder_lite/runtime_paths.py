@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +8,7 @@ import sys
 
 
 USER_DATA_ENV = "MDRL_USER_DATA_DIR"
+APPLICATION_DIRECTORY_NAME = "MasterDuelRecorderLite"
 
 
 class RuntimePathError(RuntimeError):
@@ -43,16 +45,39 @@ def application_project_root(
     return (current_directory or Path.cwd()).expanduser().resolve()
 
 
-def default_runtime_root(project_root: Path | None = None) -> Path:
+def local_application_data_root(
+    *,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    environment = os.environ if environ is None else environ
+    configured = environment.get("LOCALAPPDATA")
+    base = Path(configured) if configured else (home or Path.home()) / "AppData" / "Local"
+    return (base / APPLICATION_DIRECTORY_NAME).expanduser().resolve()
+
+
+def default_runtime_root(
+    project_root: Path | None = None,
+    *,
+    frozen: bool | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
     """既定の user_data ルートを返します。
 
     `MDRL_USER_DATA_DIR` が設定されている場合は、その場所を優先します。初心者向けに言うと、普段はリポジトリ直下の `user_data` を使い、必要な人だけ保存先を変更できる仕組みです。
     """
 
-    override = os.getenv(USER_DATA_ENV)
+    environment = os.environ if environ is None else environ
+    override = environment.get(USER_DATA_ENV)
     if override:
         return Path(override).expanduser().resolve()
-    return (project_root or application_project_root()).resolve() / "user_data"
+    if project_root is not None:
+        return project_root.expanduser().resolve() / "user_data"
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    if is_frozen:
+        return local_application_data_root(environ=environment, home=home)
+    return application_project_root(frozen=False).resolve() / "user_data"
 
 
 def default_runtime_paths(project_root: Path | None = None, user_data_dir: Path | None = None) -> RuntimePaths:

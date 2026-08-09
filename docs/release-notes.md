@@ -2,6 +2,25 @@
 
 バージョンは `メジャー.マイナー.Fix` で管理します。`main` への通常pushではFixを1つ増やし、中核機能を完了するpushでは次のマイナーバージョンの `.0` を設定します。すべてのバージョン変更をこの文書へ新しい順で記録します。
 
+## V0.16.1: 初回FFmpegセットアップと保存先修正 - 2026-08-09
+
+### 変更
+
+- FFmpegが利用できないGUI初回起動時にセットアップ画面を表示するようにした
+- 配布元、GPLv3、ダウンロードURL、インストール先を示し、明示許可後だけGyan FFmpeg Buildsのrelease essentials ZIPを取得するようにした
+- 公開SHA-256照合、安全なZIP展開、FFmpeg 6.0以上とffprobeの起動確認後だけ設定を保存する導入トランザクションを追加した
+- 管理対象FFmpegを`%LOCALAPPDATA%\MasterDuelRecorderLite\tools\ffmpeg`から探索するようにした
+- FFmpeg探索の起動待ちを5秒から15秒へ延長し、初回展開やセキュリティ検査による誤判定を抑えた
+- EXE実行時の既定データ保存先をEXE隣接`user_data/`から`%LOCALAPPDATA%\MasterDuelRecorderLite`へ変更した
+- CLI・GUI実EXEスモークへ、EXE隣接フォルダが作成されないこととLocalAppData分離を追加した
+
+### 互換性とデータ影響
+
+- V0.16.0以前のEXE隣接`user_data/`は自動で移動、削除、上書きしない
+- `MDRL_USER_DATA_DIR`、`--user-data-dir`、明示的なproject rootは既定値より優先する
+- FFmpeg導入は空または未作成の専用フォルダだけを使用し、失敗時は設定と既存データを変更しない
+- CLIでは自動ダウンロードを行わず、既存の手動導入とパス指定を維持する
+
 ## V0.16.0: 基本イベント自動判定 - 2026-08-09
 
 ### 変更

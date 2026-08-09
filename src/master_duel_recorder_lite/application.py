@@ -14,6 +14,12 @@ from .detection import DetectionPolicy, DuelDetectionStateMachine
 from .duel_records import DuelRecord, DuelRecordChange, DuelRecordRepository, DuelRecordValues
 from .duel_timeline import DuelEvent, DuelTimelineRepository
 from .ffmpeg import discover_ffmpeg
+from .ffmpeg_setup import (
+    FfmpegInstallProgress,
+    FfmpegInstallResult,
+    FfmpegInstaller,
+    default_ffmpeg_install_directory,
+)
 from .game_window import GameWindowMonitor
 from .master_duel_detector import MasterDuelWindowDetector
 from .media_recovery import MediaInspection, MediaRecoveryService, MediaRepairResult
@@ -72,12 +78,14 @@ class RecorderApplicationService:
         user_data_dir: Path | None = None,
         target_catalog: CaptureTargetCatalog | None = None,
         recording_browser: RecordingBrowser | None = None,
+        ffmpeg_installer: FfmpegInstaller | None = None,
     ) -> None:
         self.project_root = project_root
         self.user_data_dir = user_data_dir
         self.paths = default_runtime_paths(project_root=project_root, user_data_dir=user_data_dir)
         self._target_catalog = target_catalog
         self._recording_browser = recording_browser
+        self._ffmpeg_installer = ffmpeg_installer or FfmpegInstaller()
         self._lock = threading.RLock()
         self._current: PreparedRecording | None = None
         self._watch_thread: threading.Thread | None = None
@@ -123,6 +131,22 @@ class RecorderApplicationService:
     def diagnose(self) -> PreflightReport:
         loaded = self.load_config()
         return run_preflight(paths=self.paths, config=loaded.config, config_loaded=loaded.config_loaded)
+
+    def runtime_data_directory(self) -> Path:
+        return self.paths.root
+
+    def default_ffmpeg_install_directory(self) -> Path:
+        return default_ffmpeg_install_directory()
+
+    def install_ffmpeg(
+        self,
+        destination: Path,
+        *,
+        progress: Callable[[FfmpegInstallProgress], None] | None = None,
+    ) -> FfmpegInstallResult:
+        result = self._ffmpeg_installer.install(destination, progress=progress)
+        self.save_settings({"recorder.ffmpeg_path": str(result.executable)})
+        return result
 
     def start_recording(self, target: CaptureTarget | None = None) -> RecordingSnapshot:
         with self._lock:

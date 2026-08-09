@@ -10,8 +10,8 @@ EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lit
 
 ビルド依存はPyInstaller 6.21.0とpyinstaller-hooks-contrib 2026.6へ固定します。Windows実行ファイルはWindows上でのみ生成し、UPXは使用しません。EXEには次のWindowsリソースを埋め込みます。
 
-- FileVersion: `0.16.0.0`
-- ProductVersion: `0.16.0`
+- FileVersion: `0.16.1.0`
+- ProductVersion: `0.16.1`
 - ProductName: `master-duel-recorder-lite`
 - OriginalFilename: `master-duel-recorder-lite.exe`
 
@@ -19,15 +19,15 @@ GUI版のOriginalFilenameは`master-duel-recorder-lite-gui.exe`で、コンソ�
 
 ## 実行時データ
 
-凍結EXEでは`sys.executable`の親フォルダを既定のproject rootとし、その直下に`user_data/`を作成します。PyInstaller one-fileの一時展開先は使用しません。通常のPython実行は従来どおりカレントディレクトリを基準にします。
+凍結EXEでは`%LOCALAPPDATA%\MasterDuelRecorderLite`を既定の実行時データルートにします。EXEの配置フォルダとPyInstaller one-fileの一時展開先には実行時データを作成しません。通常のPython実行は従来どおりカレントディレクトリ直下の`user_data/`を基準にします。
 
 保存先の優先順位は次のとおりです。
 
 1. `--user-data-dir`
 2. `MDRL_USER_DATA_DIR`
-3. EXE配置フォルダまたはPython実行時のproject root直下にある`user_data/`
+3. EXE実行時は`%LOCALAPPDATA%\MasterDuelRecorderLite`、Python実行時はproject root直下の`user_data/`
 
-更新処理はEXEだけを置き換え、`user_data/`を削除・初期化しません。
+V0.16.0以前のEXE隣接`user_data/`は自動で移動、削除、上書きしません。継続利用時は利用者がバックアップ後に新しい既定先へ移すか、明示的な保存先指定で参照します。
 
 ## ビルドと検証
 
@@ -35,11 +35,11 @@ GUI版のOriginalFilenameは`master-duel-recorder-lite-gui.exe`で、コンソ�
 python -m pip install -e ".[build,dev]"
 python -W error::ResourceWarning -m unittest discover -s tests
 python scripts/build_windows_exe.py
-.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.16.0
-.\scripts\smoke_windows_gui.ps1 -ExePath .\dist\master-duel-recorder-lite-gui.exe -ExpectedVersion 0.16.0
+.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.16.1
+.\scripts\smoke_windows_gui.ps1 -ExePath .\dist\master-duel-recorder-lite-gui.exe -ExpectedVersion 0.16.1
 ```
 
-CLIスモークは`--version`、`--help`、`config show --json`を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。どちらも読取操作だけで`user_data/`を作成しないことを確認します。
+CLIスモークは`--version`、`--help`、`config show --json`を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。両EXEを一時フォルダへコピーして起動し、EXE隣接`user_data/`を作成せず、既定パスが分離した`LOCALAPPDATA`配下になることを確認します。読取操作だけではその既定パスも作成しません。
 
 ## GitHub Release
 

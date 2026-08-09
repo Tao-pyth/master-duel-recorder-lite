@@ -67,6 +67,36 @@ class FfmpegDiscoveryTest(unittest.TestCase):
         self.assertGreaterEqual(len(result.attempts), 1)
         self.assertTrue(all(attempt.result for attempt in result.attempts))
 
+    def test_managed_local_app_data_install_is_discovered(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            executable = (
+                Path(tmp_dir)
+                / "MasterDuelRecorderLite"
+                / "tools"
+                / "ffmpeg"
+                / "bin"
+                / "ffmpeg.exe"
+            )
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+            timeouts: list[float] = []
+
+            def runner(_command: tuple[str, ...], timeout: float) -> CommandResult:
+                timeouts.append(timeout)
+                return CommandResult(0, VERSION_OUTPUT, "")
+
+            result = discover_ffmpeg(
+                "ffmpeg",
+                runner=runner,
+                path_lookup=lambda _command: None,
+                environ={"LOCALAPPDATA": tmp_dir},
+                platform_name="Windows",
+            )
+
+        self.assertTrue(result.found)
+        self.assertEqual(result.executable, executable.resolve())
+        self.assertEqual(timeouts, [15.0])
+
 
 class FfmpegCapabilityTest(unittest.TestCase):
     def test_nightly_version_uses_libavutil_abi(self) -> None:

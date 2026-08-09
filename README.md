@@ -23,7 +23,7 @@ V1.0.0までに、次の中核機能を段階的に提供します。
 
 ## 現在の状態
 
-現在のバージョンは `0.16.0`、「基本イベント自動判定」です。GitHub Releaseでは、通常利用向けGUI EXEと自動化・詳細操作向けCLI EXEを配布します。Master Duelウィンドウ録画中に最大2fpsで画面特徴を解析し、対戦開始、ターン切り替え、勝敗・対戦終了を未確認候補としてタイムラインへ保存します。候補は自動確定せず、GUIで信頼度と理由を確認して確認・却下できます。検出はゲームUI変更の影響を受けるため、実画面チェックリストで環境ごとの確認が必要です。外部サービスへの直接アップロードとOAuthは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
+現在のバージョンは `0.16.1`、「初回FFmpegセットアップと保存先修正」です。GitHub Releaseでは、通常利用向けGUI EXEと自動化・詳細操作向けCLI EXEを配布します。GUIはFFmpegを利用できない初回起動時にセットアップ画面を表示し、利用者が配布元、ライセンス、導入先を確認して許可した場合だけダウンロードします。基本イベント自動判定は引き続き、対戦開始、ターン切り替え、勝敗・対戦終了を未確認候補としてタイムラインへ保存します。外部サービスへの直接アップロードとOAuthは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
 
 開発計画は [docs/roadmap.md](docs/roadmap.md)、バージョンごとの変更は [docs/release-notes.md](docs/release-notes.md) を参照してください。ロードマップ作業は実装前にGitHub Issueへ登録し、バージョンラベルとMilestoneへ接続します。
 
@@ -62,11 +62,11 @@ if ($actual -ne $expected) { throw "SHA-256が一致しません" }
 .\master-duel-recorder-lite.exe doctor
 ```
 
-EXEにはPythonランタイムを含みますが、FFmpegは含みません。録画にはFFmpeg 6.0以上を別途導入してPATHへ追加するか、`config set recorder.ffmpeg_path`で指定してください。
+EXEにはPythonランタイムを含みますが、FFmpegは含みません。GUIでFFmpegが見つからない場合は「FFmpegのセットアップ」が自動表示されます。配布元、GPLv3ライセンス、ダウンロードURL、インストール先を確認し、「インストール」を選ぶと、FFmpeg公式サイトが案内するGyan FFmpeg Buildsのrelease essentials ZIPを取得します。公開SHA-256を照合し、FFmpeg 6.0以上を確認できた場合だけ設定へ保存します。キャンセルした場合は何も導入しません。手動導入してPATHへ追加するか、設定画面または`config set recorder.ffmpeg_path`で既存のFFmpegを指定することもできます。
 
 EXEはコード署名されていないため、Windows SmartScreenが警告する場合があります。GitHub Releaseの公開元、SHA-256、必要に応じて`gh attestation verify master-duel-recorder-lite.exe --repo Tao-pyth/master-duel-recorder-lite`でbuild provenanceを確認してください。確認できないEXEは実行しないでください。
 
-EXE実行時の既定データ保存先は、EXEと同じフォルダの`user_data/`です。更新時はアプリを終了し、`user_data/`を残したままEXEだけを置き換えます。別フォルダへ移す場合はEXEと`user_data/`を一緒に移してください。
+EXE実行時の既定データ保存先は`%LOCALAPPDATA%\MasterDuelRecorderLite`、GUIから導入するFFmpegの既定先はその配下の`tools\ffmpeg`です。EXEを置いたフォルダには作業フォルダを作りません。V0.16.0以前にEXEと同じフォルダで作成された`user_data/`は自動移動も削除もしません。既存データを継続利用する場合は、バックアップ後に新しい既定先へ内容を移すか、`MDRL_USER_DATA_DIR`または`--user-data-dir`で旧フォルダを明示してください。
 
 詳細は[Windows EXE配布設計](docs/architecture/windows-distribution.md)を参照してください。
 
@@ -103,7 +103,7 @@ python -m master_duel_recorder_lite prepare run
 python -m unittest discover -s tests
 ```
 
-Python実行では既定でカレントプロジェクト直下、EXE実行ではEXE配置フォルダ直下の `user_data/` を使用します。検証用の保存先は環境変数 `MDRL_USER_DATA_DIR` または `--user-data-dir` で変更できます。
+Python実行では既定でカレントプロジェクト直下の`user_data/`、EXE実行では`%LOCALAPPDATA%\MasterDuelRecorderLite`を使用します。検証用または移行中の保存先は環境変数`MDRL_USER_DATA_DIR`または`--user-data-dir`で変更できます。
 
 ## 設定・運用CLI
 
@@ -124,7 +124,7 @@ python -m master_duel_recorder_lite status --json
 
 ## 録画環境の確認
 
-FFmpeg 6.0以上、または同等のlibavutil 58以上を含むnightly buildが必要です。FFmpegを導入した後、次のコマンドで録画能力、入力設定、保存先、空き容量を確認します。
+FFmpeg 6.0以上、または同等のlibavutil 58以上を含むnightly buildが必要です。GUIでは初回セットアップを利用できます。CLI利用時または手動で管理したい場合はFFmpegを導入した後、次のコマンドで録画能力、入力設定、保存先、空き容量を確認します。
 
 ```powershell
 python -m master_duel_recorder_lite doctor

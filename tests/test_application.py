@@ -10,6 +10,8 @@ from master_duel_recorder_lite.application import (
     RecorderApplicationService,
 )
 from master_duel_recorder_lite.capture_targets import CaptureMode, CaptureTarget
+from master_duel_recorder_lite.ffmpeg import FfmpegVersion
+from master_duel_recorder_lite.ffmpeg_setup import FfmpegInstallResult
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
 from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
@@ -109,6 +111,31 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertEqual(service.resolve_recording("id"), ("resolve", "id"))
         self.assertEqual(service.play_recording("id"), ("play", "id", reference))
         self.assertEqual(service.reveal_recording("id"), ("reveal", "id"))
+
+    def test_ffmpeg_installation_path_is_saved_to_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            destination = root / "tools" / "ffmpeg"
+            executable = destination / "bin" / "ffmpeg.exe"
+            ffprobe = destination / "bin" / "ffprobe.exe"
+            result = FfmpegInstallResult(
+                destination,
+                executable,
+                ffprobe,
+                FfmpegVersion("8.1.2", (8, 1, 2), 60),
+                "a" * 64,
+            )
+            installer = SimpleNamespace(install=lambda _destination, progress=None: result)
+            service = RecorderApplicationService(
+                user_data_dir=root / "user_data",
+                ffmpeg_installer=installer,  # type: ignore[arg-type]
+            )
+
+            installed = service.install_ffmpeg(destination)
+            configured = service.load_config().config.ffmpeg_path
+
+        self.assertEqual(installed, result)
+        self.assertEqual(configured, str(executable))
 
 
 if __name__ == "__main__":

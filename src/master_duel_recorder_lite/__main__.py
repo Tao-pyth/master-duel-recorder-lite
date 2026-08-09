@@ -58,7 +58,6 @@ from .recovery import InterruptedDetectionKind, RecoveryError, RecoveryManager
 from .runtime_paths import (
     RuntimePathError,
     RuntimePaths,
-    application_project_root,
     default_runtime_paths,
     ensure_runtime_dirs,
 )
@@ -126,8 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--project-root",
         type=Path,
-        default=application_project_root(),
-        help="user_data を作成する基準フォルダです。EXEではEXE配置フォルダが既定です。",
+        default=None,
+        help="user_data を作成する基準フォルダです。EXEではLocalAppDataが既定です。",
     )
     parser.add_argument("--user-data-dir", type=Path, default=None, help="user_data の場所を直接指定します。")
     parser.add_argument("--verbose", action="store_true", help="失敗時に内部診断を追加表示します。")

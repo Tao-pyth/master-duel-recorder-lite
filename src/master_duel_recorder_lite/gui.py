@@ -8,18 +8,25 @@ from pathlib import Path
 import queue
 import sys
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Callable, TypeVar
+import webbrowser
 
 from . import __version__
 from .application import ApplicationEvent, RecorderApplicationService, RecordingSnapshot
 from .capture_targets import CaptureTarget
 from .duel_records import DuelRecord, DuelRecordValues
 from .duel_timeline import DuelEvent
+from .ffmpeg_setup import (
+    FFMPEG_DOWNLOAD_URL,
+    FFMPEG_LICENSE,
+    FFMPEG_PROVIDER_PAGE,
+    FfmpegInstallResult,
+    FfmpegInstallProgress,
+)
 from .preflight import CheckStatus, PreflightReport
 from .recording_browsing import RecordingReference
 from .recording_session import RecordingState
-from .runtime_paths import application_project_root
 
 
 T = TypeVar("T")
@@ -117,6 +124,8 @@ class RecorderGui:
         self.watch_events: queue.Queue[ApplicationEvent] = queue.Queue()
         self.busy_operations = 0
         self.closing = False
+        self.ffmpeg_setup_prompted = False
+        self.ffmpeg_setup_dialog: tk.Toplevel | None = None
 
         self._configure_window()
         self._configure_styles()
@@ -470,7 +479,15 @@ class RecorderGui:
         page = self._new_page("settings")
         panel = self._surface(page, padding=(20, 18))
         panel.pack(fill="both", expand=True)
-        ttk.Label(panel, text="録画設定", style="Heading.TLabel").grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Label(panel, text="録画設定", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w"
+        )
+        self.ffmpeg_setup_button = ttk.Button(
+            panel,
+            text="FFmpegを導入",
+            command=self.show_ffmpeg_setup,
+        )
+        self.ffmpeg_setup_button.grid(row=0, column=2, sticky="e")
         self.setting_vars = {
             "recorder.ffmpeg_path": tk.StringVar(),
             "recorder.audio_input": tk.StringVar(),
@@ -518,8 +535,19 @@ class RecorderGui:
             ttk.Entry(panel, textvariable=self.setting_vars[key]).grid(
                 row=11, column=column, sticky="ew", padx=(0, 12 if column < 2 else 0)
             )
+        ttk.Label(panel, text="データ保存先", style="Body.TLabel").grid(
+            row=12, column=0, sticky="w", pady=(18, 4)
+        )
+        self.runtime_path_var = tk.StringVar(
+            value=str(self.service.runtime_data_directory())
+        )
+        ttk.Label(
+            panel,
+            textvariable=self.runtime_path_var,
+            style="Muted.TLabel",
+        ).grid(row=13, column=0, columnspan=3, sticky="w")
         footer = ttk.Frame(panel, style="Surface.TFrame")
-        footer.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(24, 0))
+        footer.grid(row=14, column=0, columnspan=3, sticky="ew", pady=(18, 0))
         self.settings_status_var = tk.StringVar(value="")
         ttk.Label(footer, textvariable=self.settings_status_var, style="Muted.TLabel").pack(side="left")
         ttk.Button(footer, text="設定を再読込", command=self.load_settings).pack(side="right")
@@ -528,6 +556,7 @@ class RecorderGui:
         panel.columnconfigure(1, weight=1)
         panel.columnconfigure(2, weight=1)
         self.widgets["settings_form"] = panel
+        self.widgets["ffmpeg_setup"] = self.ffmpeg_setup_button
 
     def show_page(self, key: str) -> None:
         titles = {
@@ -596,6 +625,189 @@ class RecorderGui:
             self.diagnosis_tree.insert("", "end", values=(labels[check.status], f"{check.label}: {check.message}"))
         self.connection_label.configure(text="利用可能" if report.succeeded else "要確認", foreground="#7fe1bd" if report.succeeded else "#ffcc80")
         self._activity("環境診断が完了しました")
+        ffmpeg_missing = any(
+            check.code == "ffmpeg" and check.status is CheckStatus.ERROR
+            for check in report.checks
+        )
+        if ffmpeg_missing and not self.ffmpeg_setup_prompted:
+            self.ffmpeg_setup_prompted = True
+            self.root.after_idle(self.show_ffmpeg_setup)
+
+    def show_ffmpeg_setup(self) -> None:
+        if self.smoke_mode:
+            return
+        if self.ffmpeg_setup_dialog is not None:
+            self.ffmpeg_setup_dialog.lift()
+            self.ffmpeg_setup_dialog.focus_force()
+            return
+        self.ffmpeg_setup_prompted = True
+        dialog = tk.Toplevel(self.root)
+        self.ffmpeg_setup_dialog = dialog
+        dialog.title("FFmpegのセットアップ")
+        dialog.geometry("680x410")
+        dialog.minsize(620, 390)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text="録画機能にFFmpeg 6.0以上が必要です",
+            style="Heading.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            frame,
+            text=(
+                "FFmpegがまだ導入されていない初回起動では、この画面から導入できます。"
+                "インストールを選ぶまでダウンロードやファイル作成は行いません。"
+            ),
+            style="Body.TLabel",
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 14))
+
+        details = ttk.Frame(frame)
+        details.pack(fill="x")
+        for row, (label, value) in enumerate(
+            (
+                ("配布元", "Gyan FFmpeg Builds（FFmpeg公式サイト掲載）"),
+                ("パッケージ", "release essentials ZIP（約110MB、64-bit）"),
+                ("ライセンス", FFMPEG_LICENSE),
+            )
+        ):
+            ttk.Label(details, text=label).grid(row=row, column=0, sticky="nw", pady=3)
+            ttk.Label(details, text=value).grid(
+                row=row, column=1, sticky="w", padx=(16, 0), pady=3
+            )
+        ttk.Button(
+            details,
+            text="配布元を開く",
+            command=lambda: webbrowser.open(FFMPEG_PROVIDER_PAGE),
+        ).grid(row=0, column=2, rowspan=2, sticky="e", padx=(12, 0))
+        details.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="インストール先", style="Body.TLabel").pack(
+            anchor="w", pady=(18, 5)
+        )
+        destination_row = ttk.Frame(frame)
+        destination_row.pack(fill="x")
+        destination_var = tk.StringVar(
+            value=str(self.service.default_ffmpeg_install_directory())
+        )
+        destination_entry = ttk.Entry(destination_row, textvariable=destination_var)
+        destination_entry.pack(side="left", fill="x", expand=True)
+
+        def browse() -> None:
+            current = Path(destination_var.get()).expanduser()
+            selected = filedialog.askdirectory(
+                parent=dialog,
+                title="FFmpegのインストール先を選択",
+                initialdir=current.parent if current.parent.exists() else Path.home(),
+                mustexist=False,
+            )
+            if selected:
+                destination_var.set(selected)
+
+        browse_button = ttk.Button(destination_row, text="参照", command=browse)
+        browse_button.pack(side="left", padx=(8, 0))
+
+        progress_var = tk.StringVar(value="待機中")
+        ttk.Label(frame, textvariable=progress_var, style="Muted.TLabel").pack(
+            anchor="w", pady=(12, 0)
+        )
+        progress_queue: queue.Queue[FfmpegInstallProgress] = queue.Queue()
+
+        def close_dialog() -> None:
+            self.ffmpeg_setup_dialog = None
+            dialog.destroy()
+
+        def drain_progress() -> None:
+            latest: FfmpegInstallProgress | None = None
+            while True:
+                try:
+                    latest = progress_queue.get_nowait()
+                except queue.Empty:
+                    break
+            if latest is not None:
+                message = latest.stage
+                if latest.downloaded_bytes:
+                    downloaded = latest.downloaded_bytes / (1024 * 1024)
+                    if latest.total_bytes:
+                        total = latest.total_bytes / (1024 * 1024)
+                        message = f"{message}: {downloaded:.1f} / {total:.1f} MB"
+                    else:
+                        message = f"{message}: {downloaded:.1f} MB"
+                progress_var.set(message)
+            if dialog.winfo_exists():
+                dialog.after(100, drain_progress)
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(side="bottom", fill="x", pady=(18, 0))
+        cancel_button = ttk.Button(buttons, text="キャンセル", command=close_dialog)
+        cancel_button.pack(side="right")
+
+        def failed(error: BaseException) -> None:
+            destination_entry.configure(state="normal")
+            browse_button.configure(state="normal")
+            install_button.configure(state="normal")
+            cancel_button.configure(state="normal")
+            progress_var.set("導入に失敗しました")
+            self._activity(f"FFmpeg導入エラー: {error}")
+            messagebox.showerror("FFmpegを導入できません", str(error), parent=dialog)
+
+        def installed(result: FfmpegInstallResult) -> None:
+            executable = result.executable
+            self.setting_vars["recorder.ffmpeg_path"].set(str(executable))
+            self._activity(f"FFmpegを導入しました: {executable}")
+            close_dialog()
+            self.run_diagnosis()
+
+        def install() -> None:
+            raw_destination = destination_var.get().strip()
+            if not raw_destination:
+                messagebox.showerror(
+                    "インストール先を確認してください",
+                    "インストール先を指定してください。",
+                    parent=dialog,
+                )
+                return
+            destination = Path(raw_destination).expanduser().resolve()
+            confirmed = messagebox.askyesno(
+                "FFmpeg導入の確認",
+                (
+                    f"次の配布物をダウンロードして導入します。\n\n"
+                    f"配布元: {FFMPEG_DOWNLOAD_URL}\n"
+                    f"ライセンス: {FFMPEG_LICENSE}\n"
+                    f"インストール先: {destination}\n\n続行しますか？"
+                ),
+                parent=dialog,
+            )
+            if not confirmed:
+                return
+            destination_entry.configure(state="disabled")
+            browse_button.configure(state="disabled")
+            install_button.configure(state="disabled")
+            cancel_button.configure(state="disabled")
+            progress_var.set("導入を開始しています")
+            self._run(
+                lambda: self.service.install_ffmpeg(
+                    destination,
+                    progress=progress_queue.put,
+                ),
+                installed,
+                failed,
+            )
+
+        install_button = ttk.Button(
+            buttons,
+            text="インストール",
+            style="Primary.TButton",
+            command=install,
+        )
+        install_button.pack(side="right", padx=(0, 8))
+        dialog.protocol("WM_DELETE_WINDOW", cancel_button.invoke)
+        drain_progress()
 
     def start_recording(self) -> None:
         target = self.targets_by_label.get(self.target_var.get())
@@ -1239,7 +1451,7 @@ def _format_bytes(value: int | None) -> str:
 
 def build_gui_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Master Duel Recorder Lite GUI")
-    parser.add_argument("--project-root", type=Path, default=application_project_root())
+    parser.add_argument("--project-root", type=Path, default=None)
     parser.add_argument("--user-data-dir", type=Path, default=None)
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--smoke-output", type=Path, default=None)
@@ -1262,6 +1474,7 @@ def main(argv: list[str] | None = None) -> int:
             "widgets": sorted(app.widgets),
             "title": root.title(),
             "version": __version__,
+            "runtime_data": str(service.paths.root),
         }
         if geometry["width"] < 900 or geometry["height"] < 600 or len(app.widgets) < 8:
             app._destroy()

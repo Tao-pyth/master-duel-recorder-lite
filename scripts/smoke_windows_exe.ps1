@@ -66,4 +66,29 @@ if (Test-Path -LiteralPath $isolatedData) {
     throw "read-only config smoke unexpectedly created user_data"
 }
 
+$defaultSmokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mdrl-default-path-smoke-" + [guid]::NewGuid().ToString("N"))
+$appPath = Join-Path $defaultSmokeRoot "app"
+$localAppDataPath = Join-Path $defaultSmokeRoot "local-app-data"
+$copiedExe = Join-Path $appPath "master-duel-recorder-lite.exe"
+$previousLocalAppData = $env:LOCALAPPDATA
+New-Item -ItemType Directory -Path $appPath -Force | Out-Null
+Copy-Item -LiteralPath $resolvedExe -Destination $copiedExe
+try {
+    $env:LOCALAPPDATA = $localAppDataPath
+    $defaultConfig = & $copiedExe config show --json
+    if ($LASTEXITCODE -ne 0) {
+        throw "default-path config show failed with exit code $LASTEXITCODE"
+    }
+    if (Test-Path -LiteralPath (Join-Path $appPath "user_data")) {
+        throw "CLI smoke created user_data next to the EXE"
+    }
+    if (Test-Path -LiteralPath (Join-Path $localAppDataPath "MasterDuelRecorderLite")) {
+        throw "read-only CLI smoke unexpectedly created runtime data"
+    }
+}
+finally {
+    $env:LOCALAPPDATA = $previousLocalAppData
+    Remove-Item -LiteralPath $defaultSmokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Output "EXE smoke passed: $resolvedExe"

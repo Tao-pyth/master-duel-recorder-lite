@@ -338,4 +338,7 @@ def _probe_write_access(directory: Path) -> None:
 
 def _discovery_failure_message(discovery: FfmpegDiscoveryResult) -> str:
     details = "、".join(f"{attempt.source}: {attempt.result}" for attempt in discovery.attempts)
-    return f"FFmpegが見つかりません。FFmpeg 6.0以上を導入してPATHまたはffmpeg_pathを設定してください ({details})"
+    return (
+        "FFmpegが未導入または起動できません。GUIの「FFmpegを導入」を使うか、"
+        f"FFmpeg 6.0以上のパスを設定してください ({details})"
+    )

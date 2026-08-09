@@ -9,6 +9,8 @@ import re
 import shutil
 import subprocess
 
+from .runtime_paths import local_application_data_root
+
 
 MINIMUM_FFMPEG_VERSION = (6, 0, 0)
 MINIMUM_LIBAVUTIL_MAJOR = 58
@@ -164,7 +166,7 @@ def discover_ffmpeg(
             continue
 
         try:
-            command_result = runner((str(resolved_candidate), "-version"), 5.0)
+            command_result = runner((str(resolved_candidate), "-version"), 15.0)
         except (OSError, subprocess.TimeoutExpired) as exc:
             attempts.append(FfmpegDiscoveryAttempt(str(resolved_candidate), source, f"実行できません: {exc}"))
             continue
@@ -194,7 +196,14 @@ def known_ffmpeg_candidates(environ: Mapping[str, str], platform_name: str) -> t
     if platform_name != "Windows":
         return ()
 
-    candidates: list[Path] = [Path("C:/ffmpeg/bin/ffmpeg.exe")]
+    candidates: list[Path] = [
+        local_application_data_root(environ=dict(environ))
+        / "tools"
+        / "ffmpeg"
+        / "bin"
+        / "ffmpeg.exe",
+        Path("C:/ffmpeg/bin/ffmpeg.exe"),
+    ]
     for variable, suffix in (
         ("LOCALAPPDATA", "Microsoft/WinGet/Links/ffmpeg.exe"),
         ("ProgramFiles", "ffmpeg/bin/ffmpeg.exe"),

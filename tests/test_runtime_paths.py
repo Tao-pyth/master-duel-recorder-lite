@@ -5,6 +5,7 @@ from pathlib import Path
 
 from master_duel_recorder_lite.runtime_paths import (
     application_project_root,
+    default_runtime_root,
     default_runtime_paths,
     ensure_runtime_dirs,
 )
@@ -59,6 +60,29 @@ class RuntimePathsTest(unittest.TestCase):
         )
 
         self.assertEqual(root, executable.resolve().parent)
+
+    def test_frozen_runtime_data_uses_local_app_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = default_runtime_root(
+                frozen=True,
+                environ={"LOCALAPPDATA": tmp_dir},
+            )
+
+        self.assertEqual(
+            root,
+            Path(tmp_dir).resolve() / "MasterDuelRecorderLite",
+        )
+
+    def test_explicit_project_root_remains_portable(self) -> None:
+        project = Path("portable").resolve()
+
+        root = default_runtime_root(
+            project,
+            frozen=True,
+            environ={"LOCALAPPDATA": "ignored"},
+        )
+
+        self.assertEqual(root, project / "user_data")
 
     def test_python_application_uses_current_directory(self) -> None:
         current = Path("development")

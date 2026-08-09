@@ -2,7 +2,7 @@
 
 ## 保存先
 
-Python実行時はカレントプロジェクト直下、PyInstaller EXE実行時はEXE配置フォルダ直下の `user_data/` を既定の保存先にします。環境変数またはCLIで明示した保存先は、この既定値より優先します。
+Python実行時はカレントプロジェクト直下の`user_data/`、PyInstaller EXE実行時は`%LOCALAPPDATA%\MasterDuelRecorderLite`を既定の保存先にします。環境変数またはCLIで明示した保存先は、この既定値より優先します。EXEの配置フォルダには作業フォルダを作成しません。
 
 ```text
 user_data/
@@ -33,6 +33,8 @@ user_data/
 ## 上書き方法
 
 開発や検証で保存先を変えたい場合は、環境変数 `MDRL_USER_DATA_DIR` を使います。CLIから一時的に変える場合は `--user-data-dir` を使います。
+
+V0.16.0以前のEXE隣接`user_data/`は自動移行しません。録画、DB、設定を保護するため、元データを残したまま、利用者がバックアップ後に新しい既定先へ移すか、旧フォルダを明示指定します。
 
 ## 復旧方針
 

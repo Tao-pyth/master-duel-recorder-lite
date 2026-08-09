@@ -59,6 +59,8 @@ auto_create_user_data = true
 
 `audio_input` が空文字の場合は音声録画を無効として扱います。利用可能な音声入力名は `python -m master_duel_recorder_lite list-inputs` で確認し、表示された識別子をそのまま設定します。現在は画面入力方式をWindowsの `gdigrab`、音声入力方式を `dshow` に限定します。未知の入力方式、空の画面入力、不正なエンコーダー名は設定読込時に拒否します。
 
+GUIでFFmpegを導入した場合、実行ファイルを既定では`%LOCALAPPDATA%\MasterDuelRecorderLite\tools\ffmpeg\bin\ffmpeg.exe`へ置き、その絶対パスを`recorder.ffmpeg_path`へ保存します。導入処理の詳細と保護規則は[FFmpeg初回セットアップ](ffmpeg-setup.md)を参照してください。
+
 `capture_width` と `capture_height` が両方 `0` の場合は入力元の解像度を維持します。解像度を変更する場合は両方を指定し、幅320-7680、高さ240-4320の偶数にします。`frame_rate` は1-120、`video_bitrate_kbps` は500-100000、`audio_bitrate_kbps` は32-512の範囲です。既定値は30fps、映像6000kbps、音声192kbpsです。
 
 `game_process_name` は監視するWindows実行ファイル名、`game_window_title_contains` は任意のタイトル絞り込みです。`start_confirmations` と `stop_confirmations` は連続確認回数、`minimum_confidence` は採用する信頼度、`poll_interval_seconds` は監視間隔、`cooldown_seconds` は停止後に再開を抑止する時間です。自動開始または自動停止は個別に無効化できます。
@@ -71,7 +73,7 @@ V0.1.xで作成した設定には新しい項目がありませんが、読込�
 
 ## 実行時データの上書き
 
-通常はリポジトリ直下の `user_data/` を使います。開発や検証で場所を変えたい場合は、環境変数 `MDRL_USER_DATA_DIR` またはCLIの `--user-data-dir` を使います。
+Python実行は通常リポジトリ直下の`user_data/`、EXE実行は`%LOCALAPPDATA%\MasterDuelRecorderLite`を使います。開発、検証、旧データの継続利用で場所を変えたい場合は、環境変数`MDRL_USER_DATA_DIR`またはCLIの`--user-data-dir`を使います。
 
 ```powershell
 $env:MDRL_USER_DATA_DIR = "D:\\RecorderData"
