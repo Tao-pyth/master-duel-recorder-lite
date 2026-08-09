@@ -53,6 +53,14 @@ class PreflightReport:
     def exit_code(self) -> int:
         return 0 if self.succeeded else 2
 
+    @property
+    def error_summary(self) -> str:
+        return " / ".join(
+            f"{check.label}: {check.message}"
+            for check in self.checks
+            if check.status is CheckStatus.ERROR
+        )
+
 
 DiskUsage = Callable[[Path], object]
 WriteProbe = Callable[[Path], None]

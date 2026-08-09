@@ -10,8 +10,8 @@ EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lit
 
 ビルド依存はPyInstaller 6.21.0とpyinstaller-hooks-contrib 2026.6へ固定します。Windows実行ファイルはWindows上でのみ生成し、UPXは使用しません。EXEには次のWindowsリソースを埋め込みます。
 
-- FileVersion: `0.16.3.0`
-- ProductVersion: `0.16.3`
+- FileVersion: `0.16.4.0`
+- ProductVersion: `0.16.4`
 - ProductName: `master-duel-recorder-lite`
 - OriginalFilename: `master-duel-recorder-lite.exe`
 
@@ -35,8 +35,8 @@ V0.16.0以前のEXE隣接`user_data/`は自動で移動、削除、上書きし�
 python -m pip install -e ".[build,dev]"
 python -W error::ResourceWarning -m unittest discover -s tests
 python scripts/build_windows_exe.py
-.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.16.3
-.\scripts\smoke_windows_gui.ps1 -ExePath .\dist\master-duel-recorder-lite-gui.exe -ExpectedVersion 0.16.3
+.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.16.4
+.\scripts\smoke_windows_gui.ps1 -ExePath .\dist\master-duel-recorder-lite-gui.exe -ExpectedVersion 0.16.4
 ```
 
 CLIスモークは`--version`、`--help`、`config show --json`を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。両EXEを一時フォルダへコピーして起動し、EXE隣接`user_data/`を作成せず、既定パスが分離した`LOCALAPPDATA`配下になることを確認します。読取操作だけではその既定パスも作成しません。
@@ -53,6 +53,10 @@ CLIスモークは`--version`、`--help`、`config show --json`を検証しま�
 6. EXEとSHA-256をGitHub Releaseへ公開
 
 いずれかが失敗した場合はReleaseを作成しません。Actionsはタグ名ではなく検証済みcommit SHAへ固定します。
+
+## FFmpeg子プロセス
+
+WindowsではFFmpegを`CREATE_NO_WINDOW`で起動し、親プロセスのエラーモードへ重大エラーとWindows Error Reportingのダイアログ抑止を設定します。終了コード`0xc0000142`は一時的なDLL初期化失敗として200ミリ秒後に1回だけ再試行します。通常のFFmpegエラーは再試行せず、その終了コードと標準エラーを呼び出し元へ返します。フレーム取得の既定タイムアウトは1回5秒なので、再試行時の最大待機は約10.2秒です。
 
 ## セキュリティと既知制約
 

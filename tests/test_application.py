@@ -182,6 +182,42 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertIn("画面イベント判定", events[0].message)
         self.assertEqual(events[-1].state, "stopped")
 
+    def test_watch_reports_failed_preflight_details(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        report = PreflightReport(
+            (
+                PreflightCheck("ffmpeg", "FFmpeg", CheckStatus.OK, "9.0.0"),
+                PreflightCheck(
+                    "capabilities",
+                    "録画能力",
+                    CheckStatus.ERROR,
+                    "FFmpeg能力検査が終了コード3221225794で失敗しました",
+                ),
+                PreflightCheck(
+                    "inputs",
+                    "録画入力",
+                    CheckStatus.ERROR,
+                    "FFmpeg能力を確認できないため入力列挙を中止しました",
+                ),
+            )
+        )
+        events = []
+
+        with (
+            patch.object(
+                service,
+                "load_config",
+                return_value=SimpleNamespace(config=AppConfig(), config_loaded=True),
+            ),
+            patch("master_duel_recorder_lite.application.run_preflight", return_value=report),
+        ):
+            service._watch_loop(events.append)
+
+        self.assertEqual(events[0].kind, "error")
+        self.assertIn("録画能力:", events[0].message)
+        self.assertIn("終了コード3221225794", events[0].message)
+        self.assertIn("録画入力:", events[0].message)
+
     def test_watch_stop_during_start_observation_does_not_begin_recording(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))
         config = AppConfig()

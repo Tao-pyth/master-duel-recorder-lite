@@ -406,7 +406,8 @@ class RecorderApplicationService:
                 config_loaded=loaded.config_loaded,
             )
             if not report.succeeded:
-                raise ApplicationOperationError("自動監視の開始前診断に失敗しました")
+                detail = report.error_summary or "失敗項目を取得できません"
+                raise ApplicationOperationError(f"自動監視の開始前診断に失敗しました: {detail}")
             discovery = discover_ffmpeg(watch_config.ffmpeg_path)
             if not discovery.found or discovery.executable is None:
                 raise ApplicationOperationError("対戦開始判定に使うFFmpegを再検出できません")

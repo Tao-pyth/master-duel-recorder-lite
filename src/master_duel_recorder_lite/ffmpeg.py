@@ -10,6 +10,11 @@ import shutil
 import subprocess
 
 from .runtime_paths import local_application_data_root
+from .windows_process import (
+    configure_windows_process_errors,
+    run_with_windows_retry,
+    subprocess_creation_flags,
+)
 
 
 MINIMUM_FFMPEG_VERSION = (6, 0, 0)
@@ -28,16 +33,20 @@ PathLookup = Callable[[str], str | None]
 
 
 def run_command(command: Sequence[str], timeout_seconds: float) -> CommandResult:
-    completed = subprocess.run(
-        list(command),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout_seconds,
-        check=False,
+    configure_windows_process_errors()
+    completed = run_with_windows_retry(
+        lambda: subprocess.run(
+            list(command),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            check=False,
+            creationflags=subprocess_creation_flags(),
+        )
     )
     return CommandResult(
         returncode=completed.returncode,

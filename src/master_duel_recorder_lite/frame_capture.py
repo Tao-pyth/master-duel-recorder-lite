@@ -8,6 +8,11 @@ import struct
 import subprocess
 
 from .game_window import WindowSnapshot
+from .windows_process import (
+    configure_windows_process_errors,
+    run_with_windows_retry,
+    subprocess_creation_flags,
+)
 
 
 MAX_FRAME_BYTES = 50 * 1024 * 1024
@@ -45,13 +50,17 @@ class FrameCaptureResult:
 
 
 def run_binary_command(command: Sequence[str], timeout_seconds: float) -> BinaryCommandResult:
-    completed = subprocess.run(
-        list(command),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout_seconds,
-        check=False,
+    configure_windows_process_errors()
+    completed = run_with_windows_retry(
+        lambda: subprocess.run(
+            list(command),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+            check=False,
+            creationflags=subprocess_creation_flags(),
+        )
     )
     return BinaryCommandResult(completed.returncode, completed.stdout, completed.stderr)
 

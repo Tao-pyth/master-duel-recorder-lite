@@ -49,6 +49,7 @@ class PreflightTest(unittest.TestCase):
 
         self.assertTrue(report.succeeded)
         self.assertEqual(report.exit_code, 0)
+        self.assertEqual(report.error_summary, "")
         self.assertTrue(all(check.status is CheckStatus.OK for check in report.checks))
         self.assertEqual(
             [check.code for check in report.checks],
@@ -98,6 +99,8 @@ class PreflightTest(unittest.TestCase):
         self.assertIs(statuses["inputs"], CheckStatus.ERROR)
         self.assertIs(statuses["storage"], CheckStatus.OK)
         self.assertIs(statuses["disk-space"], CheckStatus.OK)
+        self.assertIn("FFmpeg:", report.error_summary)
+        self.assertIn("録画能力:", report.error_summary)
 
     def test_missing_selected_audio_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
