@@ -34,6 +34,7 @@ class MasterDuelWindowDetector:
                 self.clock(),
                 capture_window_handle=game.window.handle,
                 capture_process_id=game.process.pid,
+                capture_window_title=game.window.title,
             )
         if game.status in {
             GameWindowStatus.NOT_RUNNING,

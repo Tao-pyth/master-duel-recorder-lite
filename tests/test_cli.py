@@ -12,6 +12,7 @@ from master_duel_recorder_lite.config import AppConfig, LoadedAppConfig
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.game_window import GameWindowObservation, GameWindowStatus
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
+from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 from master_duel_recorder_lite.recording_browsing import (
     RecordingBrowseError,
     RecordingBrowseFailure,
@@ -103,6 +104,9 @@ class CliTest(unittest.TestCase):
                 poll=session.poll,
                 stop=session.stop,
                 release=lambda: None,
+                visual_detection_status=VisualDetectionStatus(
+                    "disabled", "disabled", 0, 0, 0
+                ),
             )
             loaded = LoadedAppConfig(AppConfig(), root / "config" / "app.toml", False)
             report = PreflightReport(
@@ -144,6 +148,9 @@ class CliTest(unittest.TestCase):
                 poll=session.poll,
                 stop=session.stop,
                 release=lambda: None,
+                visual_detection_status=VisualDetectionStatus(
+                    "disabled", "disabled", 0, 0, 0
+                ),
             )
             loaded = LoadedAppConfig(AppConfig(), root / "config" / "app.toml", False)
             report = PreflightReport((PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),))

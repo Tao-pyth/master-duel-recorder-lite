@@ -295,8 +295,12 @@ class RecorderGui:
         ttk.Label(controls, textvariable=self.record_detail_var, style="Muted.TLabel", justify="left").grid(
             row=2, column=0, sticky="w"
         )
+        self.visual_status_var = tk.StringVar(value="自動判定: 録画開始後に状態を表示")
+        ttk.Label(
+            controls, textvariable=self.visual_status_var, style="Muted.TLabel"
+        ).grid(row=3, column=0, sticky="w", pady=(5, 0))
         button_row = ttk.Frame(controls, style="Surface.TFrame")
-        button_row.grid(row=0, column=1, rowspan=3, sticky="e")
+        button_row.grid(row=0, column=1, rowspan=4, sticky="e")
         self.start_button = ttk.Button(button_row, text="録画開始", style="Record.TButton", command=self.start_recording)
         self.start_button.pack(side="left", padx=(0, 8))
         self.stop_button = ttk.Button(button_row, text="停止", style="Stop.TButton", command=self.stop_recording, state="disabled")
@@ -307,6 +311,7 @@ class RecorderGui:
         self.widgets["record_start"] = self.start_button
         self.widgets["record_stop"] = self.stop_button
         self.widgets["watch_toggle"] = self.watch_button
+        self.widgets["visual_status"] = self.visual_status_var
 
         lower = ttk.Frame(page, style="App.TFrame")
         lower.pack(fill="both", expand=True)
@@ -473,6 +478,9 @@ class RecorderGui:
             "recorder.video_bitrate_kbps": tk.StringVar(),
             "recorder.capture_width": tk.StringVar(),
             "recorder.capture_height": tk.StringVar(),
+            "detection.visual_maximum_fps": tk.StringVar(),
+            "detection.visual_language": tk.StringVar(),
+            "detection.visual_minimum_confidence": tk.StringVar(),
         }
         fields = (
             ("recorder.ffmpeg_path", "FFmpeg", 1, 0, 3),
@@ -493,10 +501,25 @@ class RecorderGui:
             )
         self.auto_start_var = tk.BooleanVar(value=True)
         self.auto_stop_var = tk.BooleanVar(value=True)
+        self.visual_detection_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(panel, text="ウィンドウ検出時に自動開始", variable=self.auto_start_var).grid(row=9, column=0, sticky="w", pady=(18, 0))
         ttk.Checkbutton(panel, text="ウィンドウ消失時に自動停止", variable=self.auto_stop_var).grid(row=9, column=1, sticky="w", pady=(18, 0))
+        ttk.Checkbutton(panel, text="対戦イベントを自動判定", variable=self.visual_detection_var).grid(row=9, column=2, sticky="w", pady=(18, 0))
+        for column, (key, label) in enumerate(
+            (
+                ("detection.visual_maximum_fps", "自動判定fps（最大2）"),
+                ("detection.visual_language", "UI言語（auto / ja / en）"),
+                ("detection.visual_minimum_confidence", "候補閾値（0.70以上）"),
+            )
+        ):
+            ttk.Label(panel, text=label, style="Body.TLabel").grid(
+                row=10, column=column, sticky="w", pady=(14, 4)
+            )
+            ttk.Entry(panel, textvariable=self.setting_vars[key]).grid(
+                row=11, column=column, sticky="ew", padx=(0, 12 if column < 2 else 0)
+            )
         footer = ttk.Frame(panel, style="Surface.TFrame")
-        footer.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(24, 0))
+        footer.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(24, 0))
         self.settings_status_var = tk.StringVar(value="")
         ttk.Label(footer, textvariable=self.settings_status_var, style="Muted.TLabel").pack(side="left")
         ttk.Button(footer, text="設定を再読込", command=self.load_settings).pack(side="right")
@@ -730,12 +753,13 @@ class RecorderGui:
         refresh_button = ttk.Button(frame, text="更新")
         refresh_button.grid(row=1, column=5, sticky="e")
 
-        columns = ("time", "type", "status", "detail", "source", "id")
+        columns = ("time", "type", "status", "confidence", "detail", "source", "id")
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=15)
         for key, label, width in (
             ("time", "時刻", 80),
             ("type", "種別", 125),
             ("status", "状態", 95),
+            ("confidence", "信頼度", 75),
             ("detail", "内容", 180),
             ("source", "入力元", 90),
             ("id", "イベントID", 230),
@@ -781,6 +805,7 @@ class RecorderGui:
                         _format_elapsed_ms(event.elapsed_ms),
                         event.event_type,
                         event.status,
+                        f"{event.confidence:.2f}" if event.confidence is not None else "-",
                         detail,
                         event.source,
                         event.event_id,
@@ -1032,17 +1057,26 @@ class RecorderGui:
             "recorder.video_bitrate_kbps": str(config.video_bitrate_kbps),
             "recorder.capture_width": str(config.capture_width),
             "recorder.capture_height": str(config.capture_height),
+            "detection.visual_maximum_fps": str(config.visual_detection_maximum_fps),
+            "detection.visual_language": config.visual_detection_language,
+            "detection.visual_minimum_confidence": str(
+                config.visual_detection_minimum_confidence
+            ),
         }
         for key, value in values.items():
             self.setting_vars[key].set(value)
         self.auto_start_var.set(config.auto_start_recording)
         self.auto_stop_var.set(config.auto_stop_recording)
+        self.visual_detection_var.set(config.visual_detection_enabled)
         self.settings_status_var.set("設定を読み込みました")
 
     def save_settings(self) -> None:
         values = {key: value.get() for key, value in self.setting_vars.items()}
         values["detection.auto_start_recording"] = str(self.auto_start_var.get()).lower()
         values["detection.auto_stop_recording"] = str(self.auto_stop_var.get()).lower()
+        values["detection.visual_events_enabled"] = str(
+            self.visual_detection_var.get()
+        ).lower()
         self._run(lambda: self.service.save_settings(values), lambda _config: (self.settings_status_var.set("設定を保存しました"), self.run_diagnosis()))
 
     def request_close(self) -> None:
@@ -1082,6 +1116,8 @@ class RecorderGui:
                     )
             elif event.kind == "watch" and event.state == "stopped" and not self.closing:
                 self._watch_stopped()
+            elif event.kind == "visual":
+                self.visual_status_var.set(f"自動判定: {event.message}")
         if not self.service.watch_active and not self.closing:
             try:
                 snapshot = self.service.recording_snapshot()
@@ -1090,6 +1126,12 @@ class RecorderGui:
             else:
                 self._render_recording(snapshot)
         if not self.closing:
+            status = self.service.visual_detection_status()
+            self.visual_status_var.set(
+                "自動判定: "
+                f"{status.message} / 候補 {status.candidate_count} / "
+                f"処理 {status.processed_frames} / 破棄 {status.dropped_frames}"
+            )
             self.root.after(500, self._poll_runtime)
 
     def _render_recording(self, snapshot: RecordingSnapshot) -> None:

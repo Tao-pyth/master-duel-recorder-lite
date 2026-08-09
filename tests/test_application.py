@@ -12,6 +12,7 @@ from master_duel_recorder_lite.application import (
 from master_duel_recorder_lite.capture_targets import CaptureMode, CaptureTarget
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
+from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
@@ -23,6 +24,7 @@ class RecorderApplicationServiceTest(unittest.TestCase):
                 "window:42",
                 "ウィンドウ: Master Duel",
                 window_handle=42,
+                window_title="Master Duel",
             )
 
             saved = service.select_capture_target(target)
@@ -75,6 +77,9 @@ class RecorderApplicationServiceTest(unittest.TestCase):
                 poll=lambda: session.state,
                 stop=lambda: result,
                 release=lambda: released.append(True),
+                visual_detection_status=VisualDetectionStatus(
+                    "disabled", "disabled", 0, 0, 0
+                ),
             )
             report = PreflightReport((PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),))
             service = RecorderApplicationService(user_data_dir=root)

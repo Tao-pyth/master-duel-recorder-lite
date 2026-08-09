@@ -3,11 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from .capture_targets import CaptureInput, CaptureTargetError, resolve_configured_capture
 from .config import AppConfig
 from .duel_records import DuelRecordError, DuelRecordRepository
+from .duel_timeline import DuelTimelineRepository
 from .ffmpeg import discover_ffmpeg
+from .frame_capture import FfmpegWindowFrameCapture
+from .game_window import WindowSnapshot
 from .recording_command import RecordingCommandError, build_recording_command
 from .recording_history import RecordingHistoryError, RecordingHistoryRepository
 from .recording_failure import classify_recording_failure
@@ -17,6 +21,8 @@ from .recording_profile import RecordingProfile, RecordingProfileError
 from .recording_session import RecordingResult, RecordingSession, RecordingState
 from .recording_state_store import RecordingStateStore, RecordingStateStoreError
 from .runtime_paths import RuntimePaths
+from .visual_detection import DetectionCandidate, TemporalEventConsensus, VisualDetectionPipeline
+from .visual_worker import VisualDetectionStatus, VisualDetectionWorker
 
 
 class RecordingPreparationError(RuntimeError):
@@ -25,6 +31,9 @@ class RecordingPreparationError(RuntimeError):
 
 class RecordingTrackingError(RuntimeError):
     """録画状態を履歴へ一貫して保存できないときのエラーです。"""
+
+
+VisualWorkerBuilder = Callable[[datetime], VisualDetectionWorker]
 
 
 @dataclass
@@ -37,9 +46,12 @@ class PreparedRecording:
     lock: RecordingLock
     history: RecordingHistoryRepository
     state_store: RecordingStateStore
+    visual_worker_builder: VisualWorkerBuilder | None = None
     _history_started: bool = field(default=False, init=False)
     _history_finalized: bool = field(default=False, init=False)
     _source: str | None = field(default=None, init=False)
+    _visual_worker: VisualDetectionWorker | None = field(default=None, init=False)
+    _visual_failure: str | None = field(default=None, init=False)
 
     def start(self, *, source: str, detection_reason: str | None = None) -> RecordingState:
         self._source = source
@@ -66,6 +78,7 @@ class PreparedRecording:
                 started_at=self.session.started_at,
             )
             self._save_state("recording")
+            self._start_visual_detection()
             return state
         except (RecordingHistoryError, RecordingStateStoreError) as exc:
             if self.session.state in {
@@ -103,11 +116,16 @@ class PreparedRecording:
     def poll(self) -> RecordingState:
         state = self.session.poll()
         if state in {RecordingState.COMPLETED, RecordingState.FAILED}:
+            self._stop_visual_detection()
             self._finalize_history()
         return state
 
     def stop(self, *, timeout_seconds: float = 10.0) -> RecordingResult:
-        result = self.session.stop(timeout_seconds=timeout_seconds)
+        self._request_visual_detection_stop()
+        try:
+            result = self.session.stop(timeout_seconds=timeout_seconds)
+        finally:
+            self._stop_visual_detection()
         self._finalize_history()
         return result
 
@@ -140,7 +158,42 @@ class PreparedRecording:
         )
 
     def release(self) -> None:
+        self._stop_visual_detection()
         self.lock.release()
+
+    @property
+    def visual_detection_status(self) -> VisualDetectionStatus:
+        if self._visual_worker is not None:
+            return self._visual_worker.status
+        if self._visual_failure is not None:
+            return VisualDetectionStatus("failed", self._visual_failure, 0, 0, 0)
+        return VisualDetectionStatus("disabled", "この録画では自動判定を使用しません", 0, 0, 0)
+
+    def _start_visual_detection(self) -> None:
+        if self.visual_worker_builder is None or self.session.started_at is None:
+            return
+        try:
+            self._visual_worker = self.visual_worker_builder(self.session.started_at)
+            self._visual_worker.start()
+        except Exception as exc:
+            self._visual_worker = None
+            self._visual_failure = f"自動判定を開始できません: {exc}"
+            self.session.add_diagnostic(self._visual_failure)
+
+    def _stop_visual_detection(self) -> None:
+        worker = self._visual_worker
+        if worker is None:
+            return
+        try:
+            worker.stop()
+        except Exception as exc:
+            self._visual_failure = f"自動判定を停止できません: {exc}"
+            self.session.add_diagnostic(self._visual_failure)
+
+    def _request_visual_detection_stop(self) -> None:
+        worker = self._visual_worker
+        if worker is not None and worker.active:
+            worker.request_stop()
 
 
 def prepare_recording(
@@ -149,6 +202,7 @@ def prepare_recording(
     config: AppConfig,
     capture_input: CaptureInput | None = None,
     master_duel_window_handle: int | None = None,
+    master_duel_window_title: str | None = None,
 ) -> PreparedRecording:
     discovery = discover_ffmpeg(config.ffmpeg_path)
     if not discovery.found or discovery.executable is None:
@@ -159,6 +213,7 @@ def prepare_recording(
         selected_input = capture_input or resolve_configured_capture(
             config,
             master_duel_window_handle=master_duel_window_handle,
+            master_duel_window_title=master_duel_window_title,
         )
         target = create_recording_target(paths, profile)
         command = build_recording_command(
@@ -184,6 +239,13 @@ def prepare_recording(
 
     try:
         history = RecordingHistoryRepository.from_runtime_paths(paths)
+        visual_worker_builder = _visual_worker_builder(
+            config=config,
+            executable=discovery.executable,
+            capture_input=selected_input,
+            history=history,
+            recording_id=target.recording_id,
+        )
         return PreparedRecording(
             target=target,
             executable=discovery.executable,
@@ -193,7 +255,68 @@ def prepare_recording(
             lock=recording_lock,
             history=history,
             state_store=RecordingStateStore(paths),
+            visual_worker_builder=visual_worker_builder,
         )
     except (OSError, RecordingHistoryError) as exc:
         recording_lock.release()
         raise RecordingPreparationError(f"録画履歴を準備できません: {exc}") from exc
+
+
+def _visual_worker_builder(
+    *,
+    config: AppConfig,
+    executable: Path,
+    capture_input: CaptureInput,
+    history: RecordingHistoryRepository,
+    recording_id: str,
+) -> VisualWorkerBuilder | None:
+    if not config.visual_detection_enabled or config.capture_mode != "master_duel":
+        return None
+    if capture_input.window_handle is None or capture_input.window_title is None:
+        return None
+    window_handle = capture_input.window_handle
+    if window_handle <= 0:
+        return None
+    window = WindowSnapshot(
+        handle=window_handle,
+        pid=0,
+        title=capture_input.window_title,
+        visible=True,
+        minimized=False,
+        width=0,
+        height=0,
+    )
+    capture = FfmpegWindowFrameCapture(executable)
+    repository = DuelTimelineRepository(history.database_path)
+
+    def build(started_at: datetime) -> VisualDetectionWorker:
+        pipeline = VisualDetectionPipeline(
+            consensus=TemporalEventConsensus(
+                minimum_confidence=config.visual_detection_minimum_confidence
+            )
+        )
+
+        def save_candidate(candidate: DetectionCandidate) -> None:
+            repository.add(
+                recording_id,
+                elapsed_ms=candidate.elapsed_ms,
+                event_type=candidate.event_type,
+                actor=candidate.actor,
+                outcome=candidate.outcome,
+                label=candidate.reason,
+                source="detected",
+                confidence=candidate.confidence,
+                status="candidate",
+                detector_id=candidate.detector_id,
+                detector_version=candidate.detector_version,
+            )
+
+        return VisualDetectionWorker(
+            recording_started_at=started_at,
+            capture=lambda: capture.capture(window),
+            analyze=pipeline.analyze,
+            on_candidate=save_candidate,
+            maximum_fps=config.visual_detection_maximum_fps,
+        )
+
+    return build

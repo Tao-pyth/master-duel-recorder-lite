@@ -12,7 +12,7 @@ Master Duel対象は、設定したプロセス名に属し、任意のタイト
 
 ## FFmpeg入力
 
-- ウィンドウ: `-f gdigrab -i hwnd=<handle>`
+- ウィンドウ: PID・HWNDで選択対象を固定し、FFmpeg `gdigrab`へは対応形式の`-i title=<window title>`を渡す
 - モニター: `-offset_x`、`-offset_y`、`-video_size`を指定した`-f gdigrab -i desktop`
 - デスクトップ全体: `-f gdigrab -i desktop`
 

@@ -100,6 +100,7 @@ class GameWindowMonitorTest(unittest.TestCase):
         self.assertIs(visible_observation.signal, DetectionSignal.PRESENT)
         self.assertEqual(visible_observation.capture_window_handle, 2)
         self.assertEqual(visible_observation.capture_process_id, 42)
+        self.assertEqual(visible_observation.capture_window_title, "Master Duel")
         self.assertIn("PID 42, HWND 2", visible_observation.reason)
         self.assertIs(minimized_signal, DetectionSignal.ABSENT)
 

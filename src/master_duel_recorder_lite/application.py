@@ -35,6 +35,7 @@ from .upload_media import UploadMediaValidator, find_ffprobe
 from .upload_metadata import UploadMetadata, UploadPrivacy
 from .upload_preparation import UploadPreparationResult, UploadPreparationService
 from .upload_queue import UploadQueueItem, UploadQueueStore
+from .visual_worker import VisualDetectionStatus
 
 
 class ApplicationOperationError(RuntimeError):
@@ -81,6 +82,9 @@ class RecorderApplicationService:
         self._current: PreparedRecording | None = None
         self._watch_thread: threading.Thread | None = None
         self._watch_stop = threading.Event()
+        self._visual_status = VisualDetectionStatus(
+            "disabled", "録画開始後に自動判定状態を表示します", 0, 0, 0
+        )
 
     def load_config(self) -> LoadedAppConfig:
         return load_app_config(project_root=self.project_root, user_data_dir=self.user_data_dir)
@@ -153,12 +157,21 @@ class RecorderApplicationService:
                 prepared.release()
                 raise ApplicationOperationError(result.error if result and result.error else "録画を開始できません")
             self._current = prepared
+            self._visual_status = prepared.visual_detection_status
             return self._manual_snapshot_locked()
 
     def recording_snapshot(self) -> RecordingSnapshot:
         with self._lock:
             self._collect_manual_terminal_locked()
+            if self._current is not None:
+                self._visual_status = self._current.visual_detection_status
             return self._manual_snapshot_locked()
+
+    def visual_detection_status(self) -> VisualDetectionStatus:
+        with self._lock:
+            if self._current is not None:
+                self._visual_status = self._current.visual_detection_status
+            return self._visual_status
 
     def stop_recording(self) -> RecordingSnapshot:
         with self._lock:
@@ -168,6 +181,7 @@ class RecorderApplicationService:
             try:
                 result = prepared.stop()
             finally:
+                self._visual_status = prepared.visual_detection_status
                 prepared.release()
                 self._current = None
             return RecordingSnapshot(
@@ -373,11 +387,26 @@ class RecorderApplicationService:
                     paths=self.paths,
                     config=config,
                     master_duel_window_handle=observation.capture_window_handle,
+                    master_duel_window_title=observation.capture_window_title,
                 ),
             )
             self._emit(callback, ApplicationEvent("watch", "自動監視を開始しました", state="watching"))
             while not self._watch_stop.is_set():
                 event = controller.process(detector.observe())
+                if controller.current is not None:
+                    self._publish_visual_status(controller.current, callback)
+                elif event.action is AutoRecordingEventAction.STOPPED:
+                    current_status = self.visual_detection_status()
+                    self._set_visual_status(
+                        VisualDetectionStatus(
+                            "stopped",
+                            "自動判定を停止しました",
+                            current_status.processed_frames,
+                            current_status.dropped_frames,
+                            current_status.candidate_count,
+                        ),
+                        callback,
+                    )
                 if event.action is not AutoRecordingEventAction.NONE:
                     self._emit(callback, _application_event(event))
                 self._watch_stop.wait(config.detection_poll_interval_seconds)
@@ -395,8 +424,26 @@ class RecorderApplicationService:
         state = self._current.poll()
         if state not in {RecordingState.COMPLETED, RecordingState.FAILED}:
             return
+        self._visual_status = self._current.visual_detection_status
         self._current.release()
         self._current = None
+
+    def _publish_visual_status(
+        self,
+        prepared: PreparedRecording,
+        callback: EventCallback | None,
+    ) -> None:
+        self._set_visual_status(prepared.visual_detection_status, callback)
+
+    def _set_visual_status(
+        self,
+        status: VisualDetectionStatus,
+        callback: EventCallback | None,
+    ) -> None:
+        if status == self._visual_status:
+            return
+        self._visual_status = status
+        self._emit(callback, ApplicationEvent("visual", status.message, state=status.state))
 
     def _manual_snapshot_locked(self) -> RecordingSnapshot:
         if self._current is None:

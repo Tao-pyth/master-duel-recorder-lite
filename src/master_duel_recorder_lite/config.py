@@ -15,6 +15,7 @@ ALLOWED_RECORDING_FORMATS = {"mkv", "mp4"}
 ALLOWED_SCREEN_INPUT_FORMATS = {"gdigrab"}
 ALLOWED_AUDIO_INPUT_FORMATS = {"dshow"}
 ALLOWED_CAPTURE_MODES = {"master_duel", "window", "monitor", "desktop"}
+ALLOWED_VISUAL_DETECTION_LANGUAGES = {"auto", "ja", "en"}
 
 
 class AppConfigError(RuntimeError):
@@ -51,6 +52,10 @@ class AppConfig:
     detection_minimum_confidence: float = 0.5
     detection_poll_interval_seconds: float = 1.0
     detection_cooldown_seconds: float = 10.0
+    visual_detection_enabled: bool = True
+    visual_detection_maximum_fps: float = 2.0
+    visual_detection_language: str = "auto"
+    visual_detection_minimum_confidence: float = 0.70
     upload_privacy_status: str = "private"
     auto_create_user_data: bool = True
 
@@ -158,6 +163,28 @@ def load_app_config(
                 "cooldown_seconds",
                 AppConfig.detection_cooldown_seconds,
             ),
+            visual_detection_enabled=_bool_value(
+                detection_table,
+                "visual_events_enabled",
+                AppConfig.visual_detection_enabled,
+            ),
+            visual_detection_maximum_fps=_float_value(
+                detection_table,
+                "visual_maximum_fps",
+                AppConfig.visual_detection_maximum_fps,
+            ),
+            visual_detection_language=_visual_detection_language(
+                _string_value(
+                    detection_table,
+                    "visual_language",
+                    AppConfig.visual_detection_language,
+                )
+            ),
+            visual_detection_minimum_confidence=_float_value(
+                detection_table,
+                "visual_minimum_confidence",
+                AppConfig.visual_detection_minimum_confidence,
+            ),
             upload_privacy_status=_privacy_status(
                 _string_value(upload_table, "privacy_status", AppConfig.upload_privacy_status)
             ),
@@ -250,6 +277,10 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"minimum_confidence = {config.detection_minimum_confidence}",
                 f"poll_interval_seconds = {config.detection_poll_interval_seconds}",
                 f"cooldown_seconds = {config.detection_cooldown_seconds}",
+                f"visual_events_enabled = {_toml_bool(config.visual_detection_enabled)}",
+                f"visual_maximum_fps = {config.visual_detection_maximum_fps}",
+                f"visual_language = {_toml_string(config.visual_detection_language)}",
+                f"visual_minimum_confidence = {config.visual_detection_minimum_confidence}",
                 "",
                 "[upload]",
                 f"privacy_status = {_toml_string(config.upload_privacy_status)}",
@@ -412,6 +443,7 @@ def _detection_values(config: AppConfig) -> None:
     boolean_values = {
         "auto_start_recording": config.auto_start_recording,
         "auto_stop_recording": config.auto_stop_recording,
+        "visual_events_enabled": config.visual_detection_enabled,
     }
     for key, value in boolean_values.items():
         if not isinstance(value, bool):
@@ -429,6 +461,8 @@ def _detection_values(config: AppConfig) -> None:
         "minimum_confidence": config.detection_minimum_confidence,
         "poll_interval_seconds": config.detection_poll_interval_seconds,
         "cooldown_seconds": config.detection_cooldown_seconds,
+        "visual_maximum_fps": config.visual_detection_maximum_fps,
+        "visual_minimum_confidence": config.visual_detection_minimum_confidence,
     }
     for key, value in numeric_values.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -446,6 +480,18 @@ def _detection_values(config: AppConfig) -> None:
         raise ValueError("poll_interval_seconds は0.1から60.0である必要があります")
     if not 0.0 <= config.detection_cooldown_seconds <= 300.0:
         raise ValueError("cooldown_seconds は0.0から300.0である必要があります")
+    _visual_detection_language(config.visual_detection_language)
+    if not 0.0 < config.visual_detection_maximum_fps <= 2.0:
+        raise ValueError("visual_maximum_fps は0より大きく2.0以下である必要があります")
+    if not 0.70 <= config.visual_detection_minimum_confidence <= 1.0:
+        raise ValueError("visual_minimum_confidence は0.70から1.0である必要があります")
+
+
+def _visual_detection_language(value: str) -> str:
+    normalized = value.strip().casefold()
+    if normalized not in ALLOWED_VISUAL_DETECTION_LANGUAGES:
+        raise ValueError("visual_language はauto、ja、enのいずれかで指定してください")
+    return normalized
 
 
 def _toml_string(value: str) -> str:

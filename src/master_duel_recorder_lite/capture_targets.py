@@ -48,6 +48,7 @@ class CaptureTarget:
     available: bool = True
     detail: str = ""
     window_handle: int | None = None
+    window_title: str | None = None
     left: int | None = None
     top: int | None = None
     width: int | None = None
@@ -59,6 +60,8 @@ class CaptureTarget:
         if self.mode in {CaptureMode.WINDOW, CaptureMode.MASTER_DUEL} and self.available:
             if self.window_handle is None or self.window_handle <= 0:
                 raise ValueError("ウィンドウ録画には有効なハンドルが必要です")
+            if self.window_title is None or not self.window_title.strip():
+                raise ValueError("ウィンドウ録画にはタイトルが必要です")
         if self.mode is CaptureMode.MONITOR:
             values = (self.left, self.top, self.width, self.height)
             if any(value is None for value in values):
@@ -73,6 +76,8 @@ class CaptureInput:
     input_name: str
     options: tuple[str, ...] = ()
     label: str = ""
+    window_handle: int | None = None
+    window_title: str | None = None
 
     def __post_init__(self) -> None:
         if self.input_format != "gdigrab":
@@ -81,6 +86,8 @@ class CaptureInput:
             raise ValueError("録画入力名が不正です")
         if len(self.options) % 2:
             raise ValueError("録画入力オプションは名前と値の組である必要があります")
+        if self.window_handle is not None and self.window_handle <= 0:
+            raise ValueError("ウィンドウハンドルは正数である必要があります")
 
 
 class CaptureTargetBackend(Protocol):
@@ -186,6 +193,7 @@ class CaptureTargetCatalog:
                     available=observation.status is GameWindowStatus.VISIBLE and window is not None,
                     detail=observation.message,
                     window_handle=window.handle if window is not None else None,
+                    window_title=window.title if window is not None else None,
                     width=window.width if window is not None else None,
                     height=window.height if window is not None else None,
                 ),
@@ -210,6 +218,7 @@ class CaptureTargetCatalog:
                     f"ウィンドウ: {title} (PID {window.pid}, HWND {window.handle})",
                     detail=f"{window.width}x{window.height}",
                     window_handle=window.handle,
+                    window_title=title,
                     width=window.width,
                     height=window.height,
                 )
@@ -225,7 +234,16 @@ def capture_input_for_target(target: CaptureTarget) -> CaptureInput:
     if target.mode in {CaptureMode.WINDOW, CaptureMode.MASTER_DUEL}:
         if target.window_handle is None or target.window_handle <= 0:
             raise CaptureTargetError("録画対象ウィンドウのハンドルが不正です")
-        return CaptureInput("gdigrab", f"hwnd={target.window_handle}", label=target.label)
+        if target.window_title is None or not target.window_title.strip():
+            raise CaptureTargetError("録画対象ウィンドウのタイトルが不正です")
+        title = target.window_title.strip()
+        return CaptureInput(
+            "gdigrab",
+            f"title={title}",
+            label=target.label,
+            window_handle=target.window_handle,
+            window_title=title,
+        )
     if target.mode is CaptureMode.MONITOR:
         if None in {target.left, target.top, target.width, target.height}:
             raise CaptureTargetError("録画対象モニターの座標が不完全です")
@@ -260,6 +278,7 @@ def resolve_configured_capture(
     config: AppConfig,
     *,
     master_duel_window_handle: int | None = None,
+    master_duel_window_title: str | None = None,
     catalog: CaptureTargetCatalog | None = None,
 ) -> CaptureInput:
     try:
@@ -271,8 +290,10 @@ def resolve_configured_capture(
         return capture_input_for_target(CaptureTarget(mode, "desktop", "デスクトップ全体"))
     if mode is CaptureMode.MASTER_DUEL:
         window_handle = master_duel_window_handle
-        window_title = ""
-        if window_handle is None:
+        window_title = master_duel_window_title
+        if (window_handle is None) != (window_title is None):
+            raise CaptureTargetError("Master Duelのハンドルとタイトルは同時に指定してください")
+        if window_handle is None or window_title is None:
             observation = GameWindowMonitor(
                 process_name=config.game_process_name,
                 title_contains=config.game_window_title_contains,
@@ -287,6 +308,7 @@ def resolve_configured_capture(
                 "master_duel",
                 f"Master Duel: {window_title or '選択済み'}",
                 window_handle=window_handle,
+                window_title=window_title,
             )
         )
 

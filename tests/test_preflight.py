@@ -52,8 +52,29 @@ class PreflightTest(unittest.TestCase):
         self.assertTrue(all(check.status is CheckStatus.OK for check in report.checks))
         self.assertEqual(
             [check.code for check in report.checks],
-            ["config", "ffmpeg", "capabilities", "inputs", "storage", "disk-space"],
+            [
+                "config", "ffmpeg", "capabilities", "inputs", "visual-detection",
+                "storage", "disk-space",
+            ],
         )
+
+    def test_visual_detection_is_warning_for_non_master_duel_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            report = run_preflight(
+                paths=default_runtime_paths(user_data_dir=root / "user_data"),
+                config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"),
+                config_loaded=True,
+                runner=capable_runner,
+                platform_name="Windows",
+                disk_usage=lambda _path: SimpleNamespace(free=2 * 1024**3),
+            )
+
+        check = next(item for item in report.checks if item.code == "visual-detection")
+        self.assertIs(check.status, CheckStatus.WARNING)
+        self.assertTrue(report.succeeded)
 
     def test_missing_ffmpeg_fails_but_storage_is_still_checked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

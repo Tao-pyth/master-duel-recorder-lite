@@ -134,6 +134,8 @@ def run_preflight(
             platform_name=system_name,
         )
 
+    _append_visual_detection_check(checks, config, discovery)
+
     storage_ready = _append_storage_check(checks, paths, config, write_probe or _probe_write_access)
     if storage_ready:
         _append_disk_space_check(checks, paths.recordings, disk_usage)
@@ -148,6 +150,54 @@ def run_preflight(
         )
 
     return PreflightReport(tuple(checks))
+
+
+def _append_visual_detection_check(
+    checks: list[PreflightCheck],
+    config: AppConfig,
+    discovery: FfmpegDiscoveryResult,
+) -> None:
+    if not config.visual_detection_enabled:
+        checks.append(
+            PreflightCheck(
+                "visual-detection",
+                "画面イベント判定",
+                CheckStatus.WARNING,
+                "設定で無効です。録画は継続できます",
+            )
+        )
+        return
+    if config.capture_mode != "master_duel":
+        checks.append(
+            PreflightCheck(
+                "visual-detection",
+                "画面イベント判定",
+                CheckStatus.WARNING,
+                "Master Duel録画対象ではないため無効です。録画は継続できます",
+            )
+        )
+        return
+    if not discovery.found:
+        checks.append(
+            PreflightCheck(
+                "visual-detection",
+                "画面イベント判定",
+                CheckStatus.WARNING,
+                "FFmpegがないためフレームを取得できません。録画可否とは別に表示しています",
+            )
+        )
+        return
+    checks.append(
+        PreflightCheck(
+            "visual-detection",
+            "画面イベント判定",
+            CheckStatus.OK,
+            (
+                f"オフラインROI特徴判定を最大{config.visual_detection_maximum_fps:g}fps、"
+                f"閾値{config.visual_detection_minimum_confidence:.2f}で利用できます"
+            ),
+        )
+    )
 
 
 def _append_capability_and_input_checks(

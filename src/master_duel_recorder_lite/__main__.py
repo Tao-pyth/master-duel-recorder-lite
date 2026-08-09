@@ -670,6 +670,7 @@ def _run_record_command(
 
         print(f"録画を開始しました: id={prepared.target.recording_id}")
         print(f"保存先: {prepared.target.path}")
+        print(f"自動判定: {prepared.visual_detection_status.message}")
         if duration_seconds is None:
             print("停止するにはCtrl+Cを押してください。")
 
@@ -693,6 +694,11 @@ def _run_record_command(
             return 3
         print(f"録画を保存しました: {result.output_path}")
         print(f"size: {result.size_bytes} bytes")
+        visual_status = prepared.visual_detection_status
+        print(
+            f"自動判定: {visual_status.state} / 候補 {visual_status.candidate_count} / "
+            f"処理 {visual_status.processed_frames} / 破棄 {visual_status.dropped_frames}"
+        )
         return 0
     finally:
         if session.state in {RecordingState.STARTING, RecordingState.RECORDING, RecordingState.STOPPING}:
@@ -1292,6 +1298,7 @@ def _run_watch_command(*, project_root: Path, user_data_dir: Path | None, once: 
             paths=paths,
             config=config,
             master_duel_window_handle=observation.capture_window_handle,
+            master_duel_window_title=observation.capture_window_title,
         ),
     )
     print("Master Duelウィンドウの監視を開始しました。停止するにはCtrl+Cを押してください。")

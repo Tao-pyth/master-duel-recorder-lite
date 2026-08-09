@@ -18,7 +18,7 @@ def bmp(width: int = 640, height: int = 480) -> bytes:
 
 
 class FrameCaptureTest(unittest.TestCase):
-    def test_japanese_window_title_is_one_argument_and_sample_stays_in_memory(self) -> None:
+    def test_window_title_is_one_argument_and_sample_stays_in_memory(self) -> None:
         captured_command: tuple[str, ...] | None = None
 
         def runner(command: tuple[str, ...], _timeout: float) -> BinaryCommandResult:

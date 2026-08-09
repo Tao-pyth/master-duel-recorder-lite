@@ -8,7 +8,9 @@ from master_duel_recorder_lite.capture_targets import (
     MonitorSnapshot,
     capture_input_for_target,
     find_target,
+    resolve_configured_capture,
 )
+from master_duel_recorder_lite.config import AppConfig
 from master_duel_recorder_lite.game_window import WindowSnapshot
 
 
@@ -40,20 +42,23 @@ class CaptureTargetTest(unittest.TestCase):
         )
         self.assertEqual(targets[-1].identifier, "window:42")
 
-    def test_window_target_uses_hwnd_input(self) -> None:
+    def test_window_target_uses_supported_title_input_and_keeps_handle(self) -> None:
         target = CaptureTarget(
             CaptureMode.WINDOW,
             "window:42",
             "MASTER DUEL",
             window_handle=42,
+            window_title="MASTER DUEL",
             width=1280,
             height=720,
         )
 
         capture_input = capture_input_for_target(target)
 
-        self.assertEqual(capture_input.input_name, "hwnd=42")
+        self.assertEqual(capture_input.input_name, "title=MASTER DUEL")
         self.assertEqual(capture_input.options, ())
+        self.assertEqual(capture_input.window_handle, 42)
+        self.assertEqual(capture_input.window_title, "MASTER DUEL")
 
     def test_monitor_target_uses_desktop_region(self) -> None:
         target = CaptureTarget(
@@ -73,6 +78,23 @@ class CaptureTargetTest(unittest.TestCase):
             capture_input.options,
             ("-offset_x", "-1280", "-offset_y", "0", "-video_size", "1280x1024"),
         )
+
+    def test_automatic_master_duel_input_keeps_observed_title_and_handle(self) -> None:
+        capture_input = resolve_configured_capture(
+            AppConfig(capture_mode="master_duel"),
+            master_duel_window_handle=42,
+            master_duel_window_title="Master Duel",
+        )
+
+        self.assertEqual(capture_input.input_name, "title=Master Duel")
+        self.assertEqual(capture_input.window_handle, 42)
+
+    def test_automatic_master_duel_input_rejects_partial_window_identity(self) -> None:
+        with self.assertRaisesRegex(CaptureTargetError, "同時"):
+            resolve_configured_capture(
+                AppConfig(capture_mode="master_duel"),
+                master_duel_window_handle=42,
+            )
 
     def test_unavailable_target_is_rejected(self) -> None:
         target = CaptureTarget(

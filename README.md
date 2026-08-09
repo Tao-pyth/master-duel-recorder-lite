@@ -23,7 +23,7 @@ V1.0.0までに、次の中核機能を段階的に提供します。
 
 ## 現在の状態
 
-現在のバージョンは `0.15.0`、「対戦タイムライン基盤」です。GitHub Releaseでは、通常利用向けGUI EXEと自動化・詳細操作向けCLI EXEを配布します。録画履歴から動画を再生し、対戦記録を後編集できるほか、対戦開始、ターン切り替え、勝敗、手動マーカーを録画時刻へ関連付けられます。自動判定候補は確認または却下するまで保持します。V0.16.0では対戦開始・ターン切り替え・勝敗の自動判定を提供します。現段階の自動検出は可視ウィンドウの存在判定です。外部サービスへの直接アップロードとOAuthは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
+現在のバージョンは `0.16.0`、「基本イベント自動判定」です。GitHub Releaseでは、通常利用向けGUI EXEと自動化・詳細操作向けCLI EXEを配布します。Master Duelウィンドウ録画中に最大2fpsで画面特徴を解析し、対戦開始、ターン切り替え、勝敗・対戦終了を未確認候補としてタイムラインへ保存します。候補は自動確定せず、GUIで信頼度と理由を確認して確認・却下できます。検出はゲームUI変更の影響を受けるため、実画面チェックリストで環境ごとの確認が必要です。外部サービスへの直接アップロードとOAuthは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
 
 開発計画は [docs/roadmap.md](docs/roadmap.md)、バージョンごとの変更は [docs/release-notes.md](docs/release-notes.md) を参照してください。ロードマップ作業は実装前にGitHub Issueへ登録し、バージョンラベルとMilestoneへ接続します。
 
@@ -142,7 +142,7 @@ python -m master_duel_recorder_lite record --duration 10
 python -m master_duel_recorder_lite record
 ```
 
-時間を省略した場合はCtrl+Cで正常停止します。録画は `user_data/data/recordings/YYYY/MM/DD/` 配下へ保存します。既存ファイルは上書きしません。Master Duel対象では、プロセス名とタイトル条件に一致する可視・非最小化ウィンドウのうち面積が最大のものを選び、そのWindowsハンドルをFFmpegへ渡します。モニター対象ではOSが返す座標とサイズを使います。任意ウィンドウやデスクトップ全体も明示選択できます。録画前に対象名を確認してください。詳細は [録画対象の選択設計](docs/architecture/capture-targets.md) と [最小録画設計](docs/architecture/recording.md) を参照してください。
+時間を省略した場合はCtrl+Cで正常停止します。録画は `user_data/data/recordings/YYYY/MM/DD/` 配下へ保存します。既存ファイルは上書きしません。Master Duel対象では、プロセス名とタイトル条件に一致する可視・非最小化ウィンドウのうち面積が最大のものをPID・Windowsハンドルで固定し、対応するウィンドウタイトルをFFmpegへ渡します。モニター対象ではOSが返す座標とサイズを使います。任意ウィンドウやデスクトップ全体も明示選択できます。録画前に対象名を確認してください。詳細は [録画対象の選択設計](docs/architecture/capture-targets.md) と [最小録画設計](docs/architecture/recording.md) を参照してください。
 
 ## Master Duel向け録画補助
 
@@ -153,7 +153,7 @@ python -m master_duel_recorder_lite watch --once
 python -m master_duel_recorder_lite watch
 ```
 
-既定では `masterduel.exe` の可視ウィンドウを3回連続で確認すると開始し、ウィンドウ不在または最小化を5回連続で確認すると停止します。Ctrl+Cは監視と実行中の録画を正常停止します。`record` と `watch` はOSロックにより同時録画を拒否します。現在の検出はゲームウィンドウの存在判定であり、対戦中・メニュー・デッキ編集を区別しません。詳細は [Master Duel向け録画補助設計](docs/architecture/detection.md) を参照してください。
+既定では `masterduel.exe` の可視ウィンドウを3回連続で確認すると開始し、ウィンドウ不在または最小化を5回連続で確認すると停止します。Ctrl+Cは監視と実行中の録画を正常停止します。`record` と `watch` はOSロックにより同時録画を拒否します。録画開始・停止の判断は引き続きゲームウィンドウの存在を使い、録画中の対戦開始・ターン・結果は別ワーカーが候補化します。詳細は[Master Duel向け録画補助設計](docs/architecture/detection.md)と[基本イベント自動判定設計](docs/architecture/visual-event-detection.md)を参照してください。
 
 ## 録画履歴
 
@@ -183,6 +183,8 @@ python -m master_duel_recorder_lite timeline reject EVENT_ID
 ```
 
 確定済みの開始と結果は各1件に制限し、ターン切り替えは開始より後、結果より前だけに置けます。イベントは物理削除せず、却下も監査可能な状態として残します。詳細は[対戦タイムライン基盤設計](docs/architecture/duel-timeline.md)を参照してください。
+
+Master Duel録画では、言語に依存しないROI特徴判定を録画処理と別スレッドで実行します。GUIの録画画面に処理・破棄フレーム数と候補件数を表示し、タイムライン画面に信頼度と判定理由を表示します。解析例外やフレーム取得失敗は自動判定だけを無効化し、FFmpeg録画の成否を変更しません。実画面での確認は[基本イベント自動判定 実画面チェックリスト](docs/visual-detection-checklist.md)を使用します。
 
 ## 失敗時の復旧
 

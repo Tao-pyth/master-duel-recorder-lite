@@ -75,8 +75,8 @@ class FfmpegWindowFrameCapture:
         self.max_frame_bytes = max_frame_bytes
 
     def capture(self, window: WindowSnapshot) -> FrameCaptureResult:
-        if not window.title.strip():
-            return FrameCaptureResult(None, "タイトルのないウィンドウはFFmpegで取得できません")
+        if window.handle <= 0 or not window.title.strip():
+            return FrameCaptureResult(None, "有効なウィンドウハンドルとタイトルが必要です")
         command = (
             str(self.executable),
             "-hide_banner",
@@ -85,7 +85,7 @@ class FfmpegWindowFrameCapture:
             "-f",
             "gdigrab",
             "-i",
-            f"title={window.title}",
+            f"title={window.title.strip()}",
             "-frames:v",
             "1",
             "-f",

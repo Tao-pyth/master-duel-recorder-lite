@@ -43,6 +43,10 @@ stop_confirmations = 5
 minimum_confidence = 0.5
 poll_interval_seconds = 1.0
 cooldown_seconds = 10.0
+visual_events_enabled = true
+visual_maximum_fps = 2.0
+visual_language = "auto"
+visual_minimum_confidence = 0.70
 
 [upload]
 privacy_status = "private"
@@ -57,7 +61,9 @@ auto_create_user_data = true
 
 `capture_width` と `capture_height` が両方 `0` の場合は入力元の解像度を維持します。解像度を変更する場合は両方を指定し、幅320-7680、高さ240-4320の偶数にします。`frame_rate` は1-120、`video_bitrate_kbps` は500-100000、`audio_bitrate_kbps` は32-512の範囲です。既定値は30fps、映像6000kbps、音声192kbpsです。
 
-`game_process_name` は監視するWindows実行ファイル名、`game_window_title_contains` は任意のタイトル絞り込みです。`start_confirmations` と `stop_confirmations` は連続確認回数、`minimum_confidence` は採用する信頼度、`poll_interval_seconds` は監視間隔、`cooldown_seconds` は停止後に再開を抑止する時間です。自動開始または自動停止は個別に無効化できます。現在の標準検出器は可視ウィンドウの存在だけを判定し、画像による対戦場面判定は行いません。
+`game_process_name` は監視するWindows実行ファイル名、`game_window_title_contains` は任意のタイトル絞り込みです。`start_confirmations` と `stop_confirmations` は連続確認回数、`minimum_confidence` は採用する信頼度、`poll_interval_seconds` は監視間隔、`cooldown_seconds` は停止後に再開を抑止する時間です。自動開始または自動停止は個別に無効化できます。
+
+`visual_events_enabled`はMaster Duel録画中の基本イベント判定、`visual_maximum_fps`は0より大きく2以下の解析頻度、`visual_language`は`auto`・`ja`・`en`、`visual_minimum_confidence`は0.70以上の候補保存閾値です。画像はメモリ内で処理し保存しません。任意ウィンドウ、モニター、デスクトップ録画では自動判定を無効化し、録画は継続します。
 
 `upload.privacy_status` はアップロード準備メタデータの既定公開範囲です。安全のため `private` が既定で、明示した場合だけ `unlisted` を使用できます。`public`、OAuthトークン、APIキー、クライアントシークレットは設定・メタデータ・マニフェストへ保存しません。
 

@@ -73,6 +73,12 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
         "detection.minimum_confidence": ConfigField("detection_minimum_confidence", _number),
         "detection.poll_interval_seconds": ConfigField("detection_poll_interval_seconds", _number),
         "detection.cooldown_seconds": ConfigField("detection_cooldown_seconds", _number),
+        "detection.visual_events_enabled": ConfigField("visual_detection_enabled", _boolean),
+        "detection.visual_maximum_fps": ConfigField("visual_detection_maximum_fps", _number),
+        "detection.visual_language": ConfigField("visual_detection_language", _lower_text),
+        "detection.visual_minimum_confidence": ConfigField(
+            "visual_detection_minimum_confidence", _number
+        ),
         "upload.privacy_status": ConfigField("upload_privacy_status", _lower_text),
         "runtime.auto_create_user_data": ConfigField("auto_create_user_data", _boolean),
     }

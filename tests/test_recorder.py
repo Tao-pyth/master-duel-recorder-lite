@@ -1,12 +1,16 @@
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from master_duel_recorder_lite.config import AppConfig
+from master_duel_recorder_lite.capture_targets import CaptureInput
 from master_duel_recorder_lite.duel_records import DuelRecordRepository
+from master_duel_recorder_lite.duel_timeline import DuelTimelineRepository
 from master_duel_recorder_lite.ffmpeg import FfmpegDiscoveryResult, FfmpegVersion
+from master_duel_recorder_lite.frame_capture import FrameCaptureResult, FrameSample
 from master_duel_recorder_lite.recorder import (
     RecordingPreparationError,
     RecordingTrackingError,
@@ -15,6 +19,8 @@ from master_duel_recorder_lite.recorder import (
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
 from master_duel_recorder_lite.recording_state_store import RecordingStateStoreError
+from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
+from master_duel_recorder_lite.visual_detection import DetectionCandidate
 
 
 class RecorderPreparationTest(unittest.TestCase):
@@ -130,6 +136,135 @@ class RecorderPreparationTest(unittest.TestCase):
         assert persisted is not None
         self.assertEqual(persisted.value.state, "completed")
 
+    def test_visual_worker_follows_recording_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(),
+                source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58),
+                attempts=(),
+            )
+            with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(ffmpeg_path=str(executable), capture_mode="master_duel"),
+                    capture_input=CaptureInput(
+                        "gdigrab",
+                        "title=Master Duel",
+                        window_handle=123,
+                        window_title="Master Duel",
+                    ),
+                )
+            prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+            worker = FakeVisualWorker()
+            prepared.visual_worker_builder = lambda _started_at: worker  # type: ignore[assignment]
+            try:
+                state = prepared.start(source="manual")
+                result = prepared.stop()
+            finally:
+                prepared.release()
+
+        self.assertIs(state, RecordingState.RECORDING)
+        self.assertTrue(result.succeeded)
+        self.assertEqual((worker.start_count, worker.stop_count), (1, 1))
+        self.assertEqual(worker.request_stop_count, 1)
+        self.assertFalse(worker.active)
+
+    def test_visual_worker_start_failure_does_not_fail_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(), source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58), attempts=(),
+            )
+            with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"),
+                )
+            prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+            prepared.visual_worker_builder = lambda _started_at: (_ for _ in ()).throw(
+                RuntimeError("visual unavailable")
+            )
+            try:
+                state = prepared.start(source="manual")
+                result = prepared.stop()
+            finally:
+                prepared.release()
+
+        self.assertIs(state, RecordingState.RECORDING)
+        self.assertTrue(result.succeeded)
+        self.assertEqual(prepared.visual_detection_status.state, "failed")
+        self.assertIn("visual unavailable", prepared.visual_detection_status.message)
+
+    def test_master_duel_visual_candidate_is_saved_without_auto_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(), source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58), attempts=(),
+            )
+            with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(ffmpeg_path=str(executable), capture_mode="master_duel"),
+                    capture_input=CaptureInput(
+                        "gdigrab",
+                        "title=Master Duel",
+                        window_handle=123,
+                        window_title="Master Duel",
+                    ),
+                )
+            prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+            captured_at = datetime(2026, 8, 8, tzinfo=timezone.utc) + timedelta(seconds=1)
+            frame_result = FrameCaptureResult(
+                FrameSample(
+                    captured_at, 123, "Master Duel", 160, 90, "bmp", b"synthetic"
+                ),
+                None,
+            )
+            detected = DetectionCandidate(
+                "duel_start", 1000, 0.9, "synthetic match", "test", "1"
+            )
+            try:
+                with (
+                    patch(
+                        "master_duel_recorder_lite.recorder.FfmpegWindowFrameCapture.capture",
+                        return_value=frame_result,
+                    ),
+                    patch(
+                        "master_duel_recorder_lite.recorder.VisualDetectionPipeline.analyze",
+                        return_value=(detected,),
+                    ),
+                ):
+                    prepared.start(source="manual")
+                    time.sleep(0.15)
+                    result = prepared.stop()
+                events = DuelTimelineRepository(prepared.history.database_path).list(
+                    prepared.target.recording_id
+                )
+            finally:
+                prepared.release()
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].status, "candidate")
+        self.assertEqual(events[0].source, "detected")
+        self.assertEqual(events[0].label, "synthetic match")
+
     def test_prepared_recording_persists_start_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -204,6 +339,10 @@ class FakeLifecycleSession:
         self.state = RecordingState.CREATED
         self.started_at: datetime | None = None
         self.result: RecordingResult | None = None
+        self.diagnostics: list[str] = []
+
+    def add_diagnostic(self, line: str) -> None:
+        self.diagnostics.append(line)
 
     def start(self) -> RecordingState:
         self.started_at = datetime(2026, 8, 8, tzinfo=timezone.utc)
@@ -241,6 +380,32 @@ class FakeLifecycleSession:
             diagnostics=(),
         )
         return self.result
+
+
+class FakeVisualWorker:
+    def __init__(self) -> None:
+        self.active = False
+        self.start_count = 0
+        self.stop_count = 0
+        self.request_stop_count = 0
+
+    @property
+    def status(self) -> VisualDetectionStatus:
+        state = "running" if self.active else "stopped"
+        return VisualDetectionStatus(state, state, 1, 0, 0)
+
+    def start(self) -> None:
+        self.start_count += 1
+        self.active = True
+
+    def stop(self) -> None:
+        if not self.active:
+            return
+        self.stop_count += 1
+        self.active = False
+
+    def request_stop(self) -> None:
+        self.request_stop_count += 1
 
 
 if __name__ == "__main__":

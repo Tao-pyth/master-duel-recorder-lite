@@ -18,16 +18,19 @@ class ConfigManagementTest(unittest.TestCase):
 
         self.assertEqual(values["recorder.frame_rate"], 30)
         self.assertEqual(values["upload.privacy_status"], "private")
+        self.assertEqual(values["detection.visual_maximum_fps"], 2.0)
         self.assertFalse(any("token" in key or "secret" in key or "key" in key for key in values))
 
     def test_updates_typed_value_and_validates_whole_config(self) -> None:
         config = updated_config(AppConfig(), "recorder.frame_rate", "60")
         config = updated_config(config, "detection.auto_start_recording", "false")
         config = updated_config(config, "upload.privacy_status", " UNLISTED ")
+        config = updated_config(config, "detection.visual_minimum_confidence", "0.8")
 
         self.assertEqual(config.frame_rate, 60)
         self.assertFalse(config.auto_start_recording)
         self.assertEqual(config.upload_privacy_status, "unlisted")
+        self.assertEqual(config.visual_detection_minimum_confidence, 0.8)
 
         with self.assertRaises(ConfigValueError):
             updated_config(config, "recorder.frame_rate", "0")

@@ -25,6 +25,7 @@ class DuelObservation:
     observed_at: datetime
     capture_window_handle: int | None = None
     capture_process_id: int | None = None
+    capture_window_title: str | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
@@ -37,6 +38,8 @@ class DuelObservation:
             raise ValueError("capture_window_handleは正数である必要があります")
         if self.capture_process_id is not None and self.capture_process_id <= 0:
             raise ValueError("capture_process_idは正数である必要があります")
+        if self.capture_window_title is not None and not self.capture_window_title.strip():
+            raise ValueError("capture_window_titleは空にできません")
 
     @property
     def capture_target_key(self) -> tuple[int, int] | None:

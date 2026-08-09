@@ -86,12 +86,17 @@ class RecordingCommandTest(unittest.TestCase):
             command = build_recording_command(
                 executable=Path("C:/ffmpeg/bin/ffmpeg.exe"),
                 profile=RecordingProfile(),
-                capture_input=CaptureInput("gdigrab", "hwnd=4242"),
+                capture_input=CaptureInput(
+                    "gdigrab",
+                    "title=Master Duel",
+                    window_handle=4242,
+                    window_title="Master Duel",
+                ),
                 output_path=root / "window.mkv",
                 recordings_root=root,
             )
 
-        self.assertIn("hwnd=4242", command)
+        self.assertIn("title=Master Duel", command)
         self.assertNotIn("desktop", command)
 
     def test_monitor_target_places_region_options_before_input(self) -> None:
