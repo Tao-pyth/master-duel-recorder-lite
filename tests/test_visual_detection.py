@@ -164,24 +164,77 @@ class VisualDetectorTest(unittest.TestCase):
         self.assertEqual(detected[1].actor, "self")
         self.assertEqual(detected[2].outcome, "win")
 
-    def test_start_requires_animation_then_board_transition(self) -> None:
+    def test_start_accepts_animation_then_board_transition(self) -> None:
         detector = DuelStartDetector()
 
-        board_only = detector.detect(FrameCues(True, board_score=0.9), 1000)
         animation = detector.detect(FrameCues(True, start_animation_score=0.8), 1500)
         started = detector.detect(FrameCues(True, board_score=0.9), 2000)
 
-        self.assertIsNone(board_only)
         self.assertIsNone(animation)
         self.assertIsNotNone(started)
+        self.assertIn("開始演出後", started.reason)  # type: ignore[union-attr]
+
+    def test_start_accepts_stable_board_without_animation(self) -> None:
+        detector = DuelStartDetector()
+
+        started = detector.detect(
+            FrameCues(
+                True,
+                board_score=1.0,
+                start_animation_score=0.06,
+                result_score=0.03,
+                detail="live board",
+            ),
+            1000,
+        )
+
+        self.assertIsNotNone(started)
+        self.assertGreaterEqual(started.confidence, 0.85)  # type: ignore[union-attr]
+        self.assertIn("安定した対戦盤面", started.reason)  # type: ignore[union-attr]
+
+    def test_start_rejects_board_like_frame_with_overlay_or_result(self) -> None:
+        detector = DuelStartDetector()
+
+        overlay = detector.detect(
+            FrameCues(True, board_score=1.0, start_animation_score=0.5),
+            1000,
+        )
+        result = detector.detect(
+            FrameCues(True, board_score=1.0, result_score=0.5),
+            1500,
+        )
+        weak_board = detector.detect(FrameCues(True, board_score=0.84), 2000)
+
+        self.assertIsNone(overlay)
+        self.assertIsNone(result)
+        self.assertIsNone(weak_board)
 
     def test_start_transition_expires_before_late_board(self) -> None:
         detector = DuelStartDetector(maximum_transition_ms=2000)
 
         detector.detect(FrameCues(True, start_animation_score=0.8), 1000)
-        expired = detector.detect(FrameCues(True, board_score=0.9), 4000)
+        expired = detector.detect(FrameCues(True, board_score=0.7), 4000)
 
         self.assertIsNone(expired)
+
+    def test_board_only_start_requires_temporal_consensus(self) -> None:
+        detector = DuelStartDetector()
+        consensus = TemporalEventConsensus(confirmations=3)
+        cues = FrameCues(
+            True,
+            board_score=1.0,
+            start_animation_score=0.06,
+            result_score=0.03,
+            detail="live board",
+        )
+
+        emitted = []
+        for elapsed_ms in (0, 500, 1000):
+            detected = detector.detect(cues, elapsed_ms)
+            emitted.append(consensus.process((detected,) if detected else ()))
+
+        self.assertEqual(emitted[:2], [(), ()])
+        self.assertEqual(len(emitted[2]), 1)
 
     def test_turn_detector_latches_persistent_animation(self) -> None:
         detector = TurnChangeDetector()

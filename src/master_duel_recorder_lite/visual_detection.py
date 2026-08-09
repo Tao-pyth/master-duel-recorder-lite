@@ -234,10 +234,22 @@ class CueEventDetector(Protocol):
 
 
 class DuelStartDetector:
-    def __init__(self, *, maximum_transition_ms: int = 5000) -> None:
+    def __init__(
+        self,
+        *,
+        maximum_transition_ms: int = 5000,
+        board_only_minimum_score: float = 0.85,
+        board_only_maximum_overlay_score: float = 0.35,
+    ) -> None:
         if maximum_transition_ms < 1:
             raise ValueError("対戦開始遷移の最大時間は正数である必要があります")
+        if not 0.60 <= board_only_minimum_score <= 1.0:
+            raise ValueError("盤面単独判定の盤面スコアは0.60から1.0である必要があります")
+        if not 0.0 <= board_only_maximum_overlay_score < 0.60:
+            raise ValueError("盤面単独判定の演出スコアは0.0以上0.60未満である必要があります")
         self.maximum_transition_ms = maximum_transition_ms
+        self.board_only_minimum_score = board_only_minimum_score
+        self.board_only_maximum_overlay_score = board_only_maximum_overlay_score
         self._animation_elapsed_ms: int | None = None
 
     def detect(self, cues: FrameCues, elapsed_ms: int) -> DetectionCandidate | None:
@@ -246,18 +258,28 @@ class DuelStartDetector:
         if animation_score >= 0.60:
             self._animation_elapsed_ms = elapsed_ms
             return None
-        if self._animation_elapsed_ms is None:
-            return None
-        if elapsed_ms - self._animation_elapsed_ms > self.maximum_transition_ms:
-            self._animation_elapsed_ms = None
-            return None
-        if board_score < 0.60:
+        if self._animation_elapsed_ms is not None:
+            if elapsed_ms - self._animation_elapsed_ms > self.maximum_transition_ms:
+                self._animation_elapsed_ms = None
+            elif board_score >= 0.60:
+                return _cue_candidate(
+                    "duel_start",
+                    elapsed_ms,
+                    min(1.0, (board_score + 0.70) / 2),
+                    replace(cues, detail=f"開始演出後の盤面, {cues.detail}"),
+                )
+
+        if (
+            board_score < self.board_only_minimum_score
+            or animation_score > self.board_only_maximum_overlay_score
+            or cues.result_score > self.board_only_maximum_overlay_score
+        ):
             return None
         return _cue_candidate(
             "duel_start",
             elapsed_ms,
-            min(1.0, (board_score + 0.70) / 2),
-            cues,
+            min(1.0, (board_score + 0.75) / 2),
+            replace(cues, detail=f"安定した対戦盤面, {cues.detail}"),
         )
 
 
