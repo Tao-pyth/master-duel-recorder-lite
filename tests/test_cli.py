@@ -12,6 +12,10 @@ from master_duel_recorder_lite.config import AppConfig, LoadedAppConfig
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.game_window import GameWindowObservation, GameWindowStatus
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
+from master_duel_recorder_lite.recording_browsing import (
+    RecordingBrowseError,
+    RecordingBrowseFailure,
+)
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
 
@@ -254,6 +258,44 @@ class CliTest(unittest.TestCase):
         self.assertEqual(exit_code, 4)
         self.assertIn("UNTRACKED", output.getvalue())
         self.assertTrue(preserved)
+
+    def test_history_play_uses_recording_browser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            browser = SimpleNamespace(
+                play=lambda recording_id: SimpleNamespace(
+                    recording_id=recording_id,
+                    path=Path(tmp_dir) / "video.mkv",
+                    warnings=(),
+                )
+            )
+            output = io.StringIO()
+            with (
+                patch("master_duel_recorder_lite.__main__.RecordingBrowser", return_value=browser),
+                redirect_stdout(output),
+            ):
+                exit_code = main(["--user-data-dir", tmp_dir, "history", "play", "recording"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("再生を開始しました", output.getvalue())
+
+    def test_history_reveal_missing_file_returns_four(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            def missing(_recording_id: str) -> object:
+                raise RecordingBrowseError(
+                    RecordingBrowseFailure.MISSING,
+                    "録画ファイルが見つかりません",
+                )
+
+            browser = SimpleNamespace(reveal=missing)
+            error = io.StringIO()
+            with (
+                patch("master_duel_recorder_lite.__main__.RecordingBrowser", return_value=browser),
+                redirect_stderr(error),
+            ):
+                exit_code = main(["--user-data-dir", tmp_dir, "history", "reveal", "recording"])
+
+        self.assertEqual(exit_code, 4)
+        self.assertIn("E_HISTORY_OPEN", error.getvalue())
 
 
 if __name__ == "__main__":

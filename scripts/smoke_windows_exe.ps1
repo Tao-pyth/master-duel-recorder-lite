@@ -25,6 +25,14 @@ if (($helpOutput | Out-String) -notmatch "config" -or ($helpOutput | Out-String)
     throw "help output does not contain core commands"
 }
 
+$historyHelp = & $resolvedExe history --help
+if ($LASTEXITCODE -ne 0) {
+    throw "history --help failed with exit code $LASTEXITCODE"
+}
+if (($historyHelp | Out-String) -notmatch "play" -or ($historyHelp | Out-String) -notmatch "reveal") {
+    throw "history help does not contain recording browsing commands"
+}
+
 $isolatedData = Join-Path ([System.IO.Path]::GetTempPath()) ("mdrl-exe-smoke-" + [guid]::NewGuid().ToString("N"))
 $configJson = & $resolvedExe --user-data-dir $isolatedData config show --json
 if ($LASTEXITCODE -ne 0) {

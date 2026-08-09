@@ -15,6 +15,7 @@ from . import __version__
 from .application import ApplicationEvent, RecorderApplicationService, RecordingSnapshot
 from .capture_targets import CaptureTarget
 from .preflight import CheckStatus, PreflightReport
+from .recording_browsing import RecordingReference
 from .recording_session import RecordingState
 from .runtime_paths import application_project_root
 
@@ -342,6 +343,21 @@ class RecorderGui:
         ttk.Label(toolbar, text="録画履歴", style="Heading.TLabel").pack(side="left")
         ttk.Button(toolbar, text="整合性確認", command=self.check_history).pack(side="right")
         ttk.Button(toolbar, text="更新", command=self.refresh_history).pack(side="right", padx=(0, 8))
+        self.history_reveal_button = ttk.Button(
+            toolbar,
+            text="保存場所を開く",
+            command=self.reveal_selected_history,
+            state="disabled",
+        )
+        self.history_reveal_button.pack(side="right", padx=(0, 8))
+        self.history_play_button = ttk.Button(
+            toolbar,
+            text="再生",
+            style="Primary.TButton",
+            command=self.play_selected_history,
+            state="disabled",
+        )
+        self.history_play_button.pack(side="right", padx=(0, 8))
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
         columns = ("started", "state", "duration", "size", "id")
@@ -356,7 +372,11 @@ class RecorderGui:
             self.history_tree.heading(key, text=label)
             self.history_tree.column(key, width=width, stretch=key == "id")
         self.history_tree.pack(fill="both", expand=True)
+        self.history_tree.bind("<<TreeviewSelect>>", self._history_selection_changed)
+        self.history_tree.bind("<Double-1>", self._history_double_clicked)
         self.widgets["history_table"] = self.history_tree
+        self.widgets["history_play"] = self.history_play_button
+        self.widgets["history_reveal"] = self.history_reveal_button
 
     def _build_recovery_page(self) -> None:
         page = self._new_page("recovery")
@@ -581,12 +601,56 @@ class RecorderGui:
         self._run(self.service.list_history, self._history_loaded)
 
     def _history_loaded(self, entries: tuple[object, ...]) -> None:
+        previous = self.history_tree.selection()
+        previous_id = str(previous[0]) if previous else None
         self._clear_tree(self.history_tree)
         for entry in entries:
             started = entry.started_at or entry.created_at
             duration = f"{entry.duration_seconds:.1f}秒" if entry.duration_seconds is not None else "-"
             size = _format_bytes(entry.size_bytes)
             self.history_tree.insert("", "end", iid=entry.recording_id, values=(started.astimezone().strftime("%Y-%m-%d %H:%M:%S"), entry.state, duration, size, entry.recording_id))
+        if previous_id is not None and self.history_tree.exists(previous_id):
+            self.history_tree.selection_set(previous_id)
+            self.history_tree.focus(previous_id)
+            self.history_tree.see(previous_id)
+        self._history_selection_changed()
+
+    def _history_selection_changed(self, _event: object | None = None) -> None:
+        state = "normal" if self.history_tree.selection() else "disabled"
+        self.history_play_button.configure(state=state)
+        self.history_reveal_button.configure(state=state)
+
+    def _history_double_clicked(self, event: tk.Event[tk.Misc]) -> None:
+        recording_id = self.history_tree.identify_row(event.y)
+        if not recording_id:
+            return
+        self.history_tree.selection_set(recording_id)
+        self.play_selected_history()
+
+    def play_selected_history(self) -> None:
+        selection = self.history_tree.selection()
+        if not selection:
+            return
+        recording_id = str(selection[0])
+        self._run(
+            lambda: self.service.play_recording(recording_id),
+            lambda reference: self._recording_opened("再生を開始しました", reference),
+        )
+
+    def reveal_selected_history(self) -> None:
+        selection = self.history_tree.selection()
+        if not selection:
+            return
+        recording_id = str(selection[0])
+        self._run(
+            lambda: self.service.reveal_recording(recording_id),
+            lambda reference: self._recording_opened("保存場所を開きました", reference),
+        )
+
+    def _recording_opened(self, action: str, reference: RecordingReference) -> None:
+        self._activity(f"{action}: {reference.recording_id}")
+        for warning in reference.warnings:
+            self._activity(f"注意: {warning}")
 
     def check_history(self) -> None:
         self._run(self.service.check_history, lambda issues: self._activity(f"履歴の不整合: {len(issues)}件"))

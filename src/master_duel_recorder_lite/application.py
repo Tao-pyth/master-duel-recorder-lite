@@ -23,6 +23,7 @@ from .recording_history import (
     RecordingHistoryEntry,
     RecordingHistoryRepository,
 )
+from .recording_browsing import RecordingBrowser, RecordingReference
 from .recording_session import RecordingResult, RecordingState
 from .recovery import InterruptedDetection, RecoveryManager
 from .runtime_paths import default_runtime_paths
@@ -67,11 +68,13 @@ class RecorderApplicationService:
         project_root: Path | None = None,
         user_data_dir: Path | None = None,
         target_catalog: CaptureTargetCatalog | None = None,
+        recording_browser: RecordingBrowser | None = None,
     ) -> None:
         self.project_root = project_root
         self.user_data_dir = user_data_dir
         self.paths = default_runtime_paths(project_root=project_root, user_data_dir=user_data_dir)
         self._target_catalog = target_catalog
+        self._recording_browser = recording_browser
         self._lock = threading.RLock()
         self._current: PreparedRecording | None = None
         self._watch_thread: threading.Thread | None = None
@@ -214,6 +217,15 @@ class RecorderApplicationService:
     def check_history(self) -> tuple[ConsistencyIssue, ...]:
         return RecordingHistoryRepository.from_runtime_paths(self.paths).check_consistency()
 
+    def resolve_recording(self, recording_id: str) -> RecordingReference:
+        return self._browser().resolve(recording_id)
+
+    def play_recording(self, recording_id: str) -> RecordingReference:
+        return self._browser().play(recording_id)
+
+    def reveal_recording(self, recording_id: str) -> RecordingReference:
+        return self._browser().reveal(recording_id)
+
     def detect_recovery(self) -> tuple[InterruptedDetection, ...]:
         return RecoveryManager(paths=self.paths).detect_interrupted()
 
@@ -340,6 +352,14 @@ class RecorderApplicationService:
             repository=RecordingHistoryRepository.from_runtime_paths(self.paths),
             ffmpeg_executable=discovery.executable,
         )
+
+    def _browser(self) -> RecordingBrowser:
+        if self._recording_browser is None:
+            self._recording_browser = RecordingBrowser(
+                repository=RecordingHistoryRepository.from_runtime_paths(self.paths),
+                recordings_root=self.paths.recordings,
+            )
+        return self._recording_browser
 
     def _upload_preparation_service(self) -> UploadPreparationService:
         discovery = discover_ffmpeg(self.load_config().config.ffmpeg_path)

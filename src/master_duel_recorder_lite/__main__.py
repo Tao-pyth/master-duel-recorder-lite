@@ -28,6 +28,7 @@ from .recording_history import (
     RecordingHistoryError,
     RecordingHistoryRepository,
 )
+from .recording_browsing import RecordingBrowseError, RecordingBrowseFailure, RecordingBrowser
 from .recorder import (
     PreparedRecording,
     RecordingPreparationError,
@@ -189,6 +190,16 @@ def build_parser() -> argparse.ArgumentParser:
     history_list.add_argument("--offset", type=_nonnegative_integer, default=0)
     history_show = history_subparsers.add_parser("show", help="録画履歴1件の詳細を表示します。")
     history_show.add_argument("recording_id")
+    history_play = history_subparsers.add_parser(
+        "play",
+        help="録画をWindows既定プレイヤーで再生します。",
+    )
+    history_play.add_argument("recording_id")
+    history_reveal = history_subparsers.add_parser(
+        "reveal",
+        help="録画ファイルを選択してExplorerで表示します。",
+    )
+    history_reveal.add_argument("recording_id")
     history_subparsers.add_parser("check", help="履歴と録画ファイルの不整合を診断します。")
     recovery_parser = subparsers.add_parser(
         "recovery",
@@ -697,6 +708,30 @@ def _run_history_command(*, paths: RuntimePaths, args: argparse.Namespace) -> in
                 _print_cli_error("E_HISTORY_NOT_FOUND", f"録画履歴が見つかりません: {args.recording_id}", "history listで録画IDを確認してください。")
                 return 4
             _print_history_detail(entry, paths.recordings)
+            return 0
+        if args.history_command in {"play", "reveal"}:
+            browser = RecordingBrowser(repository=repository, recordings_root=paths.recordings)
+            try:
+                reference = (
+                    browser.play(args.recording_id)
+                    if args.history_command == "play"
+                    else browser.reveal(args.recording_id)
+                )
+            except RecordingBrowseError as exc:
+                operational = {
+                    RecordingBrowseFailure.PLATFORM,
+                    RecordingBrowseFailure.LAUNCH_FAILED,
+                }
+                _print_cli_error(
+                    "E_HISTORY_OPEN",
+                    str(exc),
+                    "history checkで録画ファイルを確認してください。",
+                )
+                return 3 if exc.kind in operational else 4
+            action = "再生を開始しました" if args.history_command == "play" else "保存場所を開きました"
+            print(f"{action}: id={reference.recording_id} file={reference.path}")
+            for warning in reference.warnings:
+                print(f"[WARN] {warning}")
             return 0
         if args.history_command == "check":
             issues = repository.check_consistency()

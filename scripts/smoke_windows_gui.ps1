@@ -27,8 +27,9 @@ try {
     }
     $result = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
     $requiredWidgets = @(
-        "activity", "history_table", "prepare_table", "record_start",
-        "record_stop", "recovery_table", "settings_form", "target_selector", "watch_toggle"
+        "activity", "history_play", "history_reveal", "history_table", "prepare_table",
+        "record_start", "record_stop", "recovery_table", "settings_form", "target_selector",
+        "watch_toggle"
     )
     if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600) {
         throw "GUI smoke contract is invalid"

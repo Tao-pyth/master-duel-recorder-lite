@@ -23,7 +23,7 @@ V1.0.0までに、次の中核機能を段階的に提供します。
 
 ## 現在の状態
 
-現在のバージョンは `0.12.1`、「対戦記録ロードマップ策定」です。GitHub Releaseでは、通常利用向けGUI EXEと自動化・詳細操作向けCLI EXEを配布します。GUIから録画対象の選択、環境診断、手動録画、自動監視、履歴、復旧、アップロード準備、主要設定を操作できます。V0.13.0からV0.16.0では、録画の閲覧、後編集可能な対戦記録、タイムライン、対戦開始・ターン切り替え・勝敗の自動判定を順に提供します。現段階の自動検出は可視ウィンドウの存在判定です。外部サービスへの直接アップロードとOAuthは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
+現在のバージョンは `0.13.0`、「録画の閲覧」です。GitHub Releaseでは、通常利用向けGUI EXEと自動化・詳細操作向けCLI EXEを配布します。GUIの録画履歴からWindows既定プレイヤーで動画を再生し、Explorerで保存場所を開けます。V0.14.0からV0.16.0では、後編集可能な対戦記録、タイムライン、対戦開始・ターン切り替え・勝敗の自動判定を順に提供します。現段階の自動検出は可視ウィンドウの存在判定です。外部サービスへの直接アップロードとOAuthは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
 
 開発計画は [docs/roadmap.md](docs/roadmap.md)、バージョンごとの変更は [docs/release-notes.md](docs/release-notes.md) を参照してください。ロードマップ作業は実装前にGitHub Issueへ登録し、バージョンラベルとMilestoneへ接続します。
 
@@ -91,6 +91,8 @@ python -m master_duel_recorder_lite record --duration 10
 python -m master_duel_recorder_lite watch --once
 python -m master_duel_recorder_lite watch
 python -m master_duel_recorder_lite history list
+python -m master_duel_recorder_lite history play RECORDING_ID
+python -m master_duel_recorder_lite history reveal RECORDING_ID
 python -m master_duel_recorder_lite history check
 python -m master_duel_recorder_lite recovery list
 python -m master_duel_recorder_lite recovery detect
@@ -159,10 +161,12 @@ python -m master_duel_recorder_lite watch
 python -m master_duel_recorder_lite history list
 python -m master_duel_recorder_lite history list --state failed --limit 20
 python -m master_duel_recorder_lite history show RECORDING_ID
+python -m master_duel_recorder_lite history play RECORDING_ID
+python -m master_duel_recorder_lite history reveal RECORDING_ID
 python -m master_duel_recorder_lite history check
 ```
 
-`history check` は履歴から欠損したファイル、履歴にない録画ファイル、サイズ不一致を報告するだけで、ファイルを変更しません。詳細は [録画履歴設計](docs/architecture/history.md) を参照してください。
+GUIでは録画履歴を選択し、「再生」でWindows既定プレイヤー、「保存場所を開く」で対象を選択したExplorerを起動します。`history play`と`history reveal`も同じ安全なパス検証を利用します。`history check`は履歴から欠損したファイル、履歴にない録画ファイル、サイズ不一致を報告するだけで、ファイルを変更しません。詳細は[録画履歴設計](docs/architecture/history.md)と[録画の閲覧設計](docs/architecture/recording-browsing.md)を参照してください。
 
 ## 失敗時の復旧
 

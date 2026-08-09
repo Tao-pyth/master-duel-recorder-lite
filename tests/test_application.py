@@ -92,6 +92,19 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertIs(stopped.state, RecordingState.COMPLETED)
         self.assertEqual(released, [True])
 
+    def test_recording_browsing_delegates_to_shared_service(self) -> None:
+        reference = object()
+        browser = SimpleNamespace(
+            resolve=lambda recording_id: ("resolve", recording_id),
+            play=lambda recording_id: ("play", recording_id, reference),
+            reveal=lambda recording_id: ("reveal", recording_id),
+        )
+        service = RecorderApplicationService(recording_browser=browser)  # type: ignore[arg-type]
+
+        self.assertEqual(service.resolve_recording("id"), ("resolve", "id"))
+        self.assertEqual(service.play_recording("id"), ("play", "id", reference))
+        self.assertEqual(service.reveal_recording("id"), ("reveal", "id"))
+
 
 if __name__ == "__main__":
     unittest.main()
