@@ -11,6 +11,7 @@ from .capture_targets import CaptureTarget, CaptureTargetCatalog, capture_input_
 from .config import AppConfig, LoadedAppConfig, load_app_config, save_app_config, validate_app_config
 from .config_management import updated_config
 from .detection import DetectionPolicy, DuelDetectionStateMachine
+from .duel_start_monitor import MasterDuelStartMonitor
 from .duel_records import DuelRecord, DuelRecordChange, DuelRecordRepository, DuelRecordValues
 from .duel_timeline import DuelEvent, DuelTimelineRepository
 from .ffmpeg import discover_ffmpeg
@@ -20,6 +21,7 @@ from .ffmpeg_setup import (
     FfmpegInstaller,
     default_ffmpeg_install_directory,
 )
+from .frame_capture import FfmpegWindowFrameCapture
 from .game_window import GameWindowMonitor
 from .master_duel_detector import MasterDuelWindowDetector
 from .media_recovery import MediaInspection, MediaRecoveryService, MediaRepairResult
@@ -41,6 +43,7 @@ from .upload_media import UploadMediaValidator, find_ffprobe
 from .upload_metadata import UploadMetadata, UploadPrivacy
 from .upload_preparation import UploadPreparationResult, UploadPreparationService
 from .upload_queue import UploadQueueItem, UploadQueueStore
+from .visual_detection import DetectionCandidate
 from .visual_worker import VisualDetectionStatus
 
 
@@ -388,52 +391,87 @@ class RecorderApplicationService:
         try:
             loaded = self.load_config()
             config = loaded.config
-            report = run_preflight(paths=self.paths, config=config, config_loaded=loaded.config_loaded)
+            if config.auto_start_recording and not config.visual_detection_enabled:
+                raise ApplicationOperationError(
+                    "自動録画の開始には画面イベント判定が必要です。設定で有効にしてください"
+                )
+            watch_config = replace(
+                config,
+                capture_mode="master_duel",
+                capture_target_id="",
+            )
+            report = run_preflight(
+                paths=self.paths,
+                config=watch_config,
+                config_loaded=loaded.config_loaded,
+            )
             if not report.succeeded:
                 raise ApplicationOperationError("自動監視の開始前診断に失敗しました")
+            discovery = discover_ffmpeg(watch_config.ffmpeg_path)
+            if not discovery.found or discovery.executable is None:
+                raise ApplicationOperationError("対戦開始判定に使うFFmpegを再検出できません")
             monitor = GameWindowMonitor(
-                process_name=config.game_process_name,
-                title_contains=config.game_window_title_contains,
+                process_name=watch_config.game_process_name,
+                title_contains=watch_config.game_window_title_contains,
             )
-            detector = MasterDuelWindowDetector(monitor)
+            window_detector = MasterDuelWindowDetector(monitor)
+            start_monitor = MasterDuelStartMonitor(
+                window_detector,
+                capture=FfmpegWindowFrameCapture(discovery.executable).capture,
+                minimum_confidence=max(
+                    watch_config.visual_detection_minimum_confidence,
+                    watch_config.detection_minimum_confidence,
+                ),
+                confirmations=max(2, watch_config.start_confirmations),
+            )
             controller = AutoRecordingController(
                 state_machine=DuelDetectionStateMachine(
                     DetectionPolicy(
-                        start_confirmations=config.start_confirmations,
-                        stop_confirmations=config.stop_confirmations,
-                        minimum_confidence=config.detection_minimum_confidence,
-                        cooldown_seconds=config.detection_cooldown_seconds,
-                        automatic_start=config.auto_start_recording,
-                        automatic_stop=config.auto_stop_recording,
+                        start_confirmations=1,
+                        stop_confirmations=watch_config.stop_confirmations,
+                        minimum_confidence=0.0,
+                        cooldown_seconds=watch_config.detection_cooldown_seconds,
+                        automatic_start=watch_config.auto_start_recording,
+                        automatic_stop=watch_config.auto_stop_recording,
                     )
                 ),
                 recording_factory=lambda observation: prepare_recording(
                     paths=self.paths,
-                    config=config,
+                    config=watch_config,
                     master_duel_window_handle=observation.capture_window_handle,
                     master_duel_window_title=observation.capture_window_title,
                 ),
             )
             self._emit(callback, ApplicationEvent("watch", "自動監視を開始しました", state="watching"))
             while not self._watch_stop.is_set():
-                event = controller.process(detector.observe())
-                if controller.current is not None:
-                    self._publish_visual_status(controller.current, callback)
-                elif event.action is AutoRecordingEventAction.STOPPED:
-                    current_status = self.visual_detection_status()
-                    self._set_visual_status(
-                        VisualDetectionStatus(
-                            "stopped",
-                            "自動判定を停止しました",
-                            current_status.processed_frames,
-                            current_status.dropped_frames,
-                            current_status.candidate_count,
-                        ),
+                observation = (
+                    start_monitor.observe()
+                    if controller.current is None and watch_config.auto_start_recording
+                    else window_detector.observe()
+                )
+                if self._watch_stop.is_set():
+                    break
+                event = controller.process(observation)
+                if event.action is AutoRecordingEventAction.STARTED:
+                    self._save_automatic_start_candidate(
+                        event.recording_id,
+                        start_monitor.start_candidate,
                         callback,
                     )
+                if controller.current is not None:
+                    self._publish_visual_status(controller.current, callback)
+                else:
+                    if event.action is AutoRecordingEventAction.STOPPED:
+                        start_monitor.reset()
+                    self._set_visual_status(start_monitor.status, callback)
                 if event.action is not AutoRecordingEventAction.NONE:
                     self._emit(callback, _application_event(event))
-                self._watch_stop.wait(config.detection_poll_interval_seconds)
+                interval = (
+                    1 / watch_config.visual_detection_maximum_fps
+                    if controller.current is None and watch_config.auto_start_recording
+                    else watch_config.detection_poll_interval_seconds
+                )
+                self._watch_stop.wait(interval)
         except Exception as exc:
             self._emit(callback, ApplicationEvent("error", str(exc), state="failed"))
         finally:
@@ -441,6 +479,37 @@ class RecorderApplicationService:
                 event = controller.manual_stop()
                 self._emit(callback, _application_event(event))
             self._emit(callback, ApplicationEvent("watch", "自動監視を停止しました", state="stopped"))
+
+    def _save_automatic_start_candidate(
+        self,
+        recording_id: str | None,
+        candidate: DetectionCandidate | None,
+        callback: EventCallback | None,
+    ) -> None:
+        if recording_id is None or candidate is None:
+            return
+        try:
+            DuelTimelineRepository.from_runtime_paths(self.paths).add(
+                recording_id,
+                elapsed_ms=0,
+                event_type="duel_start",
+                label=f"録画開始前に検出: {candidate.reason}",
+                source="detected",
+                confidence=candidate.confidence,
+                status="candidate",
+                detector_id=candidate.detector_id,
+                detector_version=candidate.detector_version,
+            )
+        except Exception as exc:
+            self._emit(
+                callback,
+                ApplicationEvent(
+                    "visual",
+                    f"録画は継続しますが、開始候補を保存できません: {exc}",
+                    recording_id=recording_id,
+                    state="degraded",
+                ),
+            )
 
     def _collect_manual_terminal_locked(self) -> None:
         if self._current is None:

@@ -175,6 +175,14 @@ class VisualDetectorTest(unittest.TestCase):
         self.assertIsNone(animation)
         self.assertIsNotNone(started)
 
+    def test_start_transition_expires_before_late_board(self) -> None:
+        detector = DuelStartDetector(maximum_transition_ms=2000)
+
+        detector.detect(FrameCues(True, start_animation_score=0.8), 1000)
+        expired = detector.detect(FrameCues(True, board_score=0.9), 4000)
+
+        self.assertIsNone(expired)
+
     def test_turn_detector_latches_persistent_animation(self) -> None:
         detector = TurnChangeDetector()
         cues = FrameCues(True, turn_score=0.9, actor="self")

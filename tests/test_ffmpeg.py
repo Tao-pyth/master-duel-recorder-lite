@@ -55,13 +55,14 @@ class FfmpegDiscoveryTest(unittest.TestCase):
         self.assertEqual(result.source, "PATH")
 
     def test_missing_ffmpeg_returns_attempts(self) -> None:
-        result = discover_ffmpeg(
-            "ffmpeg",
-            runner=lambda _command, _timeout: self.fail("存在しない候補を実行してはいけません"),
-            path_lookup=lambda _command: None,
-            environ={},
-            platform_name="Windows",
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            result = discover_ffmpeg(
+                "ffmpeg",
+                runner=lambda _command, _timeout: self.fail("存在しない候補を実行してはいけません"),
+                path_lookup=lambda _command: None,
+                environ={"LOCALAPPDATA": tmp_dir},
+                platform_name="Windows",
+            )
 
         self.assertFalse(result.found)
         self.assertGreaterEqual(len(result.attempts), 1)

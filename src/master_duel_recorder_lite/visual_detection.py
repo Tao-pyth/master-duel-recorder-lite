@@ -234,16 +234,24 @@ class CueEventDetector(Protocol):
 
 
 class DuelStartDetector:
-    def __init__(self) -> None:
-        self._animation_seen = False
+    def __init__(self, *, maximum_transition_ms: int = 5000) -> None:
+        if maximum_transition_ms < 1:
+            raise ValueError("対戦開始遷移の最大時間は正数である必要があります")
+        self.maximum_transition_ms = maximum_transition_ms
+        self._animation_elapsed_ms: int | None = None
 
     def detect(self, cues: FrameCues, elapsed_ms: int) -> DetectionCandidate | None:
         animation_score = cues.start_animation_score
         board_score = cues.board_score
         if animation_score >= 0.60:
-            self._animation_seen = True
+            self._animation_elapsed_ms = elapsed_ms
             return None
-        if not self._animation_seen or board_score < 0.60:
+        if self._animation_elapsed_ms is None:
+            return None
+        if elapsed_ms - self._animation_elapsed_ms > self.maximum_transition_ms:
+            self._animation_elapsed_ms = None
+            return None
+        if board_score < 0.60:
             return None
         return _cue_candidate(
             "duel_start",

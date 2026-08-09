@@ -63,7 +63,7 @@ GUIでFFmpegを導入した場合、実行ファイルを既定では`%LOCALAPPD
 
 `capture_width` と `capture_height` が両方 `0` の場合は入力元の解像度を維持します。解像度を変更する場合は両方を指定し、幅320-7680、高さ240-4320の偶数にします。`frame_rate` は1-120、`video_bitrate_kbps` は500-100000、`audio_bitrate_kbps` は32-512の範囲です。既定値は30fps、映像6000kbps、音声192kbpsです。
 
-`game_process_name` は監視するWindows実行ファイル名、`game_window_title_contains` は任意のタイトル絞り込みです。`start_confirmations` と `stop_confirmations` は連続確認回数、`minimum_confidence` は採用する信頼度、`poll_interval_seconds` は監視間隔、`cooldown_seconds` は停止後に再開を抑止する時間です。自動開始または自動停止は個別に無効化できます。
+`game_process_name`は監視するWindows実行ファイル名、`game_window_title_contains`は任意のタイトル絞り込みです。自動監視では`start_confirmations`を対戦開始候補のフレーム合意数として使い、1を指定しても安全上2フレームを必要とします。`stop_confirmations`は録画中に対象を失った連続確認回数です。開始信頼度は`minimum_confidence`と`visual_minimum_confidence`の高い方、待機中の取得頻度は`visual_maximum_fps`、録画中のウィンドウ監視間隔は`poll_interval_seconds`を使います。`cooldown_seconds`は停止後に再開を抑止する時間です。自動開始または自動停止は個別に無効化できます。
 
 `visual_events_enabled`はMaster Duel録画中の基本イベント判定、`visual_maximum_fps`は0より大きく2以下の解析頻度、`visual_language`は`auto`・`ja`・`en`、`visual_minimum_confidence`は0.70以上の候補保存閾値です。画像はメモリ内で処理し保存しません。任意ウィンドウ、モニター、デスクトップ録画では自動判定を無効化し、録画は継続します。
 

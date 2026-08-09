@@ -3,17 +3,19 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from master_duel_recorder_lite.application import (
     ApplicationOperationError,
     RecorderApplicationService,
 )
 from master_duel_recorder_lite.capture_targets import CaptureMode, CaptureTarget
+from master_duel_recorder_lite.config import AppConfig
 from master_duel_recorder_lite.ffmpeg import FfmpegVersion
 from master_duel_recorder_lite.ffmpeg_setup import FfmpegInstallResult
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
+from master_duel_recorder_lite.visual_detection import DetectionCandidate
 from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
@@ -136,6 +138,93 @@ class RecorderApplicationServiceTest(unittest.TestCase):
 
         self.assertEqual(installed, result)
         self.assertEqual(configured, str(executable))
+
+    def test_automatic_start_candidate_is_saved_at_recording_origin(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        candidate = DetectionCandidate(
+            "duel_start",
+            2500,
+            0.9,
+            "3フレーム合意",
+            "detector",
+            "1",
+        )
+        repository = SimpleNamespace(add=lambda *args, **kwargs: (args, kwargs))
+
+        with patch(
+            "master_duel_recorder_lite.application.DuelTimelineRepository.from_runtime_paths",
+            return_value=repository,
+        ) as factory:
+            with patch.object(repository, "add", wraps=repository.add) as add:
+                service._save_automatic_start_candidate("recording", candidate, None)
+
+        factory.assert_called_once_with(service.paths)
+        add.assert_called_once()
+        _, keyword = add.call_args
+        self.assertEqual(keyword["elapsed_ms"], 0)
+        self.assertEqual(keyword["event_type"], "duel_start")
+        self.assertEqual(keyword["status"], "candidate")
+        self.assertEqual(keyword["confidence"], 0.9)
+
+    def test_watch_reports_error_when_visual_detection_is_disabled(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        config = AppConfig(visual_detection_enabled=False)
+        events = []
+
+        with patch.object(
+            service,
+            "load_config",
+            return_value=SimpleNamespace(config=config, config_loaded=True),
+        ):
+            service._watch_loop(events.append)
+
+        self.assertEqual(events[0].kind, "error")
+        self.assertIn("画面イベント判定", events[0].message)
+        self.assertEqual(events[-1].state, "stopped")
+
+    def test_watch_stop_during_start_observation_does_not_begin_recording(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        config = AppConfig()
+        report = PreflightReport((PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),))
+        process = Mock()
+        controller = SimpleNamespace(current=None, process=process)
+
+        def observe_and_stop():
+            service._watch_stop.set()
+            return SimpleNamespace()
+
+        start_monitor = SimpleNamespace(
+            observe=observe_and_stop,
+            status=VisualDetectionStatus("waiting", "waiting", 0, 0, 0),
+            start_candidate=None,
+        )
+        with (
+            patch.object(
+                service,
+                "load_config",
+                return_value=SimpleNamespace(config=config, config_loaded=True),
+            ),
+            patch("master_duel_recorder_lite.application.run_preflight", return_value=report),
+            patch(
+                "master_duel_recorder_lite.application.discover_ffmpeg",
+                return_value=SimpleNamespace(found=True, executable=Path("ffmpeg.exe").resolve()),
+            ),
+            patch("master_duel_recorder_lite.application.GameWindowMonitor"),
+            patch("master_duel_recorder_lite.application.MasterDuelWindowDetector"),
+            patch("master_duel_recorder_lite.application.FfmpegWindowFrameCapture"),
+            patch(
+                "master_duel_recorder_lite.application.MasterDuelStartMonitor",
+                return_value=start_monitor,
+            ),
+            patch(
+                "master_duel_recorder_lite.application.AutoRecordingController",
+                return_value=controller,
+            ),
+        ):
+            service._watch_stop.clear()
+            service._watch_loop(None)
+
+        process.assert_not_called()
 
 
 if __name__ == "__main__":
