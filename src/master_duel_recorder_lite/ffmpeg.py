@@ -328,11 +328,13 @@ def _run_probe(executable: Path, arguments: Sequence[str], runner: CommandRunner
 
 def _parse_component_names(output: str, required_flag: str) -> set[str]:
     names: set[str] = set()
-    pattern = re.compile(rf"^\s*{required_flag}\s+(?P<names>\S+)")
     for line in output.splitlines():
-        match = pattern.match(line)
-        if match is not None:
-            names.update(match.group("names").split(","))
+        fields = line.split()
+        if len(fields) < 2 or fields[0] != required_flag:
+            continue
+        # FFmpeg 9 adds a separate device flag, as in "D d gdigrab".
+        name_index = 2 if len(fields) >= 3 and fields[1] in {"d", "."} else 1
+        names.update(fields[name_index].split(","))
     return names
 
 

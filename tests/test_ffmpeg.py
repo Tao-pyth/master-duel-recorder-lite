@@ -129,6 +129,31 @@ class FfmpegCapabilityTest(unittest.TestCase):
         self.assertIn("matroska", capabilities.muxers)
         self.assertIn("libx264", capabilities.encoders)
 
+    def test_probe_parses_ffmpeg_9_device_flag(self) -> None:
+        outputs = {
+            ("-version",): """ffmpeg version 9.0-essentials_build
+libavutil      61.  1.100 / 61.  1.100
+""",
+            ("-hide_banner", "-demuxers"): (
+                "Formats:\n"
+                " D.. = Demuxing supported\n"
+                " ..d = Is a device\n"
+                " D d dshow DirectShow capture\n"
+                " D d gdigrab GDI API Windows frame grabber\n"
+            ),
+            ("-hide_banner", "-muxers"): " E  matroska Matroska\n",
+            ("-hide_banner", "-encoders"): " V....D libx264 H.264\n",
+        }
+
+        def runner(command: tuple[str, ...], _timeout: float) -> CommandResult:
+            return CommandResult(0, outputs[tuple(command[1:])], "")
+
+        capabilities = probe_ffmpeg_capabilities(Path("ffmpeg.exe"), runner=runner)
+
+        self.assertIn("dshow", capabilities.demuxers)
+        self.assertIn("gdigrab", capabilities.demuxers)
+        self.assertNotIn("d", capabilities.demuxers)
+
     def test_validation_reports_each_missing_capability(self) -> None:
         capabilities = FfmpegCapabilities(
             version=FfmpegVersion("5.1", (5, 1, 0), 57),
