@@ -124,6 +124,44 @@ class RecordingSessionTest(unittest.TestCase):
         self.assertEqual(session.result.returncode, 1)
         self.assertIn("入力を開けません", session.result.error or "")
 
+    def test_windows_unsigned_exit_code_is_shown_in_three_forms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = Path(tmp_dir) / "recording.mkv"
+            process = FakeProcess(immediate_returncode=4294967291, returncode=4294967291)
+            session = RecordingSession(
+                command=("ffmpeg",),
+                output_path=output,
+                process_factory=lambda *_args, **_kwargs: process,
+                startup_grace_seconds=0,
+            )
+            session.start()
+
+        assert session.result is not None
+        self.assertIn("4294967291 / -5 (0xFFFFFFFB)", session.result.error or "")
+
+    def test_stalled_output_is_stopped_and_diagnosed(self) -> None:
+        monotonic = [0.0]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = Path(tmp_dir) / "recording.mkv"
+            process = FakeProcess(returncode=0)
+            session = RecordingSession(
+                command=("ffmpeg",),
+                output_path=output,
+                process_factory=lambda *_args, **_kwargs: process,
+                startup_grace_seconds=0,
+                output_stall_timeout_seconds=5,
+                monotonic_clock=lambda: monotonic[0],
+            )
+            self.assertIs(session.start(), RecordingState.RECORDING)
+            monotonic[0] = 5.0
+            state = session.poll()
+
+        self.assertIs(state, RecordingState.FAILED)
+        self.assertTrue(process.killed)
+        assert session.result is not None
+        self.assertIn("出力が停止", session.result.error or "")
+        self.assertIn("5秒間増加", session.result.diagnostics[-1])
+
     def test_diagnostics_keep_only_latest_bounded_lines(self) -> None:
         diagnostics = "".join(f"line-{index}\n" for index in range(150))
         with tempfile.TemporaryDirectory() as tmp_dir:

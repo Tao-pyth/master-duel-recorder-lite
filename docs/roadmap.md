@@ -199,6 +199,22 @@
 
 詳細: [録画の閲覧設計](architecture/recording-browsing.md)
 
+## V0.13.1: 自動監視の安定化
+
+状態: 完了
+
+- 同一PID・HWNDの可視状態だけを連続確認として数える
+- 録画中に別ウィンドウへ無条件で切り替えない
+- FFmpeg終了コードをDWORD、符号付き32bit、16進数で診断する
+- stderr末尾と録画開始時のPID・HWND・画面サイズを履歴へ保存する
+- 出力サイズ停止を検出し、連続失敗を指数バックオフ後に遮断する
+
+追跡: [V0.13.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/19)、Issue #117
+
+完了条件: ウィンドウの一時変化で対象を誤切替せず、FFmpeg異常終了の原因情報を履歴から確認でき、連続再起動ループを防止できること。
+
+詳細: [Master Duel向け録画補助](architecture/detection.md)
+
 ## V0.14.0: 対戦記録管理
 
 状態: 計画済み

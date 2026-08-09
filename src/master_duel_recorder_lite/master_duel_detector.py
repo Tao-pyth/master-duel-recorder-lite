@@ -21,12 +21,19 @@ class MasterDuelWindowDetector:
         game = self.monitor.observe()
         if game.status is GameWindowStatus.VISIBLE:
             assert game.window is not None
+            assert game.process is not None
+            detail = (
+                f"{game.message} "
+                f"(PID {game.process.pid}, HWND {game.window.handle}, "
+                f"{game.window.width}x{game.window.height})"
+            )
             return DuelObservation(
                 DetectionSignal.PRESENT,
                 0.7,
-                game.message,
+                detail,
                 self.clock(),
                 capture_window_handle=game.window.handle,
+                capture_process_id=game.process.pid,
             )
         if game.status in {
             GameWindowStatus.NOT_RUNNING,

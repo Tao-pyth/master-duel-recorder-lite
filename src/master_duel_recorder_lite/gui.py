@@ -350,6 +350,13 @@ class RecorderGui:
             state="disabled",
         )
         self.history_reveal_button.pack(side="right", padx=(0, 8))
+        self.history_diagnostic_button = ttk.Button(
+            toolbar,
+            text="診断",
+            command=self.show_selected_history_diagnostic,
+            state="disabled",
+        )
+        self.history_diagnostic_button.pack(side="right", padx=(0, 8))
         self.history_play_button = ttk.Button(
             toolbar,
             text="再生",
@@ -377,6 +384,7 @@ class RecorderGui:
         self.widgets["history_table"] = self.history_tree
         self.widgets["history_play"] = self.history_play_button
         self.widgets["history_reveal"] = self.history_reveal_button
+        self.widgets["history_diagnostic"] = self.history_diagnostic_button
 
     def _build_recovery_page(self) -> None:
         page = self._new_page("recovery")
@@ -619,6 +627,7 @@ class RecorderGui:
         state = "normal" if self.history_tree.selection() else "disabled"
         self.history_play_button.configure(state=state)
         self.history_reveal_button.configure(state=state)
+        self.history_diagnostic_button.configure(state=state)
 
     def _history_double_clicked(self, event: tk.Event[tk.Misc]) -> None:
         recording_id = self.history_tree.identify_row(event.y)
@@ -646,6 +655,39 @@ class RecorderGui:
             lambda: self.service.reveal_recording(recording_id),
             lambda reference: self._recording_opened("保存場所を開きました", reference),
         )
+
+    def show_selected_history_diagnostic(self) -> None:
+        selection = self.history_tree.selection()
+        if not selection:
+            return
+        recording_id = str(selection[0])
+        self._run(lambda: self.service.get_history(recording_id), self._show_history_diagnostic)
+
+    def _show_history_diagnostic(self, entry: object) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("録画診断")
+        dialog.geometry("760x480")
+        dialog.transient(self.root)
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=f"録画ID: {entry.recording_id}", style="Heading.TLabel").pack(
+            anchor="w", pady=(0, 10)
+        )
+        details = (
+            f"状態: {entry.state}\n"
+            f"終了コード: {entry.returncode if entry.returncode is not None else '-'}\n"
+            f"失敗分類: {entry.failure_code or '-'}\n"
+            f"検出理由: {entry.detection_reason or '-'}\n"
+            f"エラー: {entry.error or '-'}\n\n"
+            "FFmpeg診断出力:\n"
+            + ("\n".join(entry.diagnostics) if entry.diagnostics else "-")
+        )
+        text = tk.Text(frame, wrap="word", font=("Consolas", 10), padx=10, pady=10)
+        text.insert("1.0", details)
+        text.configure(state="disabled")
+        text.pack(fill="both", expand=True)
+        ttk.Button(frame, text="閉じる", command=dialog.destroy).pack(anchor="e", pady=(10, 0))
+        dialog.grab_set()
 
     def _recording_opened(self, action: str, reference: RecordingReference) -> None:
         self._activity(f"{action}: {reference.recording_id}")

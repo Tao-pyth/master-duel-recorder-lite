@@ -37,22 +37,63 @@ class AutoRecordingEvent:
     result: RecordingResult | None = None
 
 
+@dataclass(frozen=True)
+class AutoRetryPolicy:
+    base_delay_seconds: float = 10.0
+    maximum_delay_seconds: float = 300.0
+    maximum_attempts: int = 3
+
+    def __post_init__(self) -> None:
+        if self.base_delay_seconds <= 0 or self.maximum_delay_seconds <= 0:
+            raise ValueError("再試行待機時間は0より大きい必要があります")
+        if self.base_delay_seconds > self.maximum_delay_seconds:
+            raise ValueError("再試行の初期待機時間は最大待機時間以下である必要があります")
+        if self.maximum_attempts < 1:
+            raise ValueError("maximum_attemptsは1以上である必要があります")
+
+
 class AutoRecordingController:
     def __init__(
         self,
         *,
         state_machine: DuelDetectionStateMachine,
         recording_factory: RecordingFactory,
+        retry_policy: AutoRetryPolicy | None = None,
     ) -> None:
         self.state_machine = state_machine
         self.recording_factory = recording_factory
+        self.retry_policy = retry_policy or AutoRetryPolicy()
         self.current: PreparedRecording | None = None
+        self.consecutive_failures = 0
+        self.retry_blocked = False
+        self._blocked_reported = False
 
     @property
     def recording_active(self) -> bool:
         return self.current is not None and self.current.session.state is RecordingState.RECORDING
 
     def process(self, observation: DuelObservation) -> AutoRecordingEvent:
+        if self.retry_blocked:
+            if observation.signal is DetectionSignal.ABSENT:
+                self.retry_blocked = False
+                self.consecutive_failures = 0
+                self._blocked_reported = False
+                self.state_machine.mark_manual_stopped(observation.observed_at)
+            else:
+                if self._blocked_reported:
+                    return AutoRecordingEvent(
+                        AutoRecordingEventAction.NONE,
+                        "FFmpegの連続失敗により自動開始を停止中です",
+                        observation,
+                        None,
+                    )
+                self._blocked_reported = True
+                return AutoRecordingEvent(
+                    AutoRecordingEventAction.SKIPPED,
+                    "FFmpegの連続失敗により自動開始を停止しています。ゲーム画面の終了後に再開します",
+                    observation,
+                    None,
+                )
         terminal_event = self._collect_terminal_session(observation)
         if terminal_event is not None:
             return terminal_event
@@ -100,10 +141,10 @@ class AutoRecordingController:
         try:
             prepared = self.recording_factory(observation)
         except RecordingPreparationError as exc:
-            self.state_machine.mark_manual_stopped(observation.observed_at)
+            retry = self._record_automatic_failure(observation, source)
             return AutoRecordingEvent(
                 AutoRecordingEventAction.ERROR,
-                f"自動録画を準備できません: {exc}",
+                f"自動録画を準備できません: {exc}{retry}",
                 observation,
                 decision,
             )
@@ -112,10 +153,10 @@ class AutoRecordingController:
             state = prepared.start(source=source, detection_reason=decision.reason)
         except RecordingTrackingError as exc:
             prepared.release()
-            self.state_machine.mark_manual_stopped(observation.observed_at)
+            retry = self._record_automatic_failure(observation, source)
             return AutoRecordingEvent(
                 AutoRecordingEventAction.ERROR,
-                str(exc),
+                f"{exc}{retry}",
                 observation,
                 decision,
                 recording_id=prepared.target.recording_id,
@@ -123,10 +164,10 @@ class AutoRecordingController:
         if state is RecordingState.FAILED:
             result = prepared.session.result
             prepared.release()
-            self.state_machine.mark_manual_stopped(observation.observed_at)
+            retry = self._record_automatic_failure(observation, source)
             return AutoRecordingEvent(
                 AutoRecordingEventAction.ERROR,
-                result.error if result and result.error else "自動録画を開始できません",
+                f"{result.error if result and result.error else '自動録画を開始できません'}{retry}",
                 observation,
                 decision,
                 recording_id=prepared.target.recording_id,
@@ -180,6 +221,7 @@ class AutoRecordingController:
                 recording_id=prepared.target.recording_id,
                 result=result,
             )
+        self.consecutive_failures = 0
         return AutoRecordingEvent(
             AutoRecordingEventAction.STOPPED,
             decision.reason,
@@ -198,10 +240,10 @@ class AutoRecordingController:
             prepared = self.current
             prepared.release()
             self.current = None
-            self.state_machine.mark_manual_stopped(observation.observed_at)
+            retry = self._record_automatic_failure(observation, "automatic")
             return AutoRecordingEvent(
                 AutoRecordingEventAction.ERROR,
-                str(exc),
+                f"{exc}{retry}",
                 observation,
                 None,
                 recording_id=prepared.target.recording_id,
@@ -216,6 +258,7 @@ class AutoRecordingController:
         self.current = None
         self.state_machine.mark_manual_stopped(observation.observed_at)
         if result is not None and result.succeeded:
+            self.consecutive_failures = 0
             return AutoRecordingEvent(
                 AutoRecordingEventAction.STOPPED,
                 "FFmpegが録画を終了しました",
@@ -224,14 +267,31 @@ class AutoRecordingController:
                 recording_id=prepared.target.recording_id,
                 result=result,
             )
+        retry = self._record_automatic_failure(observation, "automatic")
         return AutoRecordingEvent(
             AutoRecordingEventAction.ERROR,
-            result.error if result and result.error else "FFmpegが予期せず終了しました",
+            f"{result.error if result and result.error else 'FFmpegが予期せず終了しました'}{retry}",
             observation,
             None,
             recording_id=prepared.target.recording_id,
             result=result,
         )
+
+    def _record_automatic_failure(self, observation: DuelObservation, source: str) -> str:
+        if source != "automatic":
+            self.state_machine.mark_manual_stopped(observation.observed_at)
+            return ""
+        self.consecutive_failures += 1
+        delay = min(
+            self.retry_policy.maximum_delay_seconds,
+            self.retry_policy.base_delay_seconds * (2 ** (self.consecutive_failures - 1)),
+        )
+        self.state_machine.mark_failed(observation.observed_at, retry_delay_seconds=delay)
+        if self.consecutive_failures >= self.retry_policy.maximum_attempts:
+            self.retry_blocked = True
+            self._blocked_reported = False
+            return "。連続失敗の上限に達したため、ゲーム画面が終了するまで自動開始を停止します"
+        return f"。{delay:g}秒後に再試行できます ({self.consecutive_failures}/{self.retry_policy.maximum_attempts})"
 
 
 def _manual_observation(reason: str, observed_at: datetime | None) -> DuelObservation:

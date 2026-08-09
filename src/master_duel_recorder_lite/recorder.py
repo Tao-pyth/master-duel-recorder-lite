@@ -43,6 +43,9 @@ class PreparedRecording:
     def start(self, *, source: str, detection_reason: str | None = None) -> RecordingState:
         self._source = source
         try:
+            add_diagnostic = getattr(self.session, "add_diagnostic", None)
+            if detection_reason and callable(add_diagnostic):
+                add_diagnostic(f"監視開始情報: {detection_reason}")
             self.history.register_starting(
                 recording_id=self.target.recording_id,
                 output_path=self.target.path,

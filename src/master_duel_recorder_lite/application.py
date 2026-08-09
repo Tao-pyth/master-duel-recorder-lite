@@ -214,6 +214,12 @@ class RecorderApplicationService:
     def list_history(self, *, limit: int = 200) -> tuple[RecordingHistoryEntry, ...]:
         return RecordingHistoryRepository.from_runtime_paths(self.paths).query(HistoryQuery(limit=limit))
 
+    def get_history(self, recording_id: str) -> RecordingHistoryEntry:
+        entry = RecordingHistoryRepository.from_runtime_paths(self.paths).get(recording_id)
+        if entry is None:
+            raise ApplicationOperationError(f"録画履歴が見つかりません: {recording_id}")
+        return entry
+
     def check_history(self) -> tuple[ConsistencyIssue, ...]:
         return RecordingHistoryRepository.from_runtime_paths(self.paths).check_consistency()
 

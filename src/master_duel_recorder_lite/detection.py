@@ -24,6 +24,7 @@ class DuelObservation:
     reason: str
     observed_at: datetime
     capture_window_handle: int | None = None
+    capture_process_id: int | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
@@ -34,6 +35,14 @@ class DuelObservation:
             raise ValueError("reason は空にできません")
         if self.capture_window_handle is not None and self.capture_window_handle <= 0:
             raise ValueError("capture_window_handleは正数である必要があります")
+        if self.capture_process_id is not None and self.capture_process_id <= 0:
+            raise ValueError("capture_process_idは正数である必要があります")
+
+    @property
+    def capture_target_key(self) -> tuple[int, int] | None:
+        if self.capture_process_id is None or self.capture_window_handle is None:
+            return None
+        return (self.capture_process_id, self.capture_window_handle)
 
 
 @dataclass(frozen=True)
@@ -73,6 +82,8 @@ class DuelDetectionStateMachine:
         self.start_count = 0
         self.stop_count = 0
         self.cooldown_until: datetime | None = None
+        self.candidate_target: tuple[int, int] | None = None
+        self.recording_target: tuple[int, int] | None = None
 
     def evaluate(self, observation: DuelObservation) -> DetectionDecision:
         signal = observation.signal
@@ -87,6 +98,8 @@ class DuelDetectionStateMachine:
         self.recording_active = True
         self.start_count = 0
         self.stop_count = 0
+        self.candidate_target = None
+        self.recording_target = None
 
     def mark_manual_stopped(self, observed_at: datetime | None = None) -> None:
         stopped_at = observed_at or datetime.now(timezone.utc)
@@ -96,6 +109,14 @@ class DuelDetectionStateMachine:
         self.start_count = 0
         self.stop_count = 0
         self.cooldown_until = stopped_at + timedelta(seconds=self.policy.cooldown_seconds)
+        self.candidate_target = None
+        self.recording_target = None
+
+    def mark_failed(self, observed_at: datetime, *, retry_delay_seconds: float) -> None:
+        if retry_delay_seconds < 0:
+            raise ValueError("retry_delay_secondsは0以上である必要があります")
+        self.mark_manual_stopped(observed_at)
+        self.cooldown_until = observed_at + timedelta(seconds=retry_delay_seconds)
 
     def set_automatic_start(self, enabled: bool) -> None:
         self.automatic_start = enabled
@@ -115,10 +136,16 @@ class DuelDetectionStateMachine:
         self.stop_count = 0
         if not self.automatic_start or signal is not DetectionSignal.PRESENT:
             self.start_count = 0
+            self.candidate_target = None
             return self._none(observation.reason)
         if self.cooldown_until is not None and observation.observed_at < self.cooldown_until:
             self.start_count = 0
             return self._none("停止後のクールダウン中です")
+
+        target = observation.capture_target_key
+        if self.candidate_target != target:
+            self.candidate_target = target
+            self.start_count = 0
 
         self.start_count += 1
         if self.start_count < self.policy.start_confirmations:
@@ -127,6 +154,8 @@ class DuelDetectionStateMachine:
             )
 
         self.recording_active = True
+        self.recording_target = target
+        self.candidate_target = None
         self.start_count = 0
         return DetectionDecision(DetectionAction.START, observation.reason, 0, 0)
 
@@ -136,6 +165,12 @@ class DuelDetectionStateMachine:
         observation: DuelObservation,
     ) -> DetectionDecision:
         self.start_count = 0
+        if (
+            signal is DetectionSignal.PRESENT
+            and self.recording_target is not None
+            and observation.capture_target_key != self.recording_target
+        ):
+            signal = DetectionSignal.ABSENT
         if not self.automatic_stop or signal is not DetectionSignal.ABSENT:
             self.stop_count = 0
             return self._none(observation.reason)
@@ -149,6 +184,7 @@ class DuelDetectionStateMachine:
         self.recording_active = False
         self.stop_count = 0
         self.cooldown_until = observation.observed_at + timedelta(seconds=self.policy.cooldown_seconds)
+        self.recording_target = None
         return DetectionDecision(DetectionAction.STOP, observation.reason, 0, 0)
 
     def _none(self, reason: str) -> DetectionDecision:

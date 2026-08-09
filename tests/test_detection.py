@@ -17,6 +17,17 @@ def observation(signal: DetectionSignal, second: int, confidence: float = 1.0) -
     return DuelObservation(signal, confidence, signal.value, BASE_TIME + timedelta(seconds=second))
 
 
+def targeted(second: int, pid: int, hwnd: int) -> DuelObservation:
+    return DuelObservation(
+        DetectionSignal.PRESENT,
+        1.0,
+        "visible",
+        BASE_TIME + timedelta(seconds=second),
+        capture_window_handle=hwnd,
+        capture_process_id=pid,
+    )
+
+
 class DetectionStateMachineTest(unittest.TestCase):
     def test_consecutive_present_observations_start_once(self) -> None:
         machine = DuelDetectionStateMachine(DetectionPolicy(start_confirmations=3))
@@ -40,6 +51,30 @@ class DetectionStateMachineTest(unittest.TestCase):
 
         self.assertIs(decision.action, DetectionAction.NONE)
         self.assertEqual(decision.start_count, 1)
+
+    def test_start_confirmation_requires_same_pid_and_window(self) -> None:
+        machine = DuelDetectionStateMachine(DetectionPolicy(start_confirmations=2))
+
+        machine.evaluate(targeted(0, 10, 100))
+        changed = machine.evaluate(targeted(1, 10, 101))
+        started = machine.evaluate(targeted(2, 10, 101))
+
+        self.assertIs(changed.action, DetectionAction.NONE)
+        self.assertEqual(changed.start_count, 1)
+        self.assertIs(started.action, DetectionAction.START)
+        self.assertEqual(machine.recording_target, (10, 101))
+
+    def test_different_window_does_not_replace_active_target(self) -> None:
+        machine = DuelDetectionStateMachine(
+            DetectionPolicy(start_confirmations=1, stop_confirmations=2)
+        )
+        machine.evaluate(targeted(0, 10, 100))
+
+        first = machine.evaluate(targeted(1, 10, 101))
+        stopped = machine.evaluate(targeted(2, 10, 101))
+
+        self.assertIs(first.action, DetectionAction.NONE)
+        self.assertIs(stopped.action, DetectionAction.STOP)
 
     def test_consecutive_absent_observations_stop(self) -> None:
         machine = DuelDetectionStateMachine(

@@ -3,7 +3,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from master_duel_recorder_lite.auto_recording import AutoRecordingController, AutoRecordingEventAction
+from master_duel_recorder_lite.auto_recording import (
+    AutoRecordingController,
+    AutoRecordingEventAction,
+    AutoRetryPolicy,
+)
 from master_duel_recorder_lite.detection import (
     DetectionPolicy,
     DetectionSignal,
@@ -163,6 +167,35 @@ class AutoRecordingControllerTest(unittest.TestCase):
         self.assertIs(started.action, AutoRecordingEventAction.STARTED)
         self.assertIs(stopped.action, AutoRecordingEventAction.STOPPED)
         self.assertEqual(prepared.release_count, 1)
+
+    def test_consecutive_failures_use_backoff_and_eventually_block(self) -> None:
+        machine = DuelDetectionStateMachine(
+            DetectionPolicy(start_confirmations=1, cooldown_seconds=0)
+        )
+
+        def fail(_observation: DuelObservation) -> object:
+            raise RecordingPreparationError("input unavailable")
+
+        controller = AutoRecordingController(
+            state_machine=machine,
+            recording_factory=fail,  # type: ignore[arg-type]
+            retry_policy=AutoRetryPolicy(
+                base_delay_seconds=1,
+                maximum_delay_seconds=2,
+                maximum_attempts=3,
+            ),
+        )
+
+        first = controller.process(observation(DetectionSignal.PRESENT, 0))
+        second = controller.process(observation(DetectionSignal.PRESENT, 1))
+        third = controller.process(observation(DetectionSignal.PRESENT, 3))
+        blocked = controller.process(observation(DetectionSignal.PRESENT, 4))
+
+        self.assertIn("1秒後", first.message)
+        self.assertIn("2秒後", second.message)
+        self.assertIn("上限", third.message)
+        self.assertIs(blocked.action, AutoRecordingEventAction.SKIPPED)
+        self.assertTrue(controller.retry_blocked)
 
 
 if __name__ == "__main__":
