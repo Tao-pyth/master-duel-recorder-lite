@@ -11,6 +11,7 @@ from .capture_targets import CaptureTarget, CaptureTargetCatalog, capture_input_
 from .config import AppConfig, LoadedAppConfig, load_app_config, save_app_config, validate_app_config
 from .config_management import updated_config
 from .detection import DetectionPolicy, DuelDetectionStateMachine
+from .duel_records import DuelRecord, DuelRecordChange, DuelRecordRepository, DuelRecordValues
 from .ffmpeg import discover_ffmpeg
 from .game_window import GameWindowMonitor
 from .master_duel_detector import MasterDuelWindowDetector
@@ -219,6 +220,26 @@ class RecorderApplicationService:
         if entry is None:
             raise ApplicationOperationError(f"録画履歴が見つかりません: {recording_id}")
         return entry
+
+    def get_duel_record(self, recording_id: str) -> DuelRecord | None:
+        return DuelRecordRepository.from_runtime_paths(self.paths).get(recording_id)
+
+    def save_duel_record(
+        self,
+        recording_id: str,
+        values: DuelRecordValues,
+        *,
+        expected_revision: int,
+    ) -> DuelRecord:
+        return DuelRecordRepository.from_runtime_paths(self.paths).save(
+            recording_id,
+            values,
+            expected_revision=expected_revision,
+            source="user",
+        )
+
+    def duel_record_changes(self, recording_id: str) -> tuple[DuelRecordChange, ...]:
+        return DuelRecordRepository.from_runtime_paths(self.paths).changes(recording_id)
 
     def check_history(self) -> tuple[ConsistencyIssue, ...]:
         return RecordingHistoryRepository.from_runtime_paths(self.paths).check_consistency()

@@ -8,6 +8,7 @@ from master_duel_recorder_lite.history_database import (
     CURRENT_SCHEMA_VERSION,
     HistoryDatabaseError,
     _migrate_to_v1,
+    _migrate_to_v2,
     initialize_history_database,
 )
 
@@ -73,7 +74,11 @@ class HistoryDatabaseTest(unittest.TestCase):
             with self.assertRaises(HistoryDatabaseError):
                 initialize_history_database(
                     path,
-                    migrations={1: lambda _connection: None, 2: fail_after_change},
+                    migrations={
+                        1: lambda _connection: None,
+                        2: lambda _connection: None,
+                        3: fail_after_change,
+                    },
                 )
 
             with closing(sqlite3.connect(path)) as connection:
@@ -154,6 +159,32 @@ class HistoryDatabaseTest(unittest.TestCase):
 
         self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(row, ("legacy_failure", "manual_review", "pending"))
+
+    def test_version_two_is_backed_up_before_duel_record_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE schema_version "
+                    "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+                )
+                connection.execute("INSERT INTO schema_version VALUES (1, 2)")
+                _migrate_to_v1(connection)
+                _migrate_to_v2(connection)
+
+            info = initialize_history_database(path)
+            assert info.backup_path is not None
+            with closing(sqlite3.connect(info.backup_path)) as backup:
+                backup_version = backup.execute(
+                    "SELECT version FROM schema_version WHERE singleton = 1"
+                ).fetchone()[0]
+                duel_table = backup.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'duel_records'"
+                ).fetchone()
+
+        self.assertEqual(info.version, 3)
+        self.assertEqual(backup_version, 2)
+        self.assertIsNone(duel_table)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,15 @@ from .capture_targets import CaptureTargetCatalog
 from .config import AppConfig, AppConfigError, LoadedAppConfig, load_app_config, save_app_config
 from .config_management import ConfigValueError, config_value, config_values, updated_config
 from .detection import DetectionPolicy, DuelDetectionStateMachine
+from .duel_records import (
+    DUEL_TYPES,
+    PLAY_ORDERS,
+    RESULTS,
+    DuelRecordConflictError,
+    DuelRecordError,
+    DuelRecordRepository,
+    DuelRecordValues,
+)
 from .ffmpeg import discover_ffmpeg, enumerate_windows_inputs
 from .game_window import GameWindowMonitor, GameWindowObservation, GameWindowStatus
 from .master_duel_detector import MasterDuelWindowDetector
@@ -201,6 +210,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     history_reveal.add_argument("recording_id")
     history_subparsers.add_parser("check", help="履歴と録画ファイルの不整合を診断します。")
+    duel_parser = subparsers.add_parser(
+        "duel",
+        help="録画に関連付けた対戦記録を管理します。",
+        description="勝敗、先後、デッキ、対戦種別、タグ、メモを後から編集します。",
+    )
+    duel_subparsers = duel_parser.add_subparsers(dest="duel_command", required=True)
+    duel_show = duel_subparsers.add_parser("show", help="対戦記録1件を表示します。")
+    duel_show.add_argument("recording_id")
+    duel_show.add_argument("--json", action="store_true")
+    duel_set = duel_subparsers.add_parser("set", help="対戦記録を作成または更新します。")
+    duel_set.add_argument("recording_id")
+    duel_set.add_argument("--revision", type=_nonnegative_integer, required=True)
+    duel_set.add_argument("--result", choices=sorted(RESULTS), default=None)
+    duel_set.add_argument("--play-order", choices=sorted(PLAY_ORDERS), default=None)
+    duel_set.add_argument("--own-deck", default=None)
+    duel_set.add_argument("--opponent-deck", default=None)
+    duel_set.add_argument("--duel-type", choices=sorted(DUEL_TYPES), default=None)
+    duel_set.add_argument("--tag", action="append", default=None)
+    duel_set.add_argument("--notes", default=None)
+    duel_set.add_argument("--json", action="store_true")
+    duel_confirm = duel_subparsers.add_parser("confirm", help="対戦記録を確認済みにします。")
+    duel_confirm.add_argument("recording_id")
+    duel_confirm.add_argument("--revision", type=_nonnegative_integer, required=True)
+    duel_confirm.add_argument("--json", action="store_true")
+    duel_history = duel_subparsers.add_parser("history", help="対戦記録の変更履歴を表示します。")
+    duel_history.add_argument("recording_id")
+    duel_history.add_argument("--json", action="store_true")
     recovery_parser = subparsers.add_parser(
         "recovery",
         help="中断録画を検出・検査・修復します。",
@@ -246,7 +282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     paths = default_runtime_paths(project_root=args.project_root, user_data_dir=args.user_data_dir)
 
-    operational_commands = {"record", "watch", "history", "recovery", "prepare"}
+    operational_commands = {"record", "watch", "history", "duel", "recovery", "prepare"}
     skip_automatic_detection = (
         args.command == "recovery" and getattr(args, "recovery_command", None) == "detect"
     )
@@ -354,6 +390,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "history":
         return _run_history_command(paths=paths, args=args)
+
+    if args.command == "duel":
+        return _run_duel_command(paths=paths, args=args)
 
     if args.command == "recovery":
         return _run_recovery_command(
@@ -800,6 +839,104 @@ def _detect_interrupted_on_startup(paths: RuntimePaths) -> bool:
         if detection.kind is InterruptedDetectionKind.INTERRUPTED:
             print(f"[RECOVERY] id={detection.recording_id} {detection.message}")
     return True
+
+
+def _run_duel_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
+    repository = DuelRecordRepository.from_runtime_paths(paths)
+    try:
+        if args.duel_command == "show":
+            record = repository.get(args.recording_id)
+            if record is None:
+                _print_cli_error(
+                    "E_DUEL_NOT_FOUND",
+                    f"対戦記録が見つかりません: {args.recording_id}",
+                    "duel set RECORDING_ID --revision 0で作成してください。",
+                )
+                return EXIT_ATTENTION
+            _print_duel_record(record, as_json=args.json)
+            return EXIT_SUCCESS
+        if args.duel_command == "set":
+            current = repository.get(args.recording_id)
+            base = current.values if current is not None else DuelRecordValues()
+            values = DuelRecordValues(
+                status=base.status,
+                result=args.result if args.result is not None else base.result,
+                play_order=args.play_order if args.play_order is not None else base.play_order,
+                own_deck=args.own_deck if args.own_deck is not None else base.own_deck,
+                opponent_deck=(
+                    args.opponent_deck
+                    if args.opponent_deck is not None
+                    else base.opponent_deck
+                ),
+                duel_type=args.duel_type if args.duel_type is not None else base.duel_type,
+                tags=tuple(args.tag) if args.tag is not None else base.tags,
+                notes=args.notes if args.notes is not None else base.notes,
+            )
+            saved = repository.save(
+                args.recording_id,
+                values,
+                expected_revision=args.revision,
+                source="user",
+            )
+            _print_duel_record(saved, as_json=args.json)
+            return EXIT_SUCCESS
+        if args.duel_command == "confirm":
+            saved = repository.confirm(
+                args.recording_id,
+                expected_revision=args.revision,
+            )
+            _print_duel_record(saved, as_json=args.json)
+            return EXIT_SUCCESS
+        if args.duel_command == "history":
+            changes = repository.changes(args.recording_id)
+            if args.json:
+                document = [
+                    {
+                        "change_id": change.change_id,
+                        "recording_id": change.recording_id,
+                        "revision": change.revision,
+                        "source": change.source,
+                        "before": change.before,
+                        "after": change.after,
+                        "changed_at": change.changed_at.isoformat(),
+                    }
+                    for change in changes
+                ]
+                print(json.dumps(document, ensure_ascii=False, sort_keys=True))
+            elif not changes:
+                print("変更履歴はありません。")
+            else:
+                for change in changes:
+                    print(
+                        f"revision={change.revision} source={change.source} "
+                        f"changed_at={change.changed_at.isoformat()}"
+                    )
+            return EXIT_SUCCESS
+    except DuelRecordConflictError as exc:
+        _print_cli_error("E_DUEL_CONFLICT", str(exc), "duel showで最新revisionを確認してください。")
+        return EXIT_ATTENTION
+    except (DuelRecordError, ValueError) as exc:
+        _print_cli_error("E_DUEL", str(exc), "録画IDと入力値を確認してください。")
+        return EXIT_ATTENTION
+    raise RuntimeError(f"未対応のduelコマンドです: {args.duel_command}")
+
+
+def _print_duel_record(record: object, *, as_json: bool) -> None:
+    document = record.to_dict()
+    if as_json:
+        print(json.dumps(document, ensure_ascii=False, sort_keys=True))
+        return
+    print(f"recording id: {document['recording_id']}")
+    print(f"status: {document['status']}")
+    print(f"result: {document['result']}")
+    print(f"play order: {document['play_order']}")
+    print(f"own deck: {document['own_deck'] or '-'}")
+    print(f"opponent deck: {document['opponent_deck'] or '-'}")
+    print(f"duel type: {document['duel_type']}")
+    print(f"tags: {', '.join(document['tags']) or '-'}")
+    print(f"notes: {document['notes'] or '-'}")
+    print(f"revision: {document['revision']}")
+    print(f"updated at: {document['updated_at']}")
 
 
 def _run_recovery_command(

@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from master_duel_recorder_lite.config import AppConfig
+from master_duel_recorder_lite.duel_records import DuelRecordRepository
 from master_duel_recorder_lite.ffmpeg import FfmpegDiscoveryResult, FfmpegVersion
 from master_duel_recorder_lite.recorder import (
     RecordingPreparationError,
@@ -111,6 +112,9 @@ class RecorderPreparationTest(unittest.TestCase):
                 state = prepared.start(source="manual", detection_reason="test")
                 result = prepared.stop()
                 entry = prepared.history.get(prepared.target.recording_id)
+                duel_record = DuelRecordRepository(prepared.history.database_path).get(
+                    prepared.target.recording_id
+                )
                 persisted = prepared.state_store.load()
             finally:
                 prepared.release()
@@ -121,6 +125,8 @@ class RecorderPreparationTest(unittest.TestCase):
         self.assertEqual(entry.state, "completed")
         self.assertEqual(entry.source, "manual")
         self.assertEqual(entry.detection_reason, "test")
+        assert duel_record is not None
+        self.assertEqual(duel_record.values.status, "draft")
         assert persisted is not None
         self.assertEqual(persisted.value.state, "completed")
 

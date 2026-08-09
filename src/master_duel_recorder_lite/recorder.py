@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .capture_targets import CaptureInput, CaptureTargetError, resolve_configured_capture
 from .config import AppConfig
+from .duel_records import DuelRecordError, DuelRecordRepository
 from .ffmpeg import discover_ffmpeg
 from .recording_command import RecordingCommandError, build_recording_command
 from .recording_history import RecordingHistoryError, RecordingHistoryRepository
@@ -117,8 +118,13 @@ class PreparedRecording:
             raise RecordingTrackingError("録画結果に対応する開始履歴がありません")
         try:
             self.history.finalize(self.target.recording_id, self.session.result)
+            if self.session.result.succeeded:
+                DuelRecordRepository(self.history.database_path).create_draft(
+                    self.target.recording_id,
+                    source="system",
+                )
             self._save_state(self.session.result.state.value)
-        except (RecordingHistoryError, RecordingStateStoreError) as exc:
+        except (DuelRecordError, RecordingHistoryError, RecordingStateStoreError) as exc:
             raise RecordingTrackingError(f"録画履歴を最終状態へ更新できません: {exc}") from exc
         self._history_finalized = True
 

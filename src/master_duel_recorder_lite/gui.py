@@ -14,6 +14,7 @@ from typing import Callable, TypeVar
 from . import __version__
 from .application import ApplicationEvent, RecorderApplicationService, RecordingSnapshot
 from .capture_targets import CaptureTarget
+from .duel_records import DuelRecord, DuelRecordValues
 from .preflight import CheckStatus, PreflightReport
 from .recording_browsing import RecordingReference
 from .recording_session import RecordingState
@@ -350,6 +351,13 @@ class RecorderGui:
             state="disabled",
         )
         self.history_reveal_button.pack(side="right", padx=(0, 8))
+        self.history_duel_button = ttk.Button(
+            toolbar,
+            text="対戦記録",
+            command=self.edit_selected_duel_record,
+            state="disabled",
+        )
+        self.history_duel_button.pack(side="right", padx=(0, 8))
         self.history_diagnostic_button = ttk.Button(
             toolbar,
             text="診断",
@@ -385,6 +393,7 @@ class RecorderGui:
         self.widgets["history_play"] = self.history_play_button
         self.widgets["history_reveal"] = self.history_reveal_button
         self.widgets["history_diagnostic"] = self.history_diagnostic_button
+        self.widgets["history_duel"] = self.history_duel_button
 
     def _build_recovery_page(self) -> None:
         page = self._new_page("recovery")
@@ -576,6 +585,8 @@ class RecorderGui:
     def _recording_stopped(self, snapshot: RecordingSnapshot) -> None:
         self._render_recording(snapshot)
         self._activity(f"録画を停止しました: {snapshot.output_path}")
+        if snapshot.state is RecordingState.COMPLETED and snapshot.recording_id:
+            self._open_duel_editor(snapshot.recording_id)
 
     def toggle_watch(self) -> None:
         if self.service.watch_active:
@@ -628,6 +639,7 @@ class RecorderGui:
         self.history_play_button.configure(state=state)
         self.history_reveal_button.configure(state=state)
         self.history_diagnostic_button.configure(state=state)
+        self.history_duel_button.configure(state=state)
 
     def _history_double_clicked(self, event: tk.Event[tk.Misc]) -> None:
         recording_id = self.history_tree.identify_row(event.y)
@@ -662,6 +674,93 @@ class RecorderGui:
             return
         recording_id = str(selection[0])
         self._run(lambda: self.service.get_history(recording_id), self._show_history_diagnostic)
+
+    def edit_selected_duel_record(self) -> None:
+        selection = self.history_tree.selection()
+        if selection:
+            self._open_duel_editor(str(selection[0]))
+
+    def _open_duel_editor(self, recording_id: str) -> None:
+        self._run(
+            lambda: self.service.get_duel_record(recording_id),
+            lambda record: self._show_duel_editor(recording_id, record),
+        )
+
+    def _show_duel_editor(self, recording_id: str, record: DuelRecord | None) -> None:
+        values = record.values if record is not None else DuelRecordValues()
+        revision = record.revision if record is not None else 0
+        dialog = tk.Toplevel(self.root)
+        dialog.title("対戦記録")
+        dialog.geometry("680x620")
+        dialog.transient(self.root)
+        form = ttk.Frame(dialog, padding=18)
+        form.pack(fill="both", expand=True)
+        ttk.Label(form, text=f"録画ID: {recording_id}", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
+        )
+        fields = (
+            ("状態", "status", ("draft", "confirmed"), values.status),
+            ("勝敗", "result", ("unknown", "win", "loss", "draw"), values.result),
+            ("先後", "play_order", ("unknown", "first", "second"), values.play_order),
+            ("対戦種別", "duel_type", ("ranked", "event", "room", "solo", "other"), values.duel_type),
+        )
+        variables: dict[str, tk.StringVar] = {}
+        row = 1
+        for label, key, choices, current in fields:
+            ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=5)
+            variable = tk.StringVar(value=current)
+            variables[key] = variable
+            ttk.Combobox(form, textvariable=variable, values=choices, state="readonly").grid(
+                row=row, column=1, sticky="ew", pady=5
+            )
+            row += 1
+        for label, key, current in (
+            ("自分デッキ", "own_deck", values.own_deck),
+            ("相手デッキ", "opponent_deck", values.opponent_deck),
+            ("タグ（カンマ区切り）", "tags", ", ".join(values.tags)),
+        ):
+            ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=5)
+            variable = tk.StringVar(value=current)
+            variables[key] = variable
+            ttk.Entry(form, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=5)
+            row += 1
+        ttk.Label(form, text="メモ").grid(row=row, column=0, sticky="nw", pady=5)
+        notes = tk.Text(form, height=10, wrap="word")
+        notes.insert("1.0", values.notes)
+        notes.grid(row=row, column=1, sticky="nsew", pady=5)
+        form.columnconfigure(1, weight=1)
+        form.rowconfigure(row, weight=1)
+
+        def save() -> None:
+            tags = tuple(item.strip() for item in variables["tags"].get().split(",") if item.strip())
+            updated = DuelRecordValues(
+                status=variables["status"].get(),
+                result=variables["result"].get(),
+                play_order=variables["play_order"].get(),
+                own_deck=variables["own_deck"].get(),
+                opponent_deck=variables["opponent_deck"].get(),
+                duel_type=variables["duel_type"].get(),
+                tags=tags,
+                notes=notes.get("1.0", "end-1c"),
+            )
+            self._run(
+                lambda: self.service.save_duel_record(
+                    recording_id,
+                    updated,
+                    expected_revision=revision,
+                ),
+                lambda saved: (
+                    self._activity(f"対戦記録を保存しました: revision {saved.revision}"),
+                    dialog.destroy(),
+                    self.refresh_history(),
+                ),
+            )
+
+        buttons = ttk.Frame(form)
+        buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(buttons, text="キャンセル", command=dialog.destroy).pack(side="left", padx=(0, 8))
+        ttk.Button(buttons, text="保存", style="Primary.TButton", command=save).pack(side="left")
+        dialog.grab_set()
 
     def _show_history_diagnostic(self, entry: object) -> None:
         dialog = tk.Toplevel(self.root)
@@ -803,6 +902,10 @@ class RecorderGui:
                 self.record_detail_var.set(f"録画ID: {event.recording_id or '-'}\n保存先: 履歴で確認")
             elif event.kind in {"stopped", "error"}:
                 self.record_state_var.set("自動監視中" if self.service.watch_active else "待機中")
+                if event.kind == "stopped" and event.recording_id:
+                    self._activity(
+                        f"対戦記録は未入力です。録画履歴から編集できます: {event.recording_id}"
+                    )
             elif event.kind == "watch" and event.state == "stopped" and not self.closing:
                 self._watch_stopped()
         if not self.service.watch_active and not self.closing:

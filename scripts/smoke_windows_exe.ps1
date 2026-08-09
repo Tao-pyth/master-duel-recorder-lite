@@ -33,6 +33,16 @@ if (($historyHelp | Out-String) -notmatch "play" -or ($historyHelp | Out-String)
     throw "history help does not contain recording browsing commands"
 }
 
+$duelHelp = & $resolvedExe duel --help
+if ($LASTEXITCODE -ne 0) {
+    throw "duel --help failed with exit code $LASTEXITCODE"
+}
+foreach ($command in @("show", "set", "confirm", "history")) {
+    if (($duelHelp | Out-String) -notmatch $command) {
+        throw "duel help does not contain command: $command"
+    }
+}
+
 $isolatedData = Join-Path ([System.IO.Path]::GetTempPath()) ("mdrl-exe-smoke-" + [guid]::NewGuid().ToString("N"))
 $configJson = & $resolvedExe --user-data-dir $isolatedData config show --json
 if ($LASTEXITCODE -ne 0) {

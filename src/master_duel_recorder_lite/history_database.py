@@ -8,7 +8,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -109,7 +109,58 @@ def _migrate_to_v2(connection: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS: dict[int, Migration] = {1: _migrate_to_v1, 2: _migrate_to_v2}
+def _migrate_to_v3(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE duel_records (
+            recording_id TEXT PRIMARY KEY REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            status TEXT NOT NULL CHECK (status IN ('draft', 'confirmed')),
+            result TEXT NOT NULL CHECK (result IN ('win', 'loss', 'draw', 'unknown')),
+            play_order TEXT NOT NULL CHECK (play_order IN ('first', 'second', 'unknown')),
+            own_deck TEXT NOT NULL DEFAULT '',
+            opponent_deck TEXT NOT NULL DEFAULT '',
+            duel_type TEXT NOT NULL CHECK (duel_type IN ('ranked', 'event', 'room', 'solo', 'other')),
+            notes TEXT NOT NULL DEFAULT '',
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_tags (
+            recording_id TEXT NOT NULL REFERENCES duel_records(recording_id) ON DELETE RESTRICT,
+            tag TEXT NOT NULL,
+            normalized_tag TEXT NOT NULL,
+            PRIMARY KEY (recording_id, normalized_tag)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_changes (
+            change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recording_id TEXT NOT NULL REFERENCES duel_records(recording_id) ON DELETE RESTRICT,
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            source TEXT NOT NULL CHECK (source IN ('user', 'system', 'detected')),
+            before_json TEXT NOT NULL,
+            after_json TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            UNIQUE (recording_id, revision)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX duel_records_updated_at_idx ON duel_records(updated_at DESC, recording_id DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX duel_record_changes_recording_idx "
+        "ON duel_record_changes(recording_id, revision DESC)"
+    )
+
+
+_MIGRATIONS: dict[int, Migration] = {1: _migrate_to_v1, 2: _migrate_to_v2, 3: _migrate_to_v3}
 
 
 def initialize_history_database(
@@ -235,6 +286,19 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         artifact_columns
     ):
         raise HistoryDatabaseError("録画履歴DBに必須のrecovery_artifactsスキーマがありません")
+    duel_columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_records)")}
+    if not {"recording_id", "status", "result", "revision", "updated_at"}.issubset(
+        duel_columns
+    ):
+        raise HistoryDatabaseError("録画履歴DBに必須のduel_recordsスキーマがありません")
+    tag_columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_record_tags)")}
+    if not {"recording_id", "tag", "normalized_tag"}.issubset(tag_columns):
+        raise HistoryDatabaseError("録画履歴DBに必須のduel_record_tagsスキーマがありません")
+    change_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(duel_record_changes)")
+    }
+    if not {"change_id", "recording_id", "revision", "after_json"}.issubset(change_columns):
+        raise HistoryDatabaseError("録画履歴DBに必須のduel_record_changesスキーマがありません")
     quick_check = connection.execute("PRAGMA quick_check").fetchone()
     if quick_check is None or quick_check[0] != "ok":
         detail = quick_check[0] if quick_check else "結果なし"
