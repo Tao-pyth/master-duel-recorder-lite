@@ -203,6 +203,7 @@ def prepare_recording(
     capture_input: CaptureInput | None = None,
     master_duel_window_handle: int | None = None,
     master_duel_window_title: str | None = None,
+    enable_visual_detection: bool = True,
 ) -> PreparedRecording:
     discovery = discover_ffmpeg(config.ffmpeg_path)
     if not discovery.found or discovery.executable is None:
@@ -239,12 +240,16 @@ def prepare_recording(
 
     try:
         history = RecordingHistoryRepository.from_runtime_paths(paths)
-        visual_worker_builder = _visual_worker_builder(
-            config=config,
-            executable=discovery.executable,
-            capture_input=selected_input,
-            history=history,
-            recording_id=target.recording_id,
+        visual_worker_builder = (
+            _visual_worker_builder(
+                config=config,
+                executable=discovery.executable,
+                capture_input=selected_input,
+                history=history,
+                recording_id=target.recording_id,
+            )
+            if enable_visual_detection
+            else None
         )
         return PreparedRecording(
             target=target,

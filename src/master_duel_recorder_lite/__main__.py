@@ -650,7 +650,11 @@ def _run_record_command(
         return 2
 
     try:
-        prepared = prepare_recording(paths=paths, config=loaded.config)
+        prepared = prepare_recording(
+            paths=paths,
+            config=loaded.config,
+            enable_visual_detection=False,
+        )
     except RecordingPreparationError as exc:
         _print_cli_error("E_RECORDING_PREPARE", str(exc), "doctorで録画環境と保存先を確認してください。")
         return 3

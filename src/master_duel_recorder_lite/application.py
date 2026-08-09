@@ -7,7 +7,13 @@ from pathlib import Path
 import threading
 
 from .auto_recording import AutoRecordingController, AutoRecordingEvent, AutoRecordingEventAction
-from .capture_targets import CaptureTarget, CaptureTargetCatalog, capture_input_for_target
+from .capture_targets import (
+    CaptureMode,
+    CaptureTarget,
+    CaptureTargetCatalog,
+    capture_input_for_target,
+    resolve_configured_capture,
+)
 from .config import AppConfig, LoadedAppConfig, load_app_config, save_app_config, validate_app_config
 from .config_management import updated_config
 from .detection import DetectionPolicy, DuelDetectionStateMachine
@@ -167,12 +173,25 @@ class RecorderApplicationService:
             if not report.succeeded:
                 failures = [check.message for check in report.checks if check.status.value == "error"]
                 raise ApplicationOperationError(" / ".join(failures) or "録画環境を利用できません")
-            capture_input = capture_input_for_target(target) if target is not None else None
+            capture_input = None
+            if target is not None:
+                capture_input = (
+                    resolve_configured_capture(
+                        replace(
+                            loaded.config,
+                            capture_mode=CaptureMode.MASTER_DUEL.value,
+                            capture_target_id="",
+                        )
+                    )
+                    if target.mode is CaptureMode.MASTER_DUEL
+                    else capture_input_for_target(target)
+                )
             try:
                 prepared = prepare_recording(
                     paths=self.paths,
                     config=loaded.config,
                     capture_input=capture_input,
+                    enable_visual_detection=False,
                 )
                 state = prepared.start(source="gui", detection_reason="GUIによる手動録画")
             except Exception:

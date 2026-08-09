@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from master_duel_recorder_lite.recording_session import (
     RecordingSession,
@@ -66,6 +67,37 @@ class FakeProcess:
 
 
 class RecordingSessionTest(unittest.TestCase):
+    def test_start_uses_hidden_windows_process_settings(self) -> None:
+        captured_kwargs: dict[str, object] = {}
+
+        def process_factory(*_args: object, **kwargs: object) -> FakeProcess:
+            captured_kwargs.update(kwargs)
+            return FakeProcess()
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            patch(
+                "master_duel_recorder_lite.recording_session.configure_windows_process_errors"
+            ) as configure_errors,
+            patch(
+                "master_duel_recorder_lite.recording_session.subprocess_creation_flags",
+                return_value=0x08000000,
+            ),
+        ):
+            session = RecordingSession(
+                command=("ffmpeg",),
+                output_path=Path(tmp_dir) / "recording.mkv",
+                process_factory=process_factory,
+                startup_grace_seconds=0,
+            )
+
+            self.assertIs(session.start(), RecordingState.RECORDING)
+
+        configure_errors.assert_called_once_with()
+        self.assertEqual(captured_kwargs["creationflags"], 0x08000000)
+        self.assertIs(captured_kwargs["stdin"], subprocess.PIPE)
+        self.assertIs(captured_kwargs["stderr"], subprocess.PIPE)
+
     def test_start_stop_and_idempotent_stop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output = Path(tmp_dir) / "recording.mkv"

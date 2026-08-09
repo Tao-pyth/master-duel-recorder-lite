@@ -25,6 +25,13 @@ class WindowsProcessTest(unittest.TestCase):
                 getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
             )
 
+    def test_non_windows_creation_uses_no_flags(self) -> None:
+        with patch(
+            "master_duel_recorder_lite.windows_process.platform.system",
+            return_value="Linux",
+        ):
+            self.assertEqual(subprocess_creation_flags(), 0)
+
     def test_windows_error_mode_suppresses_child_error_dialogs(self) -> None:
         kernel32 = SimpleNamespace(
             GetErrorMode=Mock(return_value=0x8000),

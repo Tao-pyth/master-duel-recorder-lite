@@ -175,6 +175,44 @@ class RecorderPreparationTest(unittest.TestCase):
         self.assertEqual(worker.request_stop_count, 1)
         self.assertFalse(worker.active)
 
+    def test_visual_worker_can_be_disabled_for_manual_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(),
+                source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58),
+                attempts=(),
+            )
+            with patch(
+                "master_duel_recorder_lite.recorder.discover_ffmpeg",
+                return_value=discovery,
+            ):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(
+                        ffmpeg_path=str(executable),
+                        capture_mode="master_duel",
+                        visual_detection_enabled=True,
+                    ),
+                    capture_input=CaptureInput(
+                        "gdigrab",
+                        "title=Master Duel",
+                        window_handle=123,
+                        window_title="Master Duel",
+                    ),
+                    enable_visual_detection=False,
+                )
+            try:
+                self.assertIsNone(prepared.visual_worker_builder)
+                self.assertEqual(prepared.visual_detection_status.state, "disabled")
+            finally:
+                prepared.release()
+
     def test_visual_worker_start_failure_does_not_fail_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

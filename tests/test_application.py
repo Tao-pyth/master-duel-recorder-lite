@@ -9,7 +9,7 @@ from master_duel_recorder_lite.application import (
     ApplicationOperationError,
     RecorderApplicationService,
 )
-from master_duel_recorder_lite.capture_targets import CaptureMode, CaptureTarget
+from master_duel_recorder_lite.capture_targets import CaptureInput, CaptureMode, CaptureTarget
 from master_duel_recorder_lite.config import AppConfig
 from master_duel_recorder_lite.ffmpeg import FfmpegVersion
 from master_duel_recorder_lite.ffmpeg_setup import FfmpegInstallResult
@@ -90,7 +90,10 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             target = CaptureTarget(CaptureMode.DESKTOP, "desktop", "デスクトップ全体")
             with (
                 patch("master_duel_recorder_lite.application.run_preflight", return_value=report),
-                patch("master_duel_recorder_lite.application.prepare_recording", return_value=prepared),
+                patch(
+                    "master_duel_recorder_lite.application.prepare_recording",
+                    return_value=prepared,
+                ) as prepare,
             ):
                 started = service.start_recording(target)
                 stopped = service.stop_recording()
@@ -100,6 +103,75 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertFalse(stopped.active)
         self.assertIs(stopped.state, RecordingState.COMPLETED)
         self.assertEqual(released, [True])
+        self.assertFalse(prepare.call_args.kwargs["enable_visual_detection"])
+
+    def test_manual_master_duel_target_is_refreshed_when_recording_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "user_data"
+            output = root / "data" / "recordings" / "recording.mkv"
+            now = datetime.now(timezone.utc)
+            result = RecordingResult(
+                RecordingState.COMPLETED,
+                output,
+                0,
+                now,
+                now,
+                100,
+                None,
+                (),
+            )
+            session = SimpleNamespace(
+                state=RecordingState.RECORDING,
+                started_at=now,
+                result=None,
+            )
+            prepared = SimpleNamespace(
+                target=SimpleNamespace(recording_id="recording-id", path=output),
+                session=session,
+                start=lambda **_kwargs: RecordingState.RECORDING,
+                poll=lambda: session.state,
+                stop=lambda: result,
+                release=lambda: None,
+                visual_detection_status=VisualDetectionStatus(
+                    "disabled", "disabled", 0, 0, 0
+                ),
+            )
+            report = PreflightReport(
+                (PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),)
+            )
+            stale_target = CaptureTarget(
+                CaptureMode.MASTER_DUEL,
+                "master_duel",
+                "Master Duelウィンドウ",
+                available=False,
+            )
+            fresh_input = CaptureInput(
+                "gdigrab",
+                "title=masterduel",
+                window_handle=123,
+                window_title="masterduel",
+            )
+            service = RecorderApplicationService(user_data_dir=root)
+            with (
+                patch(
+                    "master_duel_recorder_lite.application.run_preflight",
+                    return_value=report,
+                ),
+                patch(
+                    "master_duel_recorder_lite.application.resolve_configured_capture",
+                    return_value=fresh_input,
+                ) as resolve,
+                patch(
+                    "master_duel_recorder_lite.application.prepare_recording",
+                    return_value=prepared,
+                ) as prepare,
+            ):
+                service.start_recording(stale_target)
+                service.stop_recording()
+
+        resolve.assert_called_once()
+        self.assertIs(prepare.call_args.kwargs["capture_input"], fresh_input)
+        self.assertFalse(prepare.call_args.kwargs["enable_visual_detection"])
 
     def test_recording_browsing_delegates_to_shared_service(self) -> None:
         reference = object()

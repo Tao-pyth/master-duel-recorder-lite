@@ -116,7 +116,10 @@ class CliTest(unittest.TestCase):
             with (
                 patch("master_duel_recorder_lite.__main__.load_app_config", return_value=loaded),
                 patch("master_duel_recorder_lite.__main__.run_preflight", return_value=report),
-                patch("master_duel_recorder_lite.__main__.prepare_recording", return_value=prepared),
+                patch(
+                    "master_duel_recorder_lite.__main__.prepare_recording",
+                    return_value=prepared,
+                ) as prepare,
                 redirect_stdout(output),
             ):
                 exit_code = main(["--user-data-dir", str(root), "record", "--duration", "0.001"])
@@ -124,6 +127,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(session.stop_count, 1)
         self.assertIn("録画を保存しました", output.getvalue())
+        self.assertFalse(prepare.call_args.kwargs["enable_visual_detection"])
 
     def test_record_ctrl_c_attempts_normal_stop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

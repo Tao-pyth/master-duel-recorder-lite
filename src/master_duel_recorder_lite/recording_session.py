@@ -11,6 +11,8 @@ import subprocess
 import threading
 import time
 
+from .windows_process import configure_windows_process_errors, subprocess_creation_flags
+
 
 class RecordingState(str, Enum):
     CREATED = "created"
@@ -141,6 +143,7 @@ class RecordingSession:
             return self.state
 
         try:
+            configure_windows_process_errors()
             self._process = self._process_factory(
                 self.command,
                 stdin=subprocess.PIPE,
@@ -150,6 +153,7 @@ class RecordingSession:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                creationflags=subprocess_creation_flags(),
             )
         except OSError as exc:
             self._fail(f"FFmpegを開始できません: {exc}", returncode=None)
