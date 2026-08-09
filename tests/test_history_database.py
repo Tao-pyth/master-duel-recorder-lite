@@ -9,6 +9,7 @@ from master_duel_recorder_lite.history_database import (
     HistoryDatabaseError,
     _migrate_to_v1,
     _migrate_to_v2,
+    _migrate_to_v3,
     initialize_history_database,
 )
 
@@ -77,7 +78,8 @@ class HistoryDatabaseTest(unittest.TestCase):
                     migrations={
                         1: lambda _connection: None,
                         2: lambda _connection: None,
-                        3: fail_after_change,
+                        3: lambda _connection: None,
+                        4: fail_after_change,
                     },
                 )
 
@@ -182,9 +184,65 @@ class HistoryDatabaseTest(unittest.TestCase):
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'duel_records'"
                 ).fetchone()
 
-        self.assertEqual(info.version, 3)
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(backup_version, 2)
         self.assertIsNone(duel_table)
+
+    def test_version_three_preserves_duel_records_when_adding_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE schema_version "
+                    "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+                )
+                connection.execute("INSERT INTO schema_version VALUES (1, 3)")
+                _migrate_to_v1(connection)
+                _migrate_to_v2(connection)
+                _migrate_to_v3(connection)
+                connection.execute(
+                    """
+                    INSERT INTO recordings (
+                        recording_id, state, source, output_path, container,
+                        created_at, diagnostics_json, updated_at
+                    ) VALUES ('recording', 'completed', 'manual', 'recording.mkv', 'mkv',
+                              '2026-08-09T00:00:00+00:00', '[]',
+                              '2026-08-09T00:00:00+00:00')
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO duel_records (
+                        recording_id, status, result, play_order, own_deck,
+                        opponent_deck, duel_type, notes, revision, created_at, updated_at
+                    ) VALUES ('recording', 'draft', 'win', 'first', '', '', 'ranked', '', 1,
+                              '2026-08-09T00:00:00+00:00',
+                              '2026-08-09T00:00:00+00:00')
+                    """
+                )
+
+            info = initialize_history_database(path)
+            assert info.backup_path is not None
+            with closing(sqlite3.connect(path)) as connection:
+                result = connection.execute(
+                    "SELECT result FROM duel_records WHERE recording_id = 'recording'"
+                ).fetchone()[0]
+                event_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'duel_events'"
+                ).fetchone()
+            with closing(sqlite3.connect(info.backup_path)) as backup:
+                backup_version = backup.execute(
+                    "SELECT version FROM schema_version WHERE singleton = 1"
+                ).fetchone()[0]
+                backup_event_table = backup.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'duel_events'"
+                ).fetchone()
+
+        self.assertEqual(info.version, 4)
+        self.assertEqual(result, "win")
+        self.assertIsNotNone(event_table)
+        self.assertEqual(backup_version, 3)
+        self.assertIsNone(backup_event_table)
 
 
 if __name__ == "__main__":

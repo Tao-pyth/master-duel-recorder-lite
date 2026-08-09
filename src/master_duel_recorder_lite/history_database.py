@@ -8,7 +8,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -160,7 +160,45 @@ def _migrate_to_v3(connection: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS: dict[int, Migration] = {1: _migrate_to_v1, 2: _migrate_to_v2, 3: _migrate_to_v3}
+def _migrate_to_v4(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE duel_events (
+            event_id TEXT PRIMARY KEY,
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            elapsed_ms INTEGER NOT NULL CHECK (elapsed_ms >= 0),
+            event_type TEXT NOT NULL CHECK (
+                event_type IN ('duel_start', 'turn_change', 'duel_result', 'marker')
+            ),
+            actor TEXT CHECK (actor IS NULL OR actor IN ('self', 'opponent', 'unknown')),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN ('win', 'loss', 'draw', 'unknown')),
+            label TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL CHECK (source IN ('manual', 'detected', 'system')),
+            confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+            status TEXT NOT NULL CHECK (status IN ('candidate', 'confirmed', 'rejected')),
+            detector_id TEXT,
+            detector_version TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX duel_events_timeline_idx "
+        "ON duel_events(recording_id, elapsed_ms, event_id)"
+    )
+    connection.execute(
+        "CREATE INDEX duel_events_status_idx "
+        "ON duel_events(recording_id, status, event_type, elapsed_ms)"
+    )
+
+
+_MIGRATIONS: dict[int, Migration] = {
+    1: _migrate_to_v1,
+    2: _migrate_to_v2,
+    3: _migrate_to_v3,
+    4: _migrate_to_v4,
+}
 
 
 def initialize_history_database(
@@ -299,6 +337,11 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
     }
     if not {"change_id", "recording_id", "revision", "after_json"}.issubset(change_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のduel_record_changesスキーマがありません")
+    event_columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_events)")}
+    if not {"event_id", "recording_id", "elapsed_ms", "event_type", "status"}.issubset(
+        event_columns
+    ):
+        raise HistoryDatabaseError("録画履歴DBに必須のduel_eventsスキーマがありません")
     quick_check = connection.execute("PRAGMA quick_check").fetchone()
     if quick_check is None or quick_check[0] != "ok":
         detail = quick_check[0] if quick_check else "結果なし"

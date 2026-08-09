@@ -43,6 +43,16 @@ foreach ($command in @("show", "set", "confirm", "history")) {
     }
 }
 
+$timelineHelp = & $resolvedExe timeline --help
+if ($LASTEXITCODE -ne 0) {
+    throw "timeline --help failed with exit code $LASTEXITCODE"
+}
+foreach ($command in @("list", "add", "confirm", "reject")) {
+    if (($timelineHelp | Out-String) -notmatch $command) {
+        throw "timeline help does not contain command: $command"
+    }
+}
+
 $isolatedData = Join-Path ([System.IO.Path]::GetTempPath()) ("mdrl-exe-smoke-" + [guid]::NewGuid().ToString("N"))
 $configJson = & $resolvedExe --user-data-dir $isolatedData config show --json
 if ($LASTEXITCODE -ne 0) {

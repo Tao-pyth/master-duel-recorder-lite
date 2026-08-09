@@ -23,7 +23,7 @@ V1.0.0までに、次の中核機能を段階的に提供します。
 
 ## 現在の状態
 
-現在のバージョンは `0.14.0`、「対戦記録管理」です。GitHub Releaseでは、通常利用向けGUI EXEと自動化・詳細操作向けCLI EXEを配布します。録画履歴から動画を再生し、勝敗、先後、自分・相手デッキ、対戦種別、タグ、メモを後から何度でも編集できます。手動録画の正常終了後は入力画面を表示し、自動録画後は履歴から編集できる未入力通知を表示します。V0.15.0とV0.16.0では、対戦タイムラインと対戦開始・ターン切り替え・勝敗の自動判定を順に提供します。現段階の自動検出は可視ウィンドウの存在判定です。外部サービスへの直接アップロードとOAuthは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
+現在のバージョンは `0.15.0`、「対戦タイムライン基盤」です。GitHub Releaseでは、通常利用向けGUI EXEと自動化・詳細操作向けCLI EXEを配布します。録画履歴から動画を再生し、対戦記録を後編集できるほか、対戦開始、ターン切り替え、勝敗、手動マーカーを録画時刻へ関連付けられます。自動判定候補は確認または却下するまで保持します。V0.16.0では対戦開始・ターン切り替え・勝敗の自動判定を提供します。現段階の自動検出は可視ウィンドウの存在判定です。外部サービスへの直接アップロードとOAuthは実装していません。V1.0.0への更新はユーザーの明示指示を待ちます。
 
 開発計画は [docs/roadmap.md](docs/roadmap.md)、バージョンごとの変更は [docs/release-notes.md](docs/release-notes.md) を参照してください。ロードマップ作業は実装前にGitHub Issueへ登録し、バージョンラベルとMilestoneへ接続します。
 
@@ -94,6 +94,8 @@ python -m master_duel_recorder_lite history list
 python -m master_duel_recorder_lite history play RECORDING_ID
 python -m master_duel_recorder_lite history reveal RECORDING_ID
 python -m master_duel_recorder_lite history check
+python -m master_duel_recorder_lite timeline list RECORDING_ID
+python -m master_duel_recorder_lite timeline add RECORDING_ID --elapsed-ms 3000 --type marker --label "重要局面"
 python -m master_duel_recorder_lite recovery list
 python -m master_duel_recorder_lite recovery detect
 python -m master_duel_recorder_lite prepare list
@@ -167,6 +169,20 @@ python -m master_duel_recorder_lite history check
 ```
 
 GUIでは録画履歴を選択し、「再生」でWindows既定プレイヤー、「保存場所を開く」で対象を選択したExplorerを起動します。`history play`と`history reveal`も同じ安全なパス検証を利用します。`history check`は履歴から欠損したファイル、履歴にない録画ファイル、サイズ不一致を報告するだけで、ファイルを変更しません。詳細は[録画履歴設計](docs/architecture/history.md)と[録画の閲覧設計](docs/architecture/recording-browsing.md)を参照してください。
+
+## 対戦タイムライン
+
+GUIでは録画履歴を選択して「タイムライン」を開き、状態・種別での絞り込み、手動マーカー追加、自動判定候補の確認・却下を行います。CLIでは録画開始からの経過ミリ秒を指定します。
+
+```powershell
+python -m master_duel_recorder_lite timeline list RECORDING_ID --json
+python -m master_duel_recorder_lite timeline add RECORDING_ID --elapsed-ms 1000 --type duel_start
+python -m master_duel_recorder_lite timeline add RECORDING_ID --elapsed-ms 3000 --type marker --label "重要局面"
+python -m master_duel_recorder_lite timeline confirm EVENT_ID
+python -m master_duel_recorder_lite timeline reject EVENT_ID
+```
+
+確定済みの開始と結果は各1件に制限し、ターン切り替えは開始より後、結果より前だけに置けます。イベントは物理削除せず、却下も監査可能な状態として残します。詳細は[対戦タイムライン基盤設計](docs/architecture/duel-timeline.md)を参照してください。
 
 ## 失敗時の復旧
 

@@ -158,7 +158,7 @@ class DuelRecordMigrationTest(unittest.TestCase):
                     )
                 }
 
-        self.assertEqual(info.version, 3)
+        self.assertEqual(info.version, 4)
         self.assertTrue(
             {"duel_records", "duel_record_tags", "duel_record_changes"}.issubset(tables)
         )

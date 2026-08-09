@@ -27,7 +27,7 @@ V0.15.0では録画開始からの経過時間に対戦イベントを関連付�
 
 `turn_change`だけが`actor`を使用し、`duel_result`だけが`outcome`を使用します。手動マーカーは名称を必須とします。自動判定候補は検出器ID、版、信頼度を必須とし、手入力と区別します。
 
-イベントは物理削除せず`rejected`へ変更します。標準の並び順は`elapsed_ms`、`created_at`、`event_id`の昇順です。
+イベントは物理削除せず`rejected`へ変更します。標準の並び順は`elapsed_ms`、`event_id`の昇順です。同一時刻でもイベントIDにより再起動前後で順序が変わりません。
 
 ## 整合性規則
 
@@ -45,7 +45,7 @@ GUIの対戦記録詳細にタイムラインを表示し、時刻、種別、�
 
 ```powershell
 mdrl timeline list RECORDING_ID
-mdrl timeline add RECORDING_ID --at 00:03:24 --label "重要局面"
+mdrl timeline add RECORDING_ID --elapsed-ms 204000 --type marker --label "重要局面"
 mdrl timeline confirm EVENT_ID
 mdrl timeline reject EVENT_ID
 ```

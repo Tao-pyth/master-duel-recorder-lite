@@ -12,6 +12,7 @@ from .config import AppConfig, LoadedAppConfig, load_app_config, save_app_config
 from .config_management import updated_config
 from .detection import DetectionPolicy, DuelDetectionStateMachine
 from .duel_records import DuelRecord, DuelRecordChange, DuelRecordRepository, DuelRecordValues
+from .duel_timeline import DuelEvent, DuelTimelineRepository
 from .ffmpeg import discover_ffmpeg
 from .game_window import GameWindowMonitor
 from .master_duel_detector import MasterDuelWindowDetector
@@ -240,6 +241,46 @@ class RecorderApplicationService:
 
     def duel_record_changes(self, recording_id: str) -> tuple[DuelRecordChange, ...]:
         return DuelRecordRepository.from_runtime_paths(self.paths).changes(recording_id)
+
+    def list_timeline(
+        self,
+        recording_id: str,
+        *,
+        status: str | None = None,
+        event_type: str | None = None,
+    ) -> tuple[DuelEvent, ...]:
+        return DuelTimelineRepository.from_runtime_paths(self.paths).list(
+            recording_id,
+            status=status,
+            event_type=event_type,
+        )
+
+    def add_timeline_event(
+        self,
+        recording_id: str,
+        *,
+        elapsed_ms: int,
+        event_type: str,
+        actor: str | None = None,
+        outcome: str | None = None,
+        label: str = "",
+    ) -> DuelEvent:
+        return DuelTimelineRepository.from_runtime_paths(self.paths).add(
+            recording_id,
+            elapsed_ms=elapsed_ms,
+            event_type=event_type,
+            actor=actor,
+            outcome=outcome,
+            label=label,
+            source="manual",
+            status="confirmed",
+        )
+
+    def confirm_timeline_event(self, event_id: str) -> DuelEvent:
+        return DuelTimelineRepository.from_runtime_paths(self.paths).confirm(event_id)
+
+    def reject_timeline_event(self, event_id: str) -> DuelEvent:
+        return DuelTimelineRepository.from_runtime_paths(self.paths).reject(event_id)
 
     def check_history(self) -> tuple[ConsistencyIssue, ...]:
         return RecordingHistoryRepository.from_runtime_paths(self.paths).check_consistency()

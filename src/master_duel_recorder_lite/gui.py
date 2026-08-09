@@ -15,6 +15,7 @@ from . import __version__
 from .application import ApplicationEvent, RecorderApplicationService, RecordingSnapshot
 from .capture_targets import CaptureTarget
 from .duel_records import DuelRecord, DuelRecordValues
+from .duel_timeline import DuelEvent
 from .preflight import CheckStatus, PreflightReport
 from .recording_browsing import RecordingReference
 from .recording_session import RecordingState
@@ -358,6 +359,13 @@ class RecorderGui:
             state="disabled",
         )
         self.history_duel_button.pack(side="right", padx=(0, 8))
+        self.history_timeline_button = ttk.Button(
+            toolbar,
+            text="タイムライン",
+            command=self.show_selected_timeline,
+            state="disabled",
+        )
+        self.history_timeline_button.pack(side="right", padx=(0, 8))
         self.history_diagnostic_button = ttk.Button(
             toolbar,
             text="診断",
@@ -394,6 +402,7 @@ class RecorderGui:
         self.widgets["history_reveal"] = self.history_reveal_button
         self.widgets["history_diagnostic"] = self.history_diagnostic_button
         self.widgets["history_duel"] = self.history_duel_button
+        self.widgets["history_timeline"] = self.history_timeline_button
 
     def _build_recovery_page(self) -> None:
         page = self._new_page("recovery")
@@ -640,6 +649,7 @@ class RecorderGui:
         self.history_reveal_button.configure(state=state)
         self.history_diagnostic_button.configure(state=state)
         self.history_duel_button.configure(state=state)
+        self.history_timeline_button.configure(state=state)
 
     def _history_double_clicked(self, event: tk.Event[tk.Misc]) -> None:
         recording_id = self.history_tree.identify_row(event.y)
@@ -679,6 +689,165 @@ class RecorderGui:
         selection = self.history_tree.selection()
         if selection:
             self._open_duel_editor(str(selection[0]))
+
+    def show_selected_timeline(self) -> None:
+        selection = self.history_tree.selection()
+        if selection:
+            self._show_timeline(str(selection[0]))
+
+    def _show_timeline(self, recording_id: str) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("対戦タイムライン")
+        dialog.geometry("920x620")
+        dialog.minsize(760, 500)
+        dialog.transient(self.root)
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=f"録画ID: {recording_id}", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=6, sticky="w", pady=(0, 12)
+        )
+
+        status_var = tk.StringVar(value="すべて")
+        type_var = tk.StringVar(value="すべて")
+        ttk.Label(frame, text="状態").grid(row=1, column=0, sticky="w")
+        status_combo = ttk.Combobox(
+            frame,
+            textvariable=status_var,
+            values=("すべて", "candidate", "confirmed", "rejected"),
+            state="readonly",
+            width=14,
+        )
+        status_combo.grid(row=1, column=1, sticky="w", padx=(6, 18))
+        ttk.Label(frame, text="種別").grid(row=1, column=2, sticky="w")
+        type_combo = ttk.Combobox(
+            frame,
+            textvariable=type_var,
+            values=("すべて", "duel_start", "turn_change", "duel_result", "marker"),
+            state="readonly",
+            width=16,
+        )
+        type_combo.grid(row=1, column=3, sticky="w", padx=(6, 18))
+        refresh_button = ttk.Button(frame, text="更新")
+        refresh_button.grid(row=1, column=5, sticky="e")
+
+        columns = ("time", "type", "status", "detail", "source", "id")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", height=15)
+        for key, label, width in (
+            ("time", "時刻", 80),
+            ("type", "種別", 125),
+            ("status", "状態", 95),
+            ("detail", "内容", 180),
+            ("source", "入力元", 90),
+            ("id", "イベントID", 230),
+        ):
+            tree.heading(key, text=label)
+            tree.column(key, width=width, stretch=key in {"detail", "id"})
+        tree.grid(row=2, column=0, columnspan=6, sticky="nsew", pady=(10, 12))
+
+        elapsed_var = tk.StringVar(value="0.0")
+        label_var = tk.StringVar()
+        ttk.Label(frame, text="時刻（秒）").grid(row=3, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=elapsed_var, width=12).grid(
+            row=3, column=1, sticky="w", padx=(6, 18)
+        )
+        ttk.Label(frame, text="マーカー名").grid(row=3, column=2, sticky="w")
+        ttk.Entry(frame, textvariable=label_var).grid(
+            row=3, column=3, columnspan=2, sticky="ew", padx=(6, 18)
+        )
+        add_button = ttk.Button(frame, text="マーカー追加", style="Primary.TButton")
+        add_button.grid(row=3, column=5, sticky="e")
+
+        actions = ttk.Frame(frame)
+        actions.grid(row=4, column=0, columnspan=6, sticky="e", pady=(12, 0))
+        confirm_button = ttk.Button(actions, text="候補を確認", state="disabled")
+        confirm_button.pack(side="left", padx=(0, 8))
+        reject_button = ttk.Button(actions, text="候補を却下", state="disabled")
+        reject_button.pack(side="left")
+
+        events_by_id: dict[str, DuelEvent] = {}
+
+        def loaded(events: tuple[DuelEvent, ...]) -> None:
+            events_by_id.clear()
+            for item in tree.get_children():
+                tree.delete(item)
+            for event in events:
+                events_by_id[event.event_id] = event
+                detail = event.label or event.outcome or event.actor or "-"
+                tree.insert(
+                    "",
+                    "end",
+                    iid=event.event_id,
+                    values=(
+                        _format_elapsed_ms(event.elapsed_ms),
+                        event.event_type,
+                        event.status,
+                        detail,
+                        event.source,
+                        event.event_id,
+                    ),
+                )
+            candidate_selected()
+
+        def refresh() -> None:
+            status = None if status_var.get() == "すべて" else status_var.get()
+            event_type = None if type_var.get() == "すべて" else type_var.get()
+            self._run(
+                lambda: self.service.list_timeline(
+                    recording_id, status=status, event_type=event_type
+                ),
+                loaded,
+            )
+
+        def add_marker() -> None:
+            try:
+                elapsed_ms = round(float(elapsed_var.get()) * 1000)
+            except ValueError:
+                self._show_error(ValueError("時刻は0以上の秒数で入力してください"))
+                return
+            if elapsed_ms < 0:
+                self._show_error(ValueError("時刻は0以上の秒数で入力してください"))
+                return
+            self._run(
+                lambda: self.service.add_timeline_event(
+                    recording_id,
+                    elapsed_ms=elapsed_ms,
+                    event_type="marker",
+                    label=label_var.get(),
+                ),
+                lambda _event: (label_var.set(""), refresh()),
+            )
+
+        def candidate_selected(_event: object | None = None) -> None:
+            selection = tree.selection()
+            event = events_by_id.get(str(selection[0])) if selection else None
+            state = "normal" if event is not None and event.status == "candidate" else "disabled"
+            confirm_button.configure(state=state)
+            reject_button.configure(state=state)
+
+        def transition(confirm: bool) -> None:
+            selection = tree.selection()
+            if not selection:
+                return
+            event_id = str(selection[0])
+
+            def operation() -> DuelEvent:
+                if confirm:
+                    return self.service.confirm_timeline_event(event_id)
+                return self.service.reject_timeline_event(event_id)
+
+            self._run(operation, lambda _event: refresh())
+
+        refresh_button.configure(command=refresh)
+        add_button.configure(command=add_marker)
+        confirm_button.configure(command=lambda: transition(True))
+        reject_button.configure(command=lambda: transition(False))
+        status_combo.bind("<<ComboboxSelected>>", lambda _event: refresh())
+        type_combo.bind("<<ComboboxSelected>>", lambda _event: refresh())
+        tree.bind("<<TreeviewSelect>>", candidate_selected)
+        frame.columnconfigure(3, weight=1)
+        frame.columnconfigure(4, weight=1)
+        frame.rowconfigure(2, weight=1)
+        refresh()
 
     def _open_duel_editor(self, recording_id: str) -> None:
         self._run(
@@ -758,6 +927,11 @@ class RecorderGui:
 
         buttons = ttk.Frame(form)
         buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(
+            buttons,
+            text="タイムライン",
+            command=lambda: self._show_timeline(recording_id),
+        ).pack(side="left", padx=(0, 8))
         ttk.Button(buttons, text="キャンセル", command=dialog.destroy).pack(side="left", padx=(0, 8))
         ttk.Button(buttons, text="保存", style="Primary.TButton", command=save).pack(side="left")
         dialog.grab_set()
@@ -1003,6 +1177,11 @@ def _format_duration(seconds: float) -> str:
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _format_elapsed_ms(elapsed_ms: int) -> str:
+    minutes, seconds = divmod(elapsed_ms / 1000, 60)
+    return f"{int(minutes):02d}:{seconds:05.2f}"
 
 
 def _format_bytes(value: int | None) -> str:

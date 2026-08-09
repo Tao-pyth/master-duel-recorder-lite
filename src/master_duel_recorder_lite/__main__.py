@@ -23,6 +23,15 @@ from .duel_records import (
     DuelRecordRepository,
     DuelRecordValues,
 )
+from .duel_timeline import (
+    ACTORS,
+    EVENT_TYPES,
+    OUTCOMES,
+    STATUSES,
+    DuelEvent,
+    DuelTimelineError,
+    DuelTimelineRepository,
+)
 from .ffmpeg import discover_ffmpeg, enumerate_windows_inputs
 from .game_window import GameWindowMonitor, GameWindowObservation, GameWindowStatus
 from .master_duel_detector import MasterDuelWindowDetector
@@ -237,6 +246,31 @@ def build_parser() -> argparse.ArgumentParser:
     duel_history = duel_subparsers.add_parser("history", help="対戦記録の変更履歴を表示します。")
     duel_history.add_argument("recording_id")
     duel_history.add_argument("--json", action="store_true")
+    timeline_parser = subparsers.add_parser(
+        "timeline",
+        help="録画中の対戦イベントを管理します。",
+        description="対戦開始、ターン切り替え、勝敗、手動マーカーを録画時刻へ関連付けます。",
+    )
+    timeline_subparsers = timeline_parser.add_subparsers(dest="timeline_command", required=True)
+    timeline_list = timeline_subparsers.add_parser("list", help="イベントを時刻順に表示します。")
+    timeline_list.add_argument("recording_id")
+    timeline_list.add_argument("--status", choices=sorted(STATUSES), default=None)
+    timeline_list.add_argument("--type", choices=sorted(EVENT_TYPES), default=None)
+    timeline_list.add_argument("--json", action="store_true")
+    timeline_add = timeline_subparsers.add_parser("add", help="手動イベントを追加します。")
+    timeline_add.add_argument("recording_id")
+    timeline_add.add_argument("--elapsed-ms", type=_nonnegative_integer, required=True)
+    timeline_add.add_argument("--type", choices=sorted(EVENT_TYPES), required=True)
+    timeline_add.add_argument("--actor", choices=sorted(ACTORS), default=None)
+    timeline_add.add_argument("--outcome", choices=sorted(OUTCOMES), default=None)
+    timeline_add.add_argument("--label", default="")
+    timeline_add.add_argument("--json", action="store_true")
+    timeline_confirm = timeline_subparsers.add_parser("confirm", help="候補イベントを確認します。")
+    timeline_confirm.add_argument("event_id")
+    timeline_confirm.add_argument("--json", action="store_true")
+    timeline_reject = timeline_subparsers.add_parser("reject", help="候補イベントを却下します。")
+    timeline_reject.add_argument("event_id")
+    timeline_reject.add_argument("--json", action="store_true")
     recovery_parser = subparsers.add_parser(
         "recovery",
         help="中断録画を検出・検査・修復します。",
@@ -282,7 +316,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     paths = default_runtime_paths(project_root=args.project_root, user_data_dir=args.user_data_dir)
 
-    operational_commands = {"record", "watch", "history", "duel", "recovery", "prepare"}
+    operational_commands = {"record", "watch", "history", "duel", "timeline", "recovery", "prepare"}
     skip_automatic_detection = (
         args.command == "recovery" and getattr(args, "recovery_command", None) == "detect"
     )
@@ -393,6 +427,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "duel":
         return _run_duel_command(paths=paths, args=args)
+
+    if args.command == "timeline":
+        return _run_timeline_command(paths=paths, args=args)
 
     if args.command == "recovery":
         return _run_recovery_command(
@@ -937,6 +974,62 @@ def _print_duel_record(record: object, *, as_json: bool) -> None:
     print(f"notes: {document['notes'] or '-'}")
     print(f"revision: {document['revision']}")
     print(f"updated at: {document['updated_at']}")
+
+
+def _run_timeline_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
+    repository = DuelTimelineRepository.from_runtime_paths(paths)
+    try:
+        if args.timeline_command == "list":
+            events = repository.list(
+                args.recording_id,
+                status=args.status,
+                event_type=args.type,
+            )
+            if args.json:
+                print(json.dumps([event.to_dict() for event in events], ensure_ascii=False, sort_keys=True))
+            elif not events:
+                print("対戦イベントはありません。")
+            else:
+                for event in events:
+                    _print_timeline_event(event, as_json=False)
+            return EXIT_SUCCESS
+        if args.timeline_command == "add":
+            event = repository.add(
+                args.recording_id,
+                elapsed_ms=args.elapsed_ms,
+                event_type=args.type,
+                actor=args.actor,
+                outcome=args.outcome,
+                label=args.label,
+                source="manual",
+                status="confirmed",
+            )
+            _print_timeline_event(event, as_json=args.json)
+            return EXIT_SUCCESS
+        if args.timeline_command == "confirm":
+            event = repository.confirm(args.event_id)
+            _print_timeline_event(event, as_json=args.json)
+            return EXIT_SUCCESS
+        if args.timeline_command == "reject":
+            event = repository.reject(args.event_id)
+            _print_timeline_event(event, as_json=args.json)
+            return EXIT_SUCCESS
+    except (DuelTimelineError, ValueError) as exc:
+        _print_cli_error("E_TIMELINE", str(exc), "録画ID、イベント時刻、状態を確認してください。")
+        return EXIT_ATTENTION
+    raise RuntimeError(f"未対応のtimelineコマンドです: {args.timeline_command}")
+
+
+def _print_timeline_event(event: DuelEvent, *, as_json: bool) -> None:
+    document = event.to_dict()
+    if as_json:
+        print(json.dumps(document, ensure_ascii=False, sort_keys=True))
+        return
+    details = event.label or event.outcome or event.actor or "-"
+    print(
+        f"{event.elapsed_ms:>8}ms {event.event_type:<12} "
+        f"status={event.status} source={event.source} detail={details} id={event.event_id}"
+    )
 
 
 def _run_recovery_command(

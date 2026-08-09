@@ -23,7 +23,7 @@ class CliContractTest(unittest.TestCase):
     def test_root_help_lists_core_commands_and_safety_notice(self) -> None:
         help_text = build_parser().format_help()
 
-        for command in ("config", "doctor", "status", "record", "watch", "history", "duel", "recovery", "prepare"):
+        for command in ("config", "doctor", "status", "record", "watch", "history", "duel", "timeline", "recovery", "prepare"):
             self.assertIn(command, help_text)
         self.assertIn("安全確認", help_text)
 

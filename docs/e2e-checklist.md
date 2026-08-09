@@ -9,7 +9,7 @@
 
 ## 手順
 
-1. `python -m pip install -e ".[build,dev]"`が成功し、`python -m master_duel_recorder_lite --version`が`0.14.0`を表示する。
+1. `python -m pip install -e ".[build,dev]"`が成功し、`python -m master_duel_recorder_lite --version`が`0.15.0`を表示する。
 2. `config init`が`app.toml`を作成し、2回目は終了コード4で既存設定を保持する。
 3. `config set`、`config get`、`config show --json`で値とJSONを確認し、不正値で元設定が変わらないことを確認する。
 4. `doctor`と`list-inputs`で画面入力、任意の音声入力、エンコーダー、保存先を確認する。
@@ -19,9 +19,10 @@
 8. 中断状態がある場合は`recovery list`、`inspect`、`repair --dry-run`の順で確認し、元録画が不変であることを確認する。
 9. 完了済み録画IDを`prepare enqueue`へ渡し、`prepare run`でMP4とマニフェストを生成する。
 10. `prepare show`でcompleted、privateまたは明示したunlisted、相対出力パスを確認する。
-11. 録画、復旧、準備の実FFmpegスモークと全単体テストを実行する。
-12. `python scripts/build_windows_exe.py`、CLI・GUIのスモークが成功し、両方のPEバージョンが`0.14.0`であることを確認する。
-13. `v0.14.0`のGitHub ReleaseからCLI・GUI EXEとSHA-256を再取得し、ハッシュ一致、CLIの`--version`、GUI起動を確認する。
+11. 録画IDへ対戦記録と手動タイムラインイベントを追加し、GUIとCLIから再取得・候補遷移できることを確認する。
+12. 録画、復旧、準備の実FFmpegスモークと全単体テストを実行する。
+13. `python scripts/build_windows_exe.py`、CLI・GUIのスモークが成功し、両方のPEバージョンが`0.15.0`であることを確認する。
+14. `v0.15.0`のGitHub ReleaseからCLI・GUI EXEとSHA-256を再取得し、ハッシュ一致、CLIの`--version`、GUI起動を確認する。
 
 ## 自動検証との対応
 
