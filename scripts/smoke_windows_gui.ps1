@@ -32,7 +32,7 @@ try {
     }
     $result = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
     $requiredWidgets = @(
-        "activity", "ffmpeg_setup", "history_diagnostic", "history_duel", "history_play", "history_reveal", "history_table", "history_timeline", "prepare_table", "visual_status",
+        "activity", "catalog_table", "ffmpeg_setup", "history_delete", "history_diagnostic", "history_duel", "history_play", "history_reveal", "history_table", "history_timeline", "prepare_table", "visual_status",
         "record_start", "record_stop", "recovery_table", "settings_form", "target_selector",
         "watch_toggle"
     )

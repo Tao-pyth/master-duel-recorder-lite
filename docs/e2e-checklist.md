@@ -9,7 +9,7 @@
 
 ## 手順
 
-1. `python -m pip install -e ".[build,dev]"`が成功し、`python -m master_duel_recorder_lite --version`が`0.16.8`を表示する。
+1. `python -m pip install -e ".[build,dev]"`が成功し、`python -m master_duel_recorder_lite --version`が`0.16.9`を表示する。
 2. `config init`が`app.toml`を作成し、2回目は終了コード4で既存設定を保持する。
 3. `config set`、`config get`、`config show --json`で値とJSONを確認し、不正値で元設定が変わらないことを確認する。
 4. `doctor`と`list-inputs`で画面入力、任意の音声入力、エンコーダー、保存先を確認する。
@@ -24,8 +24,11 @@
 13. 自動監視中にメニュー表示だけでは録画せず、開始演出を見逃した場合と対戦途中から開始した場合も安定盤面3フレームの合意後に録画し、開始候補が0ミリ秒へ保存されることを確認する。
 14. 録画、復旧、準備の実FFmpegスモークと全単体テストを実行する。
 15. FFmpegを利用できない一時環境でGUIセットアップが表示され、キャンセル時は通信・ファイル作成なし、許可時はSHA-256照合後にLocalAppData配下へ導入されることを確認する。
-16. `python scripts/build_windows_exe.py`、CLI・GUIのスモークが成功し、両方のPEバージョンが`0.16.8`、EXE隣接`user_data/`なし、既定先がLocalAppData配下であることを確認する。
-17. `v0.16.8`のGitHub ReleaseからCLI・GUI EXEとSHA-256を再取得し、ハッシュ一致、CLIの`--version`、GUI起動を確認する。
+16. GUIの対戦記録で日本語選択、デッキ名・タグの自由入力と再選択、前回値引継ぎ、既存記録の固有値維持を確認する。
+17. サイドメニューの「デッキ名・タグ」で追加・名称変更・削除し、過去の対戦記録が変わらないことを確認する。
+18. 検証用録画履歴を削除し、元録画、復旧成果物、対戦記録、タイムラインが消え、履歴と復旧一覧から除外されることを確認する。
+19. `python scripts/build_windows_exe.py`、CLI・GUIのスモークが成功し、両方のPEバージョンが`0.16.9`、EXE隣接`user_data/`なし、既定先がLocalAppData配下であることを確認する。
+20. `v0.16.9`のGitHub ReleaseからCLI・GUI EXEとSHA-256を再取得し、ハッシュ一致、CLIの`--version`、GUI起動を確認する。
 
 ## 自動検証との対応
 
@@ -37,7 +40,9 @@
 - `tests/test_visual_detection.py`: 16:9正規化、合成BMP特徴、3イベント、時間合意、状態遷移
 - `tests/test_visual_worker.py`: 最大2fps、単一処理、遅延破棄、例外分離、正常終了
 - `tests/test_recorder.py`: Master Duel録画ライフサイクルとcandidate保存、判定失敗時の録画継続
+- `tests/test_duel_catalog.py`: デッキ名・タグ辞書の追加・変更・削除と前回値永続化
+- `tests/test_recording_history.py`: 元録画・復旧成果物・関連SQLite行の一括削除と失敗時保全
 
 ## V1.0.0判断
 
-V0.16.8までの中核機能と検証証拠が揃っても、自動でV1.0.0へ更新しません。既知制約を確認し、ユーザーが明示的に「V1.0.0に変更せよ」と依頼するまで`0.x`を維持します。
+V0.16.9までの中核機能と検証証拠が揃っても、自動でV1.0.0へ更新しません。既知制約を確認し、ユーザーが明示的に「V1.0.0に変更せよ」と依頼するまで`0.x`を維持します。

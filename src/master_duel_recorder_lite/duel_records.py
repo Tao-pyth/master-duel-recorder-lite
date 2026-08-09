@@ -17,6 +17,30 @@ RESULTS = {"win", "loss", "draw", "unknown"}
 PLAY_ORDERS = {"first", "second", "unknown"}
 DUEL_TYPES = {"ranked", "event", "room", "solo", "other"}
 SOURCES = {"user", "system", "detected"}
+DUEL_CHOICE_LABELS = {
+    "status": {
+        "draft": "編集中",
+        "confirmed": "確認済み",
+    },
+    "result": {
+        "unknown": "未設定",
+        "win": "勝ち",
+        "loss": "負け",
+        "draw": "引き分け",
+    },
+    "play_order": {
+        "unknown": "未設定",
+        "first": "先攻",
+        "second": "後攻",
+    },
+    "duel_type": {
+        "ranked": "ランク戦",
+        "event": "イベント",
+        "room": "ルーム戦",
+        "solo": "ソロモード",
+        "other": "その他",
+    },
+}
 MAX_DECK_LENGTH = 100
 MAX_NOTES_LENGTH = 4000
 MAX_TAG_LENGTH = 40
@@ -297,6 +321,31 @@ class DuelRecordRepository:
             "SELECT tag FROM duel_record_tags WHERE recording_id = ? ORDER BY rowid", (recording_id,)
         ).fetchall()
         return tuple(row["tag"] for row in rows)
+
+
+def duel_choice_labels(field: str) -> tuple[str, ...]:
+    try:
+        return tuple(DUEL_CHOICE_LABELS[field].values())
+    except KeyError as exc:
+        raise ValueError(f"未対応の対戦記録項目です: {field}") from exc
+
+
+def duel_choice_label(field: str, value: str) -> str:
+    try:
+        return DUEL_CHOICE_LABELS[field][value]
+    except KeyError as exc:
+        raise ValueError(f"未対応の対戦記録値です: {field}={value}") from exc
+
+
+def duel_choice_value(field: str, label: str) -> str:
+    try:
+        labels = DUEL_CHOICE_LABELS[field]
+    except KeyError as exc:
+        raise ValueError(f"未対応の対戦記録項目です: {field}") from exc
+    for value, candidate in labels.items():
+        if candidate == label:
+            return value
+    raise ValueError(f"未対応の対戦記録表示名です: {field}={label}")
 
 
 def _record(row: sqlite3.Row, tags: tuple[str, ...]) -> DuelRecord:

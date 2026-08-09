@@ -13,9 +13,20 @@ from typing import Callable, TypeVar
 import webbrowser
 
 from . import __version__
-from .application import ApplicationEvent, RecorderApplicationService, RecordingSnapshot
+from .application import (
+    ApplicationEvent,
+    DuelEditorData,
+    RecorderApplicationService,
+    RecordingSnapshot,
+)
 from .capture_targets import CaptureTarget
-from .duel_records import DuelRecord, DuelRecordValues
+from .duel_catalog import DuelCatalogEntry
+from .duel_records import (
+    DuelRecordValues,
+    duel_choice_label,
+    duel_choice_labels,
+    duel_choice_value,
+)
 from .duel_timeline import DuelEvent
 from .ffmpeg_setup import (
     FFMPEG_DOWNLOAD_URL,
@@ -121,6 +132,7 @@ class RecorderGui:
         self.nav_buttons: dict[str, tk.Button] = {}
         self.widgets: dict[str, tk.Widget] = {}
         self.targets_by_label: dict[str, CaptureTarget] = {}
+        self.catalog_entries_by_id: dict[str, DuelCatalogEntry] = {}
         self.current_page = "record"
         self.watch_events: queue.Queue[ApplicationEvent] = queue.Queue()
         self.busy_operations = 0
@@ -133,6 +145,7 @@ class RecorderGui:
         self._build_shell()
         self._build_record_page()
         self._build_history_page()
+        self._build_catalog_page()
         self._build_recovery_page()
         self._build_prepare_page()
         self._build_settings_page()
@@ -220,6 +233,7 @@ class RecorderGui:
         for key, label in (
             ("record", "録画"),
             ("history", "録画履歴"),
+            ("catalog", "デッキ名・タグ"),
             ("recovery", "復旧"),
             ("prepare", "MP4準備"),
             ("settings", "設定"),
@@ -360,6 +374,13 @@ class RecorderGui:
         ttk.Label(toolbar, text="録画履歴", style="Heading.TLabel").pack(side="left")
         ttk.Button(toolbar, text="整合性確認", command=self.check_history).pack(side="right")
         ttk.Button(toolbar, text="更新", command=self.refresh_history).pack(side="right", padx=(0, 8))
+        self.history_delete_button = ttk.Button(
+            toolbar,
+            text="削除",
+            command=self.delete_selected_history,
+            state="disabled",
+        )
+        self.history_delete_button.pack(side="right", padx=(0, 8))
         self.history_reveal_button = ttk.Button(
             toolbar,
             text="保存場所を開く",
@@ -418,6 +439,69 @@ class RecorderGui:
         self.widgets["history_diagnostic"] = self.history_diagnostic_button
         self.widgets["history_duel"] = self.history_duel_button
         self.widgets["history_timeline"] = self.history_timeline_button
+        self.widgets["history_delete"] = self.history_delete_button
+
+    def _build_catalog_page(self) -> None:
+        page = self._new_page("catalog")
+        toolbar = self._surface(page, padding=(14, 10))
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Label(toolbar, text="デッキ名・タグ", style="Heading.TLabel").pack(side="left")
+        ttk.Button(toolbar, text="更新", command=self.refresh_catalog).pack(side="right")
+
+        editor = self._surface(page, padding=(14, 12))
+        editor.pack(fill="x", pady=(0, 10))
+        self.catalog_kind_var = tk.StringVar(value="デッキ名")
+        self.catalog_name_var = tk.StringVar()
+        ttk.Label(editor, text="種類").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.catalog_kind_combo = ttk.Combobox(
+            editor,
+            textvariable=self.catalog_kind_var,
+            values=("デッキ名", "タグ"),
+            state="readonly",
+            width=14,
+        )
+        self.catalog_kind_combo.grid(row=0, column=1, sticky="w", padx=(0, 12))
+        ttk.Label(editor, text="名前").grid(row=0, column=2, sticky="w", padx=(0, 8))
+        ttk.Entry(editor, textvariable=self.catalog_name_var).grid(
+            row=0, column=3, sticky="ew", padx=(0, 12)
+        )
+        ttk.Button(
+            editor,
+            text="追加",
+            style="Primary.TButton",
+            command=self.add_catalog_entry,
+        ).grid(row=0, column=4, padx=(0, 8))
+        self.catalog_rename_button = ttk.Button(
+            editor,
+            text="名前を変更",
+            command=self.rename_catalog_entry,
+            state="disabled",
+        )
+        self.catalog_rename_button.grid(row=0, column=5, padx=(0, 8))
+        self.catalog_delete_button = ttk.Button(
+            editor,
+            text="削除",
+            command=self.delete_catalog_entry,
+            state="disabled",
+        )
+        self.catalog_delete_button.grid(row=0, column=6)
+        editor.columnconfigure(3, weight=1)
+
+        panel = self._surface(page, padding=(0, 0))
+        panel.pack(fill="both", expand=True)
+        self.catalog_tree = ttk.Treeview(
+            panel,
+            columns=("kind", "name"),
+            show="headings",
+            selectmode="browse",
+        )
+        self.catalog_tree.heading("kind", text="種類")
+        self.catalog_tree.heading("name", text="名前")
+        self.catalog_tree.column("kind", width=140, stretch=False)
+        self.catalog_tree.column("name", width=600, stretch=True)
+        self.catalog_tree.pack(fill="both", expand=True)
+        self.catalog_tree.bind("<<TreeviewSelect>>", self._catalog_selection_changed)
+        self.widgets["catalog_table"] = self.catalog_tree
 
     def _build_recovery_page(self) -> None:
         page = self._new_page("recovery")
@@ -563,6 +647,7 @@ class RecorderGui:
         titles = {
             "record": "録画",
             "history": "録画履歴",
+            "catalog": "デッキ名・タグ",
             "recovery": "復旧",
             "prepare": "MP4準備",
             "settings": "設定",
@@ -576,6 +661,8 @@ class RecorderGui:
         self.current_page = key
         if key == "history":
             self.refresh_history()
+        elif key == "catalog":
+            self.refresh_catalog()
         elif key == "recovery":
             self.refresh_recovery()
         elif key == "prepare":
@@ -587,6 +674,87 @@ class RecorderGui:
         self.refresh_targets()
         self.run_diagnosis()
         self.refresh_history()
+
+    def refresh_catalog(self) -> None:
+        if self.smoke_mode:
+            return
+        self._run(self.service.list_duel_catalog, self._catalog_loaded)
+
+    def _catalog_loaded(self, entries: tuple[DuelCatalogEntry, ...]) -> None:
+        self.catalog_entries_by_id = {str(entry.entry_id): entry for entry in entries}
+        self._clear_tree(self.catalog_tree)
+        for entry in entries:
+            kind = "デッキ名" if entry.kind == "deck" else "タグ"
+            self.catalog_tree.insert(
+                "",
+                "end",
+                iid=str(entry.entry_id),
+                values=(kind, entry.name),
+            )
+        self._catalog_selection_changed()
+
+    def _catalog_selection_changed(self, _event: object | None = None) -> None:
+        selection = self.catalog_tree.selection()
+        state = "normal" if selection else "disabled"
+        self.catalog_rename_button.configure(state=state)
+        self.catalog_delete_button.configure(state=state)
+        if not selection:
+            return
+        entry = self.catalog_entries_by_id.get(str(selection[0]))
+        if entry is None:
+            return
+        self.catalog_kind_var.set("デッキ名" if entry.kind == "deck" else "タグ")
+        self.catalog_name_var.set(entry.name)
+
+    def add_catalog_entry(self) -> None:
+        kind = "deck" if self.catalog_kind_var.get() == "デッキ名" else "tag"
+        name = self.catalog_name_var.get()
+        self._run(
+            lambda: self.service.add_duel_catalog_entry(kind, name),
+            lambda entry: (
+                self._activity(f"{self.catalog_kind_var.get()}を追加しました: {entry.name}"),
+                self.catalog_name_var.set(""),
+                self.refresh_catalog(),
+            ),
+        )
+
+    def rename_catalog_entry(self) -> None:
+        selection = self.catalog_tree.selection()
+        if not selection:
+            return
+        entry = self.catalog_entries_by_id.get(str(selection[0]))
+        if entry is None:
+            return
+        name = self.catalog_name_var.get()
+        self._run(
+            lambda: self.service.rename_duel_catalog_entry(entry.entry_id, name),
+            lambda renamed: (
+                self._activity(f"名前を変更しました: {renamed.name}"),
+                self.refresh_catalog(),
+            ),
+        )
+
+    def delete_catalog_entry(self) -> None:
+        selection = self.catalog_tree.selection()
+        if not selection:
+            return
+        entry = self.catalog_entries_by_id.get(str(selection[0]))
+        if entry is None:
+            return
+        if not messagebox.askyesno(
+            "辞書から削除",
+            f"「{entry.name}」を選択肢から削除しますか？\n過去の対戦記録は変更されません。",
+            parent=self.root,
+        ):
+            return
+        self._run(
+            lambda: self.service.delete_duel_catalog_entry(entry.entry_id),
+            lambda deleted: (
+                self._activity(f"選択肢から削除しました: {deleted.name}"),
+                self.catalog_name_var.set(""),
+                self.refresh_catalog(),
+            ),
+        )
 
     def refresh_targets(self) -> None:
         self._run(self.service.list_capture_targets, self._targets_loaded)
@@ -886,6 +1054,7 @@ class RecorderGui:
         self.history_diagnostic_button.configure(state=state)
         self.history_duel_button.configure(state=state)
         self.history_timeline_button.configure(state=state)
+        self.history_delete_button.configure(state=state)
 
     def _history_double_clicked(self, event: tk.Event[tk.Misc]) -> None:
         recording_id = self.history_tree.identify_row(event.y)
@@ -912,6 +1081,32 @@ class RecorderGui:
         self._run(
             lambda: self.service.reveal_recording(recording_id),
             lambda reference: self._recording_opened("保存場所を開きました", reference),
+        )
+
+    def delete_selected_history(self) -> None:
+        selection = self.history_tree.selection()
+        if not selection:
+            return
+        recording_id = str(selection[0])
+        if not messagebox.askyesno(
+            "録画履歴を削除",
+            "次の録画を完全に削除します。\n\n"
+            f"録画ID: {recording_id}\n\n"
+            "録画ファイル、復旧成果物、対戦記録、タイムラインも削除されます。"
+            "この操作は元に戻せません。",
+            parent=self.root,
+        ):
+            return
+        self._run(
+            lambda: self.service.delete_history(recording_id),
+            lambda result: (
+                self._activity(
+                    f"録画履歴を削除しました: {result.recording_id} "
+                    f"/ ファイル {len(result.deleted_files)}件"
+                ),
+                self.refresh_history(),
+                self.refresh_recovery(),
+            ),
         )
 
     def show_selected_history_diagnostic(self) -> None:
@@ -1089,16 +1284,17 @@ class RecorderGui:
 
     def _open_duel_editor(self, recording_id: str) -> None:
         self._run(
-            lambda: self.service.get_duel_record(recording_id),
-            lambda record: self._show_duel_editor(recording_id, record),
+            lambda: self.service.get_duel_editor_data(recording_id),
+            lambda data: self._show_duel_editor(recording_id, data),
         )
 
-    def _show_duel_editor(self, recording_id: str, record: DuelRecord | None) -> None:
-        values = record.values if record is not None else DuelRecordValues()
-        revision = record.revision if record is not None else 0
+    def _show_duel_editor(self, recording_id: str, data: DuelEditorData) -> None:
+        values = data.values
+        revision = data.record.revision if data.record is not None else 0
         dialog = tk.Toplevel(self.root)
         dialog.title("対戦記録")
-        dialog.geometry("680x620")
+        dialog.geometry("720x700")
+        dialog.minsize(620, 620)
         dialog.transient(self.root)
         form = ttk.Frame(dialog, padding=18)
         form.pack(fill="both", expand=True)
@@ -1106,31 +1302,74 @@ class RecorderGui:
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
         )
         fields = (
-            ("状態", "status", ("draft", "confirmed"), values.status),
-            ("勝敗", "result", ("unknown", "win", "loss", "draw"), values.result),
-            ("先後", "play_order", ("unknown", "first", "second"), values.play_order),
-            ("対戦種別", "duel_type", ("ranked", "event", "room", "solo", "other"), values.duel_type),
+            ("状態", "status", values.status),
+            ("勝敗", "result", values.result),
+            ("先後", "play_order", values.play_order),
+            ("対戦種別", "duel_type", values.duel_type),
         )
         variables: dict[str, tk.StringVar] = {}
         row = 1
-        for label, key, choices, current in fields:
+        for label, key, current in fields:
             ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=5)
-            variable = tk.StringVar(value=current)
+            variable = tk.StringVar(value=duel_choice_label(key, current))
             variables[key] = variable
-            ttk.Combobox(form, textvariable=variable, values=choices, state="readonly").grid(
-                row=row, column=1, sticky="ew", pady=5
-            )
+            ttk.Combobox(
+                form,
+                textvariable=variable,
+                values=duel_choice_labels(key),
+                state="readonly",
+            ).grid(row=row, column=1, sticky="ew", pady=5)
             row += 1
+        deck_names = tuple(entry.name for entry in data.decks)
         for label, key, current in (
             ("自分デッキ", "own_deck", values.own_deck),
             ("相手デッキ", "opponent_deck", values.opponent_deck),
-            ("タグ（カンマ区切り）", "tags", ", ".join(values.tags)),
         ):
             ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=5)
             variable = tk.StringVar(value=current)
             variables[key] = variable
-            ttk.Entry(form, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=5)
+            ttk.Combobox(
+                form,
+                textvariable=variable,
+                values=deck_names,
+                state="normal",
+            ).grid(row=row, column=1, sticky="ew", pady=5)
             row += 1
+        ttk.Label(form, text="タグ").grid(row=row, column=0, sticky="nw", pady=5)
+        tag_panel = ttk.Frame(form)
+        tag_panel.grid(row=row, column=1, sticky="nsew", pady=5)
+        tag_var = tk.StringVar()
+        tag_combo = ttk.Combobox(
+            tag_panel,
+            textvariable=tag_var,
+            values=tuple(entry.name for entry in data.tags),
+            state="normal",
+        )
+        tag_combo.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        tag_list = tk.Listbox(tag_panel, height=5, exportselection=False)
+        tag_list.grid(row=1, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
+        for tag in values.tags:
+            tag_list.insert("end", tag)
+
+        def add_tag() -> None:
+            tag = tag_var.get().strip()
+            if not tag:
+                return
+            current = tuple(str(tag_list.get(index)) for index in range(tag_list.size()))
+            if tag.casefold() not in {item.casefold() for item in current}:
+                tag_list.insert("end", tag)
+            tag_var.set("")
+
+        def remove_tag() -> None:
+            selection = tag_list.curselection()
+            if selection:
+                tag_list.delete(selection[0])
+
+        ttk.Button(tag_panel, text="追加", command=add_tag).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(tag_panel, text="選択を外す", command=remove_tag).grid(row=0, column=2)
+        tag_panel.columnconfigure(0, weight=1)
+        tag_panel.rowconfigure(1, weight=1)
+        row += 1
         ttk.Label(form, text="メモ").grid(row=row, column=0, sticky="nw", pady=5)
         notes = tk.Text(form, height=10, wrap="word")
         notes.insert("1.0", values.notes)
@@ -1139,14 +1378,15 @@ class RecorderGui:
         form.rowconfigure(row, weight=1)
 
         def save() -> None:
-            tags = tuple(item.strip() for item in variables["tags"].get().split(",") if item.strip())
+            add_tag()
+            tags = tuple(str(tag_list.get(index)) for index in range(tag_list.size()))
             updated = DuelRecordValues(
-                status=variables["status"].get(),
-                result=variables["result"].get(),
-                play_order=variables["play_order"].get(),
+                status=duel_choice_value("status", variables["status"].get()),
+                result=duel_choice_value("result", variables["result"].get()),
+                play_order=duel_choice_value("play_order", variables["play_order"].get()),
                 own_deck=variables["own_deck"].get(),
                 opponent_deck=variables["opponent_deck"].get(),
-                duel_type=variables["duel_type"].get(),
+                duel_type=duel_choice_value("duel_type", variables["duel_type"].get()),
                 tags=tags,
                 notes=notes.get("1.0", "end-1c"),
             )

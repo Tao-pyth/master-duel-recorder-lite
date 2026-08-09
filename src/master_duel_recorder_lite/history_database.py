@@ -8,7 +8,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -193,11 +193,72 @@ def _migrate_to_v4(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v5(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE duel_catalog_entries (
+            entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL CHECK (kind IN ('deck', 'tag')),
+            name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+            normalized_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (kind, normalized_name)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX duel_catalog_kind_name_idx "
+        "ON duel_catalog_entries(kind, normalized_name, entry_id)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_editor_preferences (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            duel_type TEXT NOT NULL CHECK (
+                duel_type IN ('ranked', 'event', 'room', 'solo', 'other')
+            ),
+            own_deck TEXT NOT NULL DEFAULT '',
+            opponent_deck TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO duel_catalog_entries (
+            kind, name, normalized_name, created_at, updated_at
+        )
+        SELECT 'deck', name, lower(name), created_at, updated_at
+        FROM (
+            SELECT trim(own_deck) AS name, created_at, updated_at
+            FROM duel_records WHERE length(trim(own_deck)) > 0
+            UNION
+            SELECT trim(opponent_deck) AS name, created_at, updated_at
+            FROM duel_records WHERE length(trim(opponent_deck)) > 0
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO duel_catalog_entries (
+            kind, name, normalized_name, created_at, updated_at
+        )
+        SELECT 'tag', trim(tags.tag), lower(trim(tags.tag)), records.created_at, records.updated_at
+        FROM duel_record_tags AS tags
+        JOIN duel_records AS records ON records.recording_id = tags.recording_id
+        WHERE length(trim(tags.tag)) > 0
+        """
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
     3: _migrate_to_v3,
     4: _migrate_to_v4,
+    5: _migrate_to_v5,
 }
 
 
@@ -342,6 +403,18 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         event_columns
     ):
         raise HistoryDatabaseError("録画履歴DBに必須のduel_eventsスキーマがありません")
+    catalog_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(duel_catalog_entries)")
+    }
+    if not {"entry_id", "kind", "name", "normalized_name"}.issubset(catalog_columns):
+        raise HistoryDatabaseError("録画履歴DBに必須のduel_catalog_entriesスキーマがありません")
+    preference_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(duel_editor_preferences)")
+    }
+    if not {"singleton", "duel_type", "own_deck", "opponent_deck", "tags_json"}.issubset(
+        preference_columns
+    ):
+        raise HistoryDatabaseError("録画履歴DBに必須のduel_editor_preferencesスキーマがありません")
     quick_check = connection.execute("PRAGMA quick_check").fetchone()
     if quick_check is None or quick_check[0] != "ok":
         detail = quick_check[0] if quick_check else "結果なし"

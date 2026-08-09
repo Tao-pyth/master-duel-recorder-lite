@@ -10,6 +10,7 @@ from master_duel_recorder_lite.history_database import (
     _migrate_to_v1,
     _migrate_to_v2,
     _migrate_to_v3,
+    _migrate_to_v4,
     initialize_history_database,
 )
 
@@ -80,6 +81,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                         2: lambda _connection: None,
                         3: lambda _connection: None,
                         4: fail_after_change,
+                        5: lambda _connection: None,
                     },
                 )
 
@@ -238,11 +240,58 @@ class HistoryDatabaseTest(unittest.TestCase):
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'duel_events'"
                 ).fetchone()
 
-        self.assertEqual(info.version, 4)
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(result, "win")
         self.assertIsNotNone(event_table)
         self.assertEqual(backup_version, 3)
         self.assertIsNone(backup_event_table)
+
+    def test_version_four_imports_existing_decks_and_tags_into_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE schema_version "
+                    "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+                )
+                connection.execute("INSERT INTO schema_version VALUES (1, 4)")
+                _migrate_to_v1(connection)
+                _migrate_to_v2(connection)
+                _migrate_to_v3(connection)
+                _migrate_to_v4(connection)
+                connection.execute(
+                    """
+                    INSERT INTO recordings (
+                        recording_id, state, source, output_path, container,
+                        created_at, diagnostics_json, updated_at
+                    ) VALUES ('recording', 'completed', 'manual', 'recording.mkv', 'mkv',
+                              '2026-08-09T00:00:00+00:00', '[]',
+                              '2026-08-09T00:00:00+00:00')
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO duel_records (
+                        recording_id, status, result, play_order, own_deck,
+                        opponent_deck, duel_type, notes, revision, created_at, updated_at
+                    ) VALUES ('recording', 'draft', 'unknown', 'unknown', '青眼',
+                              '烙印', 'ranked', '', 1,
+                              '2026-08-09T00:00:00+00:00',
+                              '2026-08-09T00:00:00+00:00')
+                    """
+                )
+                connection.execute(
+                    "INSERT INTO duel_record_tags VALUES ('recording', '大会', '大会')"
+                )
+
+            info = initialize_history_database(path)
+            with closing(sqlite3.connect(path)) as connection:
+                entries = connection.execute(
+                    "SELECT kind, name FROM duel_catalog_entries ORDER BY kind, name"
+                ).fetchall()
+
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
+        self.assertEqual(entries, [("deck", "烙印"), ("deck", "青眼"), ("tag", "大会")])
 
 
 if __name__ == "__main__":

@@ -13,15 +13,69 @@ from master_duel_recorder_lite.application import (
 )
 from master_duel_recorder_lite.capture_targets import CaptureInput, CaptureMode, CaptureTarget
 from master_duel_recorder_lite.config import AppConfig
+from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.ffmpeg import FfmpegVersion
 from master_duel_recorder_lite.ffmpeg_setup import FfmpegInstallResult
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
+from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
 from master_duel_recorder_lite.visual_detection import DetectionCandidate
 from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
+    def test_new_duel_editor_inherits_last_values_but_existing_record_does_not(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "user_data"
+            service = RecorderApplicationService(user_data_dir=root)
+            history = RecordingHistoryRepository.from_runtime_paths(service.paths)
+            for recording_id in ("first", "next", "existing"):
+                history.register_starting(
+                    recording_id=recording_id,
+                    output_path=service.paths.recordings / f"{recording_id}.mkv",
+                    container="mkv",
+                    source="manual",
+                )
+            previous = DuelRecordValues(
+                duel_type="ranked",
+                own_deck="青眼",
+                opponent_deck="烙印",
+                tags=("大会",),
+            )
+            service.save_duel_record(
+                "existing",
+                DuelRecordValues(
+                    duel_type="room",
+                    own_deck="閃刀姫",
+                    opponent_deck="ラビュリンス",
+                    tags=("友人戦",),
+                ),
+                expected_revision=0,
+            )
+            service.save_duel_record("first", previous, expected_revision=0)
+
+            new_data = service.get_duel_editor_data("next")
+            existing_data = service.get_duel_editor_data("existing")
+
+        self.assertIsNone(new_data.record)
+        self.assertEqual(new_data.values.duel_type, "ranked")
+        self.assertEqual(new_data.values.own_deck, "青眼")
+        self.assertEqual(new_data.values.opponent_deck, "烙印")
+        self.assertEqual(new_data.values.tags, ("大会",))
+        self.assertIsNotNone(existing_data.record)
+        self.assertEqual(existing_data.values.own_deck, "閃刀姫")
+        self.assertEqual(
+            {entry.name for entry in new_data.decks},
+            {"青眼", "烙印", "閃刀姫", "ラビュリンス"},
+        )
+
+    def test_history_delete_is_rejected_while_manual_start_is_reserved(self) -> None:
+        service = RecorderApplicationService()
+        service._manual_starting = True
+
+        with self.assertRaisesRegex(ApplicationOperationError, "実行中"):
+            service.delete_history("recording")
+
     def test_manual_start_reservation_is_released_after_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = RecorderApplicationService(

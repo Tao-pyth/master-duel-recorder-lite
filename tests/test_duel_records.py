@@ -9,12 +9,29 @@ from master_duel_recorder_lite.duel_records import (
     DuelRecordError,
     DuelRecordRepository,
     DuelRecordValues,
+    duel_choice_label,
+    duel_choice_labels,
+    duel_choice_value,
 )
-from master_duel_recorder_lite.history_database import initialize_history_database
+from master_duel_recorder_lite.history_database import (
+    CURRENT_SCHEMA_VERSION,
+    initialize_history_database,
+)
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 
 
 class DuelRecordRepositoryTest(unittest.TestCase):
+    def test_choice_labels_round_trip_between_internal_and_japanese_values(self) -> None:
+        self.assertEqual(duel_choice_label("status", "draft"), "編集中")
+        self.assertEqual(duel_choice_label("result", "win"), "勝ち")
+        self.assertEqual(duel_choice_label("play_order", "first"), "先攻")
+        self.assertEqual(duel_choice_label("duel_type", "ranked"), "ランク戦")
+        self.assertEqual(duel_choice_value("result", "負け"), "loss")
+        self.assertEqual(
+            duel_choice_labels("play_order"),
+            ("未設定", "先攻", "後攻"),
+        )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
@@ -158,7 +175,7 @@ class DuelRecordMigrationTest(unittest.TestCase):
                     )
                 }
 
-        self.assertEqual(info.version, 4)
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertTrue(
             {"duel_records", "duel_record_tags", "duel_record_changes"}.issubset(tables)
         )

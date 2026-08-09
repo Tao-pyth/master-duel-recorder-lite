@@ -1,8 +1,13 @@
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from master_duel_recorder_lite.duel_records import DuelRecordRepository, DuelRecordValues
+from master_duel_recorder_lite.duel_timeline import DuelTimelineRepository
 from master_duel_recorder_lite.recording_history import (
     ConsistencyIssueKind,
     HistoryQuery,
@@ -226,6 +231,126 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
             },
         )
         self.assertTrue(untracked_preserved)
+
+    def test_delete_removes_files_recovery_and_all_recording_relations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            recordings = root / "recordings"
+            output = recordings / "partial.mkv"
+            recovered = recordings / "recovered.mp4"
+            recordings.mkdir()
+            output.write_bytes(b"partial")
+            recovered.write_bytes(b"recovered")
+            repository = self.make_repository(root)
+            repository.register_starting(
+                recording_id="delete-me",
+                output_path=output,
+                container="mkv",
+                source="automatic",
+                created_at=BASE_TIME,
+            )
+            repository.mark_recording("delete-me", started_at=BASE_TIME)
+            classification = classify_recording_failure(
+                error="interrupted",
+                returncode=None,
+                output_exists=True,
+                output_size=7,
+                interrupted=True,
+            )
+            repository.mark_interrupted(
+                "delete-me",
+                classification=classification,
+                ended_at=BASE_TIME + timedelta(seconds=10),
+                size_bytes=7,
+            )
+            repository.add_recovery_artifact(
+                artifact_id="artifact",
+                recording_id="delete-me",
+                output_path=recovered,
+                kind="recovered",
+                status="valid",
+                size_bytes=9,
+                diagnostic=None,
+            )
+            DuelRecordRepository(repository.database_path).save(
+                "delete-me",
+                DuelRecordValues(own_deck="青眼", tags=("大会",)),
+                expected_revision=0,
+            )
+            DuelTimelineRepository(repository.database_path).add(
+                "delete-me",
+                elapsed_ms=1000,
+                event_type="marker",
+                label="確認",
+            )
+
+            result = repository.delete("delete-me")
+
+            with closing(sqlite3.connect(repository.database_path)) as connection:
+                counts = {
+                    table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    for table in (
+                        "recordings",
+                        "recovery_artifacts",
+                        "duel_records",
+                        "duel_record_tags",
+                        "duel_record_changes",
+                        "duel_events",
+                    )
+                }
+
+        self.assertEqual(result.recording_id, "delete-me")
+        self.assertEqual(set(result.deleted_files), {output, recovered})
+        self.assertFalse(output.exists())
+        self.assertFalse(recovered.exists())
+        self.assertIsNone(repository.get("delete-me"))
+        self.assertEqual(repository.recovery_entries(), ())
+        self.assertEqual(set(counts.values()), {0})
+
+    def test_delete_with_missing_file_still_removes_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            output = root / "recordings" / "missing.mkv"
+            repository = self.make_repository(root)
+            repository.register_starting(
+                recording_id="missing",
+                output_path=output,
+                container="mkv",
+                source="manual",
+                created_at=BASE_TIME,
+            )
+
+            result = repository.delete("missing")
+
+        self.assertEqual(result.missing_files, (output,))
+        self.assertIsNone(repository.get("missing"))
+
+    def test_delete_staging_failure_preserves_history_and_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            output = root / "recordings" / "recording.mkv"
+            output.parent.mkdir()
+            output.write_bytes(b"video")
+            repository = self.make_repository(root)
+            repository.register_starting(
+                recording_id="preserve",
+                output_path=output,
+                container="mkv",
+                source="manual",
+                created_at=BASE_TIME,
+            )
+
+            with (
+                patch("pathlib.Path.replace", side_effect=OSError("injected failure")),
+                self.assertRaisesRegex(RecordingHistoryError, "削除できません"),
+            ):
+                repository.delete("preserve")
+
+            preserved = repository.get("preserve")
+            file_preserved = output.exists()
+
+        self.assertIsNotNone(preserved)
+        self.assertTrue(file_preserved)
 
 
 if __name__ == "__main__":

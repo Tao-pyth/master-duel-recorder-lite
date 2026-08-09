@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import Iterator
+import uuid
 
 from .history_database import (
     HISTORY_DATABASE_NAME,
@@ -72,6 +73,13 @@ class RecoveryArtifact:
     diagnostic: str | None
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class HistoryDeletionResult:
+    recording_id: str
+    deleted_files: tuple[Path, ...]
+    missing_files: tuple[Path, ...]
 
 
 @dataclass(frozen=True)
@@ -475,6 +483,83 @@ class RecordingHistoryRepository:
             rows = connection.execute(sql, parameters).fetchall()
         return tuple(self._entry_from_row(row) for row in rows)
 
+    def delete(self, recording_id: str) -> HistoryDeletionResult:
+        identifier = _required_text(recording_id, "recording_id")
+        entry = self.get(identifier)
+        if entry is None:
+            raise RecordingHistoryError(f"録画履歴が見つかりません: {identifier}")
+        artifacts = self.recovery_artifacts(identifier)
+        relative_paths = (entry.output_path, *(artifact.output_path for artifact in artifacts))
+        paths: list[Path] = []
+        for relative_path in relative_paths:
+            path = self._resolved_recording_path(relative_path)
+            if path not in paths:
+                paths.append(path)
+
+        staging_root = self.recordings_root / ".delete-staging" / uuid.uuid4().hex
+        moved: list[tuple[Path, Path]] = []
+        missing: list[Path] = []
+        try:
+            for index, path in enumerate(paths):
+                if not path.exists():
+                    missing.append(path)
+                    continue
+                if not path.is_file():
+                    raise RecordingHistoryError(f"削除対象がファイルではありません: {path}")
+                staging_root.mkdir(parents=True, exist_ok=True)
+                staged = staging_root / f"{index:04d}-{path.name}"
+                path.replace(staged)
+                moved.append((path, staged))
+
+            with self._connection() as connection:
+                connection.execute(
+                    "DELETE FROM duel_record_tags WHERE recording_id = ?", (identifier,)
+                )
+                connection.execute(
+                    "DELETE FROM duel_record_changes WHERE recording_id = ?", (identifier,)
+                )
+                connection.execute("DELETE FROM duel_events WHERE recording_id = ?", (identifier,))
+                connection.execute("DELETE FROM duel_records WHERE recording_id = ?", (identifier,))
+                connection.execute(
+                    "DELETE FROM recovery_artifacts WHERE recording_id = ?", (identifier,)
+                )
+                cursor = connection.execute(
+                    "DELETE FROM recordings WHERE recording_id = ?", (identifier,)
+                )
+                if cursor.rowcount != 1:
+                    raise RecordingHistoryError(f"録画履歴が見つかりません: {identifier}")
+        except (OSError, RecordingHistoryError) as exc:
+            restore_errors: list[str] = []
+            for original, staged in reversed(moved):
+                try:
+                    original.parent.mkdir(parents=True, exist_ok=True)
+                    staged.replace(original)
+                except OSError as restore_exc:
+                    restore_errors.append(f"{original}: {restore_exc}")
+            self._remove_empty_staging(staging_root)
+            detail = f"録画履歴を削除できません: {identifier}: {exc}"
+            if restore_errors:
+                detail += f" / ファイル復元失敗: {'; '.join(restore_errors)}"
+            raise RecordingHistoryError(detail) from exc
+
+        cleanup_errors: list[str] = []
+        for _original, staged in moved:
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError as exc:
+                cleanup_errors.append(f"{staged}: {exc}")
+        self._remove_empty_staging(staging_root)
+        if cleanup_errors:
+            raise RecordingHistoryError(
+                "履歴は削除しましたが、退避した録画ファイルを削除できません: "
+                + "; ".join(cleanup_errors)
+            )
+        return HistoryDeletionResult(
+            recording_id=identifier,
+            deleted_files=tuple(original for original, _staged in moved),
+            missing_files=tuple(missing),
+        )
+
     def check_consistency(self) -> tuple[ConsistencyIssue, ...]:
         with self._connection(write=False) as connection:
             rows = connection.execute("SELECT * FROM recordings ORDER BY recording_id").fetchall()
@@ -585,6 +670,25 @@ class RecordingHistoryRepository:
         if not relative.parts:
             raise RecordingHistoryError("録画ファイルの相対パスが空です")
         return relative
+
+    def _resolved_recording_path(self, relative_path: Path) -> Path:
+        try:
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError("unsafe relative path")
+            path = (self.recordings_root / relative_path).resolve()
+            path.relative_to(self.recordings_root)
+            return path
+        except (OSError, ValueError) as exc:
+            raise RecordingHistoryError(
+                f"削除対象が録画保存先の外部を指しています: {relative_path}"
+            ) from exc
+
+    def _remove_empty_staging(self, staging_root: Path) -> None:
+        for directory in (staging_root, staging_root.parent):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
 
     def _entry_from_row(self, row: sqlite3.Row) -> RecordingHistoryEntry:
         try:

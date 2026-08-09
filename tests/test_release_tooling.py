@@ -25,10 +25,10 @@ class ReleaseToolingTest(unittest.TestCase):
         version = read_project_version()
         resource = windows_version_resource(version)
 
-        self.assertEqual(version, "0.16.8")
-        self.assertEqual(windows_version_tuple(version), (0, 16, 8, 0))
-        self.assertIn("filevers=(0, 16, 8, 0)", resource)
-        self.assertIn("ProductVersion', '0.16.8'", resource)
+        self.assertEqual(version, "0.16.9")
+        self.assertEqual(windows_version_tuple(version), (0, 16, 9, 0))
+        self.assertIn("filevers=(0, 16, 9, 0)", resource)
+        self.assertIn("ProductVersion', '0.16.9'", resource)
         self.assertIn(EXECUTABLE_NAME, resource)
 
     def test_build_command_is_onefile_console_without_upx(self) -> None:
@@ -57,13 +57,13 @@ class ReleaseToolingTest(unittest.TestCase):
         self.assertIn(str(root / "packaging" / "mdrl_gui_entry.py"), command)
 
     def test_release_tag_matches_both_version_sources(self) -> None:
-        self.assertEqual(read_package_version(), "0.16.8")
-        self.assertEqual(verify_project_version(), "0.16.8")
-        self.assertEqual(verify_release_tag("v0.16.8"), "0.16.8")
+        self.assertEqual(read_package_version(), "0.16.9")
+        self.assertEqual(verify_project_version(), "0.16.9")
+        self.assertEqual(verify_release_tag("v0.16.9"), "0.16.9")
 
     def test_release_tag_script_supports_direct_execution(self) -> None:
         completed = subprocess.run(
-            [sys.executable, "scripts/verify_release_tag.py", "v0.16.8"],
+            [sys.executable, "scripts/verify_release_tag.py", "v0.16.9"],
             cwd=PROJECT_ROOT,
             check=False,
             capture_output=True,
@@ -71,7 +71,7 @@ class ReleaseToolingTest(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout.strip(), "0.16.8")
+        self.assertEqual(completed.stdout.strip(), "0.16.9")
 
     def test_release_tag_mismatch_fails(self) -> None:
         with self.assertRaises(ValueError):

@@ -17,6 +17,7 @@ from .capture_targets import (
 from .config import AppConfig, LoadedAppConfig, load_app_config, save_app_config, validate_app_config
 from .config_management import updated_config
 from .detection import DetectionPolicy, DuelDetectionStateMachine
+from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
 from .duel_start_monitor import MasterDuelStartMonitor
 from .duel_records import DuelRecord, DuelRecordChange, DuelRecordRepository, DuelRecordValues
 from .duel_timeline import DuelEvent, DuelTimelineRepository
@@ -35,6 +36,7 @@ from .preflight import PreflightReport, run_preflight
 from .recorder import PreparedRecording, prepare_recording
 from .recording_history import (
     ConsistencyIssue,
+    HistoryDeletionResult,
     HistoryQuery,
     RecordingHistoryEntry,
     RecordingHistoryRepository,
@@ -74,6 +76,14 @@ class ApplicationEvent:
     message: str
     recording_id: str | None = None
     state: str = ""
+
+
+@dataclass(frozen=True)
+class DuelEditorData:
+    record: DuelRecord | None
+    values: DuelRecordValues
+    decks: tuple[DuelCatalogEntry, ...]
+    tags: tuple[DuelCatalogEntry, ...]
 
 
 EventCallback = Callable[[ApplicationEvent], None]
@@ -302,6 +312,17 @@ class RecorderApplicationService:
     def get_duel_record(self, recording_id: str) -> DuelRecord | None:
         return DuelRecordRepository.from_runtime_paths(self.paths).get(recording_id)
 
+    def get_duel_editor_data(self, recording_id: str) -> DuelEditorData:
+        record = self.get_duel_record(recording_id)
+        catalog = DuelCatalogRepository.from_runtime_paths(self.paths)
+        values = record.values if record is not None else catalog.preferences().to_record_values()
+        return DuelEditorData(
+            record=record,
+            values=values,
+            decks=catalog.list(kind="deck"),
+            tags=catalog.list(kind="tag"),
+        )
+
     def save_duel_record(
         self,
         recording_id: str,
@@ -309,12 +330,26 @@ class RecorderApplicationService:
         *,
         expected_revision: int,
     ) -> DuelRecord:
-        return DuelRecordRepository.from_runtime_paths(self.paths).save(
+        saved = DuelRecordRepository.from_runtime_paths(self.paths).save(
             recording_id,
             values,
             expected_revision=expected_revision,
             source="user",
         )
+        DuelCatalogRepository.from_runtime_paths(self.paths).remember_record_values(saved.values)
+        return saved
+
+    def list_duel_catalog(self) -> tuple[DuelCatalogEntry, ...]:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).list()
+
+    def add_duel_catalog_entry(self, kind: str, name: str) -> DuelCatalogEntry:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).add(kind, name)
+
+    def rename_duel_catalog_entry(self, entry_id: int, name: str) -> DuelCatalogEntry:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).rename(entry_id, name)
+
+    def delete_duel_catalog_entry(self, entry_id: int) -> DuelCatalogEntry:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).delete(entry_id)
 
     def duel_record_changes(self, recording_id: str) -> tuple[DuelRecordChange, ...]:
         return DuelRecordRepository.from_runtime_paths(self.paths).changes(recording_id)
@@ -361,6 +396,13 @@ class RecorderApplicationService:
 
     def check_history(self) -> tuple[ConsistencyIssue, ...]:
         return RecordingHistoryRepository.from_runtime_paths(self.paths).check_consistency()
+
+    def delete_history(self, recording_id: str) -> HistoryDeletionResult:
+        with self._lock:
+            self._collect_manual_terminal_locked()
+            if self._manual_starting or self._current is not None or self.watch_active:
+                raise ApplicationOperationError("録画または自動監視の実行中は履歴を削除できません")
+        return RecordingHistoryRepository.from_runtime_paths(self.paths).delete(recording_id)
 
     def resolve_recording(self, recording_id: str) -> RecordingReference:
         return self._browser().resolve(recording_id)
