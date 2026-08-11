@@ -49,7 +49,7 @@ class VisualDatasetTest(unittest.TestCase):
 
         self.assertEqual(dataset.dataset_id, "test-ja")
         self.assertEqual(dataset.videos[0].source, "replay")
-        self.assertEqual(dataset.videos[0].file, root / "videos" / "one.mkv")
+        self.assertEqual(dataset.videos[0].file, (root / "videos" / "one.mkv").resolve())
         self.assertEqual(dataset.videos[0].events[0].outcome, "win")
 
     def test_missing_local_videos_are_skipped(self) -> None:
