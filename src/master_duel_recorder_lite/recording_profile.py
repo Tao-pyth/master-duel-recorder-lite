@@ -17,6 +17,9 @@ class RecordingProfile:
     screen_input_format: str = "gdigrab"
     audio_input: str = ""
     audio_input_format: str = "dshow"
+    audio_gain_db: float = 0.0
+    audio_sample_rate: int = 48_000
+    audio_channels: int = 2
     video_encoder: str = "libx264"
     frame_rate: int = 30
     width: int | None = None
@@ -32,6 +35,16 @@ class RecordingProfile:
             raise RecordingProfileError("画面入力は空でないgdigrab入力である必要があります")
         if self.audio_input and self.audio_input_format != "dshow":
             raise RecordingProfileError("音声入力を使う場合はdshowである必要があります")
+        if isinstance(self.audio_gain_db, bool) or not isinstance(
+            self.audio_gain_db, (int, float)
+        ):
+            raise RecordingProfileError("audio_gain_db は数値である必要があります")
+        if not -30.0 <= float(self.audio_gain_db) <= 30.0:
+            raise RecordingProfileError("audio_gain_db は-30.0から30.0である必要があります")
+        if self.audio_sample_rate not in {44_100, 48_000}:
+            raise RecordingProfileError("audio_sample_rate は44100または48000である必要があります")
+        if self.audio_channels not in {1, 2}:
+            raise RecordingProfileError("audio_channels は1または2である必要があります")
         if re.fullmatch(r"[A-Za-z0-9_]+", self.video_encoder) is None:
             raise RecordingProfileError("video_encoder はASCII英数字またはアンダースコアである必要があります")
         if re.fullmatch(r"[A-Za-z0-9_]+", self.audio_encoder) is None:
@@ -83,6 +96,9 @@ class RecordingProfile:
                 screen_input_format=config.screen_input_format,
                 audio_input=config.audio_input,
                 audio_input_format=config.audio_input_format,
+                audio_gain_db=config.audio_gain_db,
+                audio_sample_rate=config.audio_sample_rate,
+                audio_channels=config.audio_channels,
                 video_encoder=config.video_encoder,
                 frame_rate=config.frame_rate,
                 width=width,

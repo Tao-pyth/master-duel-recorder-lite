@@ -255,10 +255,35 @@ class DuelRecordRepository:
                 connection.execute(
                     "DELETE FROM duel_record_tags WHERE recording_id = ?", (identifier,)
                 )
+                connection.execute(
+                    "DELETE FROM duel_record_tag_links WHERE recording_id = ?", (identifier,)
+                )
                 connection.executemany(
                     "INSERT INTO duel_record_tags(recording_id, tag, normalized_tag) VALUES (?, ?, ?)",
                     ((identifier, tag, _tag_key(tag)) for tag in normalized.tags),
                 )
+                for tag in normalized.tags:
+                    normalized_tag = _tag_key(tag)
+                    connection.execute(
+                        """
+                        INSERT INTO duel_catalog_entries (
+                            kind, name, normalized_name, description, color,
+                            is_archived, created_at, updated_at
+                        ) VALUES ('tag', ?, ?, '', '#4F6F8F', 0, ?, ?)
+                        ON CONFLICT(kind, normalized_name) DO UPDATE SET is_archived = 0
+                        """,
+                        (tag, normalized_tag, timestamp, timestamp),
+                    )
+                    catalog_row = connection.execute(
+                        "SELECT entry_id FROM duel_catalog_entries "
+                        "WHERE kind = 'tag' AND normalized_name = ?",
+                        (normalized_tag,),
+                    ).fetchone()
+                    assert catalog_row is not None
+                    connection.execute(
+                        "INSERT INTO duel_record_tag_links(recording_id, tag_entry_id) VALUES (?, ?)",
+                        (identifier, catalog_row["entry_id"]),
+                    )
                 saved = DuelRecord(identifier, normalized, revision, created_at, now)
                 before = current.to_dict() if current is not None else {}
                 connection.execute(

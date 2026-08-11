@@ -8,7 +8,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -213,20 +213,6 @@ def _migrate_to_v5(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
-        CREATE TABLE duel_editor_preferences (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            duel_type TEXT NOT NULL CHECK (
-                duel_type IN ('ranked', 'event', 'room', 'solo', 'other')
-            ),
-            own_deck TEXT NOT NULL DEFAULT '',
-            opponent_deck TEXT NOT NULL DEFAULT '',
-            tags_json TEXT NOT NULL DEFAULT '[]',
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-    connection.execute(
-        """
         INSERT OR IGNORE INTO duel_catalog_entries (
             kind, name, normalized_name, created_at, updated_at
         )
@@ -251,6 +237,60 @@ def _migrate_to_v5(connection: sqlite3.Connection) -> None:
         WHERE length(trim(tags.tag)) > 0
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE duel_editor_preferences (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            duel_type TEXT NOT NULL CHECK (
+                duel_type IN ('ranked', 'event', 'room', 'solo', 'other')
+            ),
+            own_deck TEXT NOT NULL DEFAULT '',
+            opponent_deck TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _migrate_to_v6(connection: sqlite3.Connection) -> None:
+    connection.execute("ALTER TABLE recordings ADD COLUMN audio_input TEXT")
+    connection.execute(
+        "ALTER TABLE recordings ADD COLUMN audio_state TEXT NOT NULL DEFAULT 'disabled' "
+        "CHECK (audio_state IN ('disabled', 'configured', 'recorded', 'warning', 'failed'))"
+    )
+    connection.execute("ALTER TABLE recordings ADD COLUMN audio_warning TEXT")
+    connection.execute(
+        "ALTER TABLE duel_catalog_entries ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+    )
+    connection.execute("ALTER TABLE duel_catalog_entries ADD COLUMN color TEXT")
+    connection.execute(
+        "ALTER TABLE duel_catalog_entries ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0 "
+        "CHECK (is_archived IN (0, 1))"
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_tag_links (
+            recording_id TEXT NOT NULL REFERENCES duel_records(recording_id) ON DELETE RESTRICT,
+            tag_entry_id INTEGER NOT NULL REFERENCES duel_catalog_entries(entry_id) ON DELETE RESTRICT,
+            PRIMARY KEY (recording_id, tag_entry_id)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX duel_record_tag_links_tag_idx "
+        "ON duel_record_tag_links(tag_entry_id, recording_id)"
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO duel_record_tag_links(recording_id, tag_entry_id)
+        SELECT tags.recording_id, catalog.entry_id
+        FROM duel_record_tags AS tags
+        JOIN duel_catalog_entries AS catalog
+          ON catalog.kind = 'tag'
+         AND catalog.normalized_name = tags.normalized_tag
+        """
+    )
 
 
 _MIGRATIONS: dict[int, Migration] = {
@@ -259,6 +299,7 @@ _MIGRATIONS: dict[int, Migration] = {
     3: _migrate_to_v3,
     4: _migrate_to_v4,
     5: _migrate_to_v5,
+    6: _migrate_to_v6,
 }
 
 
@@ -374,6 +415,9 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "recovery_attempts",
         "recovery_message",
         "recovery_diagnostic",
+        "audio_input",
+        "audio_state",
+        "audio_warning",
     }
     columns = {row[1] for row in connection.execute("PRAGMA table_info(recordings)")}
     if not required_columns.issubset(columns):
@@ -406,8 +450,21 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
     catalog_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_catalog_entries)")
     }
-    if not {"entry_id", "kind", "name", "normalized_name"}.issubset(catalog_columns):
+    if not {
+        "entry_id",
+        "kind",
+        "name",
+        "normalized_name",
+        "description",
+        "color",
+        "is_archived",
+    }.issubset(catalog_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のduel_catalog_entriesスキーマがありません")
+    tag_link_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(duel_record_tag_links)")
+    }
+    if not {"recording_id", "tag_entry_id"}.issubset(tag_link_columns):
+        raise HistoryDatabaseError("録画履歴DBに必須のduel_record_tag_linksスキーマがありません")
     preference_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_editor_preferences)")
     }

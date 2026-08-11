@@ -11,6 +11,7 @@ from master_duel_recorder_lite.history_database import (
     _migrate_to_v2,
     _migrate_to_v3,
     _migrate_to_v4,
+    _migrate_to_v5,
     initialize_history_database,
 )
 
@@ -82,6 +83,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                         3: lambda _connection: None,
                         4: fail_after_change,
                         5: lambda _connection: None,
+                        6: lambda _connection: None,
                     },
                 )
 
@@ -292,6 +294,55 @@ class HistoryDatabaseTest(unittest.TestCase):
 
         self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(entries, [("deck", "烙印"), ("deck", "青眼"), ("tag", "大会")])
+
+    def test_version_five_adds_catalog_attributes_and_stable_tag_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE schema_version "
+                    "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+                )
+                connection.execute("INSERT INTO schema_version VALUES (1, 5)")
+                _migrate_to_v1(connection)
+                _migrate_to_v2(connection)
+                _migrate_to_v3(connection)
+                _migrate_to_v4(connection)
+                _migrate_to_v5(connection)
+                connection.execute(
+                    "INSERT INTO recordings (recording_id, state, source, output_path, container, "
+                    "created_at, diagnostics_json, updated_at) VALUES "
+                    "('recording', 'completed', 'manual', 'recording.mkv', 'mkv', ?, '[]', ?)",
+                    ("2026-08-11T00:00:00+00:00", "2026-08-11T00:00:00+00:00"),
+                )
+                connection.execute(
+                    "INSERT INTO duel_records (recording_id, status, result, play_order, own_deck, "
+                    "opponent_deck, duel_type, notes, revision, created_at, updated_at) VALUES "
+                    "('recording', 'confirmed', 'win', 'first', '', '', 'ranked', '', 1, ?, ?)",
+                    ("2026-08-11T00:00:00+00:00", "2026-08-11T00:00:00+00:00"),
+                )
+                connection.execute(
+                    "INSERT INTO duel_record_tags VALUES ('recording', '大会', '大会')"
+                )
+                connection.execute(
+                    "INSERT INTO duel_catalog_entries "
+                    "(kind, name, normalized_name, created_at, updated_at) "
+                    "VALUES ('tag', '大会', '大会', ?, ?)",
+                    ("2026-08-11T00:00:00+00:00", "2026-08-11T00:00:00+00:00"),
+                )
+
+            info = initialize_history_database(path)
+            with closing(sqlite3.connect(path)) as connection:
+                catalog = connection.execute(
+                    "SELECT description, color, is_archived FROM duel_catalog_entries"
+                ).fetchone()
+                links = connection.execute(
+                    "SELECT recording_id FROM duel_record_tag_links"
+                ).fetchall()
+
+        self.assertEqual(info.version, 6)
+        self.assertEqual(catalog, ("", None, 0))
+        self.assertEqual(links, [("recording",)])
 
 
 if __name__ == "__main__":

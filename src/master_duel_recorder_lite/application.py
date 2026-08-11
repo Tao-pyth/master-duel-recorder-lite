@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
+import time
 
 from .auto_recording import AutoRecordingController, AutoRecordingEvent, AutoRecordingEventAction
 from .capture_targets import (
@@ -21,7 +22,13 @@ from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
 from .duel_start_monitor import MasterDuelStartMonitor
 from .duel_records import DuelRecord, DuelRecordChange, DuelRecordRepository, DuelRecordValues
 from .duel_timeline import DuelEvent, DuelTimelineRepository
-from .ffmpeg import discover_ffmpeg
+from .ffmpeg import (
+    AudioInputTestResult,
+    InputEnumerationResult,
+    discover_ffmpeg,
+    enumerate_windows_inputs,
+    test_windows_audio_input,
+)
 from .ffmpeg_setup import (
     FfmpegInstallProgress,
     FfmpegInstallResult,
@@ -84,6 +91,28 @@ class DuelEditorData:
     values: DuelRecordValues
     decks: tuple[DuelCatalogEntry, ...]
     tags: tuple[DuelCatalogEntry, ...]
+
+
+@dataclass(frozen=True)
+class RecordingHistoryView:
+    entry: RecordingHistoryEntry
+    duel_record: DuelRecord | None
+
+    @property
+    def recording_id(self) -> str:
+        return self.entry.recording_id
+
+    @property
+    def result(self) -> str:
+        return self.duel_record.values.result if self.duel_record is not None else "unknown"
+
+    @property
+    def play_order(self) -> str:
+        return self.duel_record.values.play_order if self.duel_record is not None else "unknown"
+
+    @property
+    def duel_type(self) -> str:
+        return self.duel_record.values.duel_type if self.duel_record is not None else "other"
 
 
 EventCallback = Callable[[ApplicationEvent], None]
@@ -167,6 +196,37 @@ class RecorderApplicationService:
         result = self._ffmpeg_installer.install(destination, progress=progress)
         self.save_settings({"recorder.ffmpeg_path": str(result.executable)})
         return result
+
+    def list_audio_inputs(self) -> InputEnumerationResult:
+        config = self.load_config().config
+        discovery = discover_ffmpeg(config.ffmpeg_path)
+        if not discovery.found or discovery.executable is None:
+            return InputEnumerationResult(inputs=(), errors=("FFmpegが見つかりません",))
+        result = enumerate_windows_inputs(discovery.executable)
+        audio_inputs = tuple(item for item in result.inputs if item.kind == "audio")
+        return InputEnumerationResult(audio_inputs, result.warnings, result.errors)
+
+    def test_audio_input(self, identifier: str) -> AudioInputTestResult:
+        normalized = identifier.strip()
+        if not normalized:
+            return AudioInputTestResult("disabled", "音声入力は無効です")
+        config = self.load_config().config
+        discovery = discover_ffmpeg(config.ffmpeg_path)
+        if not discovery.found or discovery.executable is None:
+            return AudioInputTestResult("unavailable", "FFmpegが見つかりません")
+        enumeration = enumerate_windows_inputs(discovery.executable)
+        device = next(
+            (
+                item
+                for item in enumeration.inputs
+                if item.kind == "audio"
+                and normalized in {item.identifier, item.display_name}
+            ),
+            None,
+        )
+        if device is None:
+            return AudioInputTestResult("unavailable", "選択した音声入力が見つかりません")
+        return test_windows_audio_input(discovery.executable, device)
 
     def start_recording(self, target: CaptureTarget | None = None) -> RecordingSnapshot:
         with self._lock:
@@ -303,6 +363,14 @@ class RecorderApplicationService:
     def list_history(self, *, limit: int = 200) -> tuple[RecordingHistoryEntry, ...]:
         return RecordingHistoryRepository.from_runtime_paths(self.paths).query(HistoryQuery(limit=limit))
 
+    def list_history_views(self, *, limit: int = 200) -> tuple[RecordingHistoryView, ...]:
+        entries = self.list_history(limit=limit)
+        records = {
+            item.recording_id: item
+            for item in DuelRecordRepository.from_runtime_paths(self.paths).list(limit=1000)
+        }
+        return tuple(RecordingHistoryView(entry, records.get(entry.recording_id)) for entry in entries)
+
     def get_history(self, recording_id: str) -> RecordingHistoryEntry:
         entry = RecordingHistoryRepository.from_runtime_paths(self.paths).get(recording_id)
         if entry is None:
@@ -342,11 +410,76 @@ class RecorderApplicationService:
     def list_duel_catalog(self) -> tuple[DuelCatalogEntry, ...]:
         return DuelCatalogRepository.from_runtime_paths(self.paths).list()
 
-    def add_duel_catalog_entry(self, kind: str, name: str) -> DuelCatalogEntry:
-        return DuelCatalogRepository.from_runtime_paths(self.paths).add(kind, name)
+    def list_decks(self) -> tuple[DuelCatalogEntry, ...]:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).list_decks()
+
+    def list_tags(self) -> tuple[DuelCatalogEntry, ...]:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).list_tags()
+
+    def add_duel_catalog_entry(
+        self,
+        kind: str,
+        name: str,
+        *,
+        description: str = "",
+        color: str | None = None,
+    ) -> DuelCatalogEntry:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).add(
+            kind,
+            name,
+            description=description,
+            color=color,
+        )
+
+    def add_deck(self, name: str, *, description: str = "") -> DuelCatalogEntry:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).add_deck(
+            name,
+            description=description,
+        )
+
+    def add_tag(
+        self,
+        name: str,
+        *,
+        description: str = "",
+        color: str = "#4F6F8F",
+    ) -> DuelCatalogEntry:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).add_tag(
+            name,
+            description=description,
+            color=color,
+        )
 
     def rename_duel_catalog_entry(self, entry_id: int, name: str) -> DuelCatalogEntry:
         return DuelCatalogRepository.from_runtime_paths(self.paths).rename(entry_id, name)
+
+    def update_deck(
+        self,
+        entry_id: int,
+        *,
+        name: str,
+        description: str = "",
+    ) -> DuelCatalogEntry:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).update_deck(
+            entry_id,
+            name=name,
+            description=description,
+        )
+
+    def update_tag(
+        self,
+        entry_id: int,
+        *,
+        name: str,
+        description: str = "",
+        color: str = "#4F6F8F",
+    ) -> DuelCatalogEntry:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).update_tag(
+            entry_id,
+            name=name,
+            description=description,
+            color=color,
+        )
 
     def delete_duel_catalog_entry(self, entry_id: int) -> DuelCatalogEntry:
         return DuelCatalogRepository.from_runtime_paths(self.paths).delete(entry_id)
@@ -540,6 +673,13 @@ class RecorderApplicationService:
                         start_monitor.start_candidate,
                         callback,
                     )
+                lifecycle_event = self._apply_automatic_visual_lifecycle(
+                    controller,
+                    start_monitor,
+                    callback,
+                )
+                if lifecycle_event is not None:
+                    event = lifecycle_event
                 if controller.current is not None:
                     self._publish_visual_status(controller.current, callback)
                 else:
@@ -561,6 +701,56 @@ class RecorderApplicationService:
                 event = controller.manual_stop()
                 self._emit(callback, _application_event(event))
             self._emit(callback, ApplicationEvent("watch", "自動監視を停止しました", state="stopped"))
+
+    def _apply_automatic_visual_lifecycle(
+        self,
+        controller: AutoRecordingController,
+        start_monitor: MasterDuelStartMonitor,
+        callback: EventCallback | None,
+    ) -> AutoRecordingEvent | None:
+        prepared = controller.current
+        if prepared is None:
+            return None
+        abort_reason = prepared.visual_abort_reason
+        started_at = prepared.session.started_at
+        unconfirmed_seconds = (
+            max(0.0, (datetime.now(timezone.utc) - started_at).total_seconds())
+            if started_at is not None and not prepared.duel_confirmed
+            else 0.0
+        )
+        timed_out = unconfirmed_seconds >= 45.0
+        result_detected = prepared.result_detected_monotonic
+        post_roll_complete = (
+            result_detected is not None and time.monotonic() - result_detected >= 3.0
+        )
+        if abort_reason is None and not timed_out and not post_roll_complete:
+            return None
+
+        recording_id = prepared.target.recording_id
+        event = controller.manual_stop()
+        if abort_reason is not None or timed_out:
+            reason = abort_reason or "45秒以内に対戦盤面を確認できませんでした"
+            try:
+                RecordingHistoryRepository.from_runtime_paths(self.paths).delete(recording_id)
+            except Exception as exc:
+                self._emit(
+                    callback,
+                    ApplicationEvent(
+                        "visual",
+                        f"候補録画を停止しましたが隔離削除に失敗しました: {exc}",
+                        recording_id=recording_id,
+                        state="degraded",
+                    ),
+                )
+            else:
+                event = replace(
+                    event,
+                    message=f"対戦不成立として候補録画を取り消しました: {reason}",
+                )
+        else:
+            event = replace(event, message="対戦結果の3秒後に録画を停止しました")
+        start_monitor.reset()
+        return event
 
     def _save_automatic_start_candidate(
         self,

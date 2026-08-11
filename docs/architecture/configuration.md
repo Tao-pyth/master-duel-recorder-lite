@@ -26,6 +26,9 @@ screen_input = "desktop"
 screen_input_format = "gdigrab"
 audio_input = ""
 audio_input_format = "dshow"
+audio_gain_db = 0.0
+audio_sample_rate = 48000
+audio_channels = 2
 video_encoder = "libx264"
 frame_rate = 30
 capture_width = 0
@@ -57,7 +60,7 @@ auto_create_user_data = true
 
 初心者向けに言うと、ここでは「録画に使うFFmpegの場所」「録画ファイル形式」「画面と音声の入力元」「映像エンコーダー」「ゲーム監視と自動録画の条件」「アップロード準備時の公開範囲」「必要なフォルダを自動作成するか」を扱います。
 
-`audio_input` が空文字の場合は音声録画を無効として扱います。利用可能な音声入力名は `python -m master_duel_recorder_lite list-inputs` で確認し、表示された識別子をそのまま設定します。現在は画面入力方式をWindowsの `gdigrab`、音声入力方式を `dshow` に限定します。未知の入力方式、空の画面入力、不正なエンコーダー名は設定読込時に拒否します。
+`audio_input` が空文字の場合は音声録画を無効として扱います。利用可能な音声入力名はGUIの更新または `python -m master_duel_recorder_lite list-inputs` で確認し、識別子をそのまま設定します。V0.17.0は`dshow`入力を1つだけ使用し、複数入力のミックスは行いません。`audio_gain_db`、`audio_sample_rate`、`audio_channels`で音量、サンプルレート、チャンネル数を検証します。現在は画面入力方式をWindowsの `gdigrab`、音声入力方式を `dshow` に限定します。詳細は[音声入力設計](audio-input.md)を参照してください。
 
 GUIでFFmpegを導入した場合、実行ファイルを既定では`%LOCALAPPDATA%\MasterDuelRecorderLite\tools\ffmpeg\bin\ffmpeg.exe`へ置き、その絶対パスを`recorder.ffmpeg_path`へ保存します。導入処理の詳細と保護規則は[FFmpeg初回セットアップ](ffmpeg-setup.md)を参照してください。
 

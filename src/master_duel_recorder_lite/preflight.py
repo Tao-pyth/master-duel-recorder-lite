@@ -267,7 +267,9 @@ def _append_capability_and_input_checks(
     audio_matches = [
         item
         for item in enumeration.inputs
-        if item.kind == "audio" and item.identifier == config.audio_input and item.input_format == config.audio_input_format
+        if item.kind == "audio"
+        and config.audio_input in {item.identifier, item.display_name}
+        and item.input_format == config.audio_input_format
     ]
 
     errors: list[str] = []

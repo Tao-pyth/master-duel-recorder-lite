@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "dataset_id": "master-duel-ja-v1",
+  "videos": [
+    {
+      "id": "sample-ultrawide-live-01",
+      "file": "D:/path/to/local/video.mkv",
+      "source": "live",
+      "display_profile": "ultrawide-fullscreen",
+      "duel_type": "event",
+      "has_audio": true,
+      "strict_event_types": ["duel_start", "duel_confirmed", "duel_result"],
+      "events": [
+        {
+          "event_type": "duel_start",
+          "window_start_ms": 18000,
+          "window_end_ms": 28000
+        },
+        {
+          "event_type": "duel_confirmed",
+          "window_start_ms": 40000,
+          "window_end_ms": 48000,
+          "play_order": "first"
+        },
+        {
+          "event_type": "duel_result",
+          "window_start_ms": 294000,
+          "window_end_ms": 302000,
+          "outcome": "win"
+        }
+      ]
+    }
+  ]
+}

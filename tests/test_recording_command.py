@@ -39,6 +39,9 @@ class RecordingCommandTest(unittest.TestCase):
                 width=1920,
                 height=1080,
                 video_bitrate_kbps=12_000,
+                audio_gain_db=3.5,
+                audio_sample_rate=48_000,
+                audio_channels=2,
             )
             command = build_recording_command(
                 executable=Path("C:/ffmpeg/bin/ffmpeg.exe"),
@@ -52,6 +55,10 @@ class RecordingCommandTest(unittest.TestCase):
         self.assertIn("12000k", command)
         self.assertIn("+faststart", command)
         self.assertNotIn("-an", command)
+        self.assertIn("aac", command)
+        self.assertIn("48000", command)
+        self.assertIn("volume=3.5dB,aresample=async=1:first_pts=0", command)
+        self.assertEqual(command.count("-use_wallclock_as_timestamps"), 2)
 
     def test_output_outside_recordings_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -24,6 +24,27 @@ from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
+    def test_history_views_join_duel_fields_without_exposing_id_as_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            history = RecordingHistoryRepository.from_runtime_paths(service.paths)
+            history.register_starting(
+                recording_id="internal-id",
+                output_path=service.paths.recordings / "duel.mkv",
+                container="mkv",
+                source="manual",
+            )
+            service.save_duel_record(
+                "internal-id",
+                DuelRecordValues(result="win", play_order="second", duel_type="ranked"),
+                expected_revision=0,
+            )
+
+            view = service.list_history_views()[0]
+
+        self.assertEqual(view.recording_id, "internal-id")
+        self.assertEqual((view.result, view.play_order, view.duel_type), ("win", "second", "ranked"))
+
     def test_new_duel_editor_inherits_last_values_but_existing_record_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir) / "user_data"

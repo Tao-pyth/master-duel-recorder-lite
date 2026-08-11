@@ -37,6 +37,9 @@ class AppConfig:
     capture_target_id: str = ""
     audio_input: str = ""
     audio_input_format: str = "dshow"
+    audio_gain_db: float = 0.0
+    audio_sample_rate: int = 48_000
+    audio_channels: int = 2
     video_encoder: str = "libx264"
     frame_rate: int = 30
     capture_width: int = 0
@@ -115,6 +118,15 @@ def load_app_config(
                 _required_string_value(recorder_table, "audio_input_format", AppConfig.audio_input_format),
                 allowed=ALLOWED_AUDIO_INPUT_FORMATS,
                 key="audio_input_format",
+            ),
+            audio_gain_db=_float_value(
+                recorder_table, "audio_gain_db", AppConfig.audio_gain_db
+            ),
+            audio_sample_rate=_int_value(
+                recorder_table, "audio_sample_rate", AppConfig.audio_sample_rate
+            ),
+            audio_channels=_int_value(
+                recorder_table, "audio_channels", AppConfig.audio_channels
             ),
             video_encoder=_encoder_name(
                 _required_string_value(recorder_table, "video_encoder", AppConfig.video_encoder)
@@ -260,6 +272,9 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"capture_target_id = {_toml_string(config.capture_target_id)}",
                 f"audio_input = {_toml_string(config.audio_input)}",
                 f"audio_input_format = {_toml_string(config.audio_input_format)}",
+                f"audio_gain_db = {config.audio_gain_db}",
+                f"audio_sample_rate = {config.audio_sample_rate}",
+                f"audio_channels = {config.audio_channels}",
                 f"video_encoder = {_toml_string(config.video_encoder)}",
                 f"frame_rate = {config.frame_rate}",
                 f"capture_width = {config.capture_width}",
@@ -418,6 +433,8 @@ def _recording_number_values(config: AppConfig) -> None:
         "capture_height": config.capture_height,
         "video_bitrate_kbps": config.video_bitrate_kbps,
         "audio_bitrate_kbps": config.audio_bitrate_kbps,
+        "audio_sample_rate": config.audio_sample_rate,
+        "audio_channels": config.audio_channels,
     }
     for key, value in integer_values.items():
         if isinstance(value, bool) or not isinstance(value, int):
@@ -428,6 +445,16 @@ def _recording_number_values(config: AppConfig) -> None:
         raise ValueError("video_bitrate_kbps は500から100000である必要があります")
     if not 32 <= config.audio_bitrate_kbps <= 512:
         raise ValueError("audio_bitrate_kbps は32から512である必要があります")
+    if config.audio_sample_rate not in {44_100, 48_000}:
+        raise ValueError("audio_sample_rate は44100または48000である必要があります")
+    if config.audio_channels not in {1, 2}:
+        raise ValueError("audio_channels は1または2である必要があります")
+    if isinstance(config.audio_gain_db, bool) or not isinstance(
+        config.audio_gain_db, (int, float)
+    ):
+        raise ValueError("audio_gain_db は数値である必要があります")
+    if not -30.0 <= float(config.audio_gain_db) <= 30.0:
+        raise ValueError("audio_gain_db は-30.0から30.0である必要があります")
     dimensions = (config.capture_width, config.capture_height)
     if dimensions == (0, 0):
         return

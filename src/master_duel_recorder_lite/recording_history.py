@@ -59,6 +59,9 @@ class RecordingHistoryEntry:
     recovery_attempts: int
     recovery_message: str | None
     recovery_diagnostic: str | None
+    audio_input: str | None
+    audio_state: str
+    audio_warning: str | None
     updated_at: datetime
 
 
@@ -147,6 +150,7 @@ class RecordingHistoryRepository:
         container: str,
         source: str,
         detection_reason: str | None = None,
+        audio_input: str | None = None,
         created_at: datetime | None = None,
     ) -> RecordingHistoryEntry:
         identifier = _required_text(recording_id, "recording_id")
@@ -157,14 +161,17 @@ class RecordingHistoryRepository:
         relative_path = self._relative_output_path(output_path)
         timestamp = _utc(created_at or datetime.now(timezone.utc), "created_at")
         reason = detection_reason.strip() if detection_reason and detection_reason.strip() else None
+        normalized_audio = audio_input.strip() if audio_input and audio_input.strip() else None
+        audio_state = "configured" if normalized_audio else "disabled"
         try:
             with self._connection() as connection:
                 connection.execute(
                     """
                     INSERT INTO recordings (
                         recording_id, state, source, detection_reason, output_path,
-                        container, created_at, diagnostics_json, updated_at
-                    ) VALUES (?, 'starting', ?, ?, ?, ?, ?, '[]', ?)
+                        container, created_at, diagnostics_json, audio_input,
+                        audio_state, updated_at
+                    ) VALUES (?, 'starting', ?, ?, ?, ?, ?, '[]', ?, ?, ?)
                     """,
                     (
                         identifier,
@@ -173,6 +180,8 @@ class RecordingHistoryRepository:
                         relative_path.as_posix(),
                         normalized_container,
                         _format_datetime(timestamp),
+                        normalized_audio,
+                        audio_state,
                         _format_datetime(timestamp),
                     ),
                 )
@@ -249,6 +258,11 @@ class RecordingHistoryRepository:
                     duration_seconds = ?, size_bytes = ?, returncode = ?, error = ?,
                     diagnostics_json = ?, failure_code = ?, recovery_policy = ?,
                     recovery_state = ?, recovery_message = ?, recovery_diagnostic = ?,
+                    audio_state = CASE
+                        WHEN audio_state = 'configured' AND ? = 'completed' THEN 'recorded'
+                        WHEN audio_state = 'configured' AND ? = 'failed' THEN 'failed'
+                        ELSE audio_state
+                    END,
                     updated_at = ?
                 WHERE recording_id = ? AND state IN ('starting', 'recording')
                 """,
@@ -266,6 +280,8 @@ class RecordingHistoryRepository:
                     recovery_state,
                     classification.user_message if classification else None,
                     classification.internal_diagnostic if classification else None,
+                    state,
+                    state,
                     _format_datetime(ended_at),
                     identifier,
                 ),
@@ -317,6 +333,8 @@ class RecordingHistoryRepository:
                 SET state = 'failed', ended_at = ?, duration_seconds = ?, size_bytes = ?,
                     error = ?, failure_code = ?, recovery_policy = ?, recovery_state = ?,
                     recovery_message = ?, recovery_diagnostic = ?, updated_at = ?
+                    , audio_state = CASE
+                        WHEN audio_state = 'configured' THEN 'failed' ELSE audio_state END
                 WHERE recording_id = ? AND state IN ('starting', 'recording')
                 """,
                 (
@@ -514,6 +532,9 @@ class RecordingHistoryRepository:
             with self._connection() as connection:
                 connection.execute(
                     "DELETE FROM duel_record_tags WHERE recording_id = ?", (identifier,)
+                )
+                connection.execute(
+                    "DELETE FROM duel_record_tag_links WHERE recording_id = ?", (identifier,)
                 )
                 connection.execute(
                     "DELETE FROM duel_record_changes WHERE recording_id = ?", (identifier,)
@@ -721,6 +742,9 @@ class RecordingHistoryRepository:
                 recovery_attempts=row["recovery_attempts"],
                 recovery_message=row["recovery_message"],
                 recovery_diagnostic=row["recovery_diagnostic"],
+                audio_input=row["audio_input"],
+                audio_state=row["audio_state"],
+                audio_warning=row["audio_warning"],
                 updated_at=_parse_datetime(row["updated_at"]),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:

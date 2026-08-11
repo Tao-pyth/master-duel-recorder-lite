@@ -49,6 +49,9 @@ class AppConfigTest(unittest.TestCase):
                     capture_height=1080,
                     video_bitrate_kbps=12_000,
                     audio_bitrate_kbps=256,
+                    audio_gain_db=-2.5,
+                    audio_sample_rate=44_100,
+                    audio_channels=1,
                     game_process_name="masterduel-test.exe",
                     game_window_title_contains="Master Duel",
                     auto_start_recording=False,
@@ -79,6 +82,9 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.capture_height, 1080)
         self.assertEqual(loaded.config.video_bitrate_kbps, 12_000)
         self.assertEqual(loaded.config.audio_bitrate_kbps, 256)
+        self.assertEqual(loaded.config.audio_gain_db, -2.5)
+        self.assertEqual(loaded.config.audio_sample_rate, 44_100)
+        self.assertEqual(loaded.config.audio_channels, 1)
         self.assertEqual(loaded.config.game_process_name, "masterduel-test.exe")
         self.assertEqual(loaded.config.game_window_title_contains, "Master Duel")
         self.assertFalse(loaded.config.auto_start_recording)

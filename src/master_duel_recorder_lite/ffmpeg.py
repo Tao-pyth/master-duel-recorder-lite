@@ -8,6 +8,7 @@ import platform
 import re
 import shutil
 import subprocess
+import unicodedata
 
 from .runtime_paths import local_application_data_root
 from .windows_process import (
@@ -120,6 +121,8 @@ class CaptureInput:
     display_name: str
     identifier: str
     input_format: str
+    source_type: str = "unknown"
+    is_default: bool = False
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,17 @@ class InputEnumerationResult:
     @property
     def succeeded(self) -> bool:
         return not self.errors
+
+
+@dataclass(frozen=True)
+class AudioInputTestResult:
+    state: str
+    message: str
+    peak_db: float | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.state in {"active", "silent"}
 
 
 def discover_ffmpeg(
@@ -315,14 +329,93 @@ def enumerate_windows_inputs(
 def parse_dshow_devices(output: str) -> tuple[CaptureInput, ...]:
     devices: list[CaptureInput] = []
     pattern = re.compile(r'^\s*\[dshow[^]]*\]\s+"(?P<name>.+)"\s+\((?P<kind>audio|video)\)\s*$')
+    alternative_pattern = re.compile(
+        r'^\s*\[dshow[^]]*\]\s+Alternative name\s+"(?P<identifier>.+)"\s*$'
+    )
     for line in output.splitlines():
         match = pattern.match(line)
-        if match is None:
+        if match is not None:
+            kind = match.group("kind")
+            name = match.group("name")
+            devices.append(
+                CaptureInput(
+                    kind=kind,
+                    display_name=name,
+                    identifier=name,
+                    input_format="dshow",
+                    source_type=_audio_source_type(name) if kind == "audio" else "video",
+                )
+            )
             continue
-        kind = match.group("kind")
-        name = match.group("name")
-        devices.append(CaptureInput(kind=kind, display_name=name, identifier=name, input_format="dshow"))
+        alternative = alternative_pattern.match(line)
+        if alternative is not None and devices:
+            previous = devices[-1]
+            devices[-1] = CaptureInput(
+                kind=previous.kind,
+                display_name=previous.display_name,
+                identifier=alternative.group("identifier"),
+                input_format=previous.input_format,
+                source_type=previous.source_type,
+                is_default=previous.is_default,
+            )
     return tuple(devices)
+
+
+def test_windows_audio_input(
+    executable: Path,
+    device: CaptureInput,
+    *,
+    runner: CommandRunner = run_command,
+    duration_seconds: float = 2.0,
+    platform_name: str | None = None,
+) -> AudioInputTestResult:
+    system_name = platform.system() if platform_name is None else platform_name
+    if system_name != "Windows":
+        return AudioInputTestResult("unavailable", "Windows以外の音声入力テストには対応していません")
+    if device.kind != "audio" or device.input_format != "dshow":
+        return AudioInputTestResult("unavailable", "DirectShow音声入力を選択してください")
+    command = (
+        str(executable),
+        "-hide_banner",
+        "-nostdin",
+        "-f",
+        "dshow",
+        "-i",
+        f"audio={device.identifier}",
+        "-t",
+        f"{duration_seconds:g}",
+        "-af",
+        "volumedetect",
+        "-f",
+        "null",
+        "NUL",
+    )
+    try:
+        result = runner(command, duration_seconds + 8.0)
+    except subprocess.TimeoutExpired:
+        return AudioInputTestResult("timeout", "音声入力テストがタイムアウトしました")
+    except OSError as exc:
+        return AudioInputTestResult("unavailable", f"音声入力を開けません: {exc}")
+    output = _combined_output(result)
+    if result.returncode != 0:
+        detail = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "詳細なし")
+        return AudioInputTestResult("unavailable", f"音声入力を利用できません: {detail}")
+    peak_match = re.search(r"max_volume:\s*(-?inf|-?\d+(?:\.\d+)?)\s*dB", output, re.IGNORECASE)
+    if peak_match is None or peak_match.group(1).lower() == "-inf":
+        return AudioInputTestResult("silent", "入力は開けましたが音声信号を検出できませんでした")
+    peak_db = float(peak_match.group(1))
+    if peak_db <= -60.0:
+        return AudioInputTestResult("silent", "入力は開けましたが音量が非常に小さい状態です", peak_db)
+    return AudioInputTestResult("active", f"音声入力を確認しました（最大 {peak_db:.1f} dB）", peak_db)
+
+
+def _audio_source_type(name: str) -> str:
+    normalized = unicodedata.normalize("NFKC", name).casefold()
+    if any(token in normalized for token in ("ステレオ ミキサー", "ステレオミキサー", "loopback", "what u hear")):
+        return "system"
+    if any(token in normalized for token in ("マイク", "microphone", "mic ", "headset")):
+        return "microphone"
+    return "unknown"
 
 
 def _run_probe(executable: Path, arguments: Sequence[str], runner: CommandRunner) -> str:

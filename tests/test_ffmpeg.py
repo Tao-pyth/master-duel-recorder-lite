@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from master_duel_recorder_lite.ffmpeg import (
+    CaptureInput,
     CommandResult,
     FfmpegCapabilities,
     FfmpegVersion,
@@ -11,6 +12,7 @@ from master_duel_recorder_lite.ffmpeg import (
     parse_dshow_devices,
     parse_ffmpeg_version,
     probe_ffmpeg_capabilities,
+    test_windows_audio_input,
     validate_ffmpeg_capabilities,
 )
 
@@ -174,6 +176,57 @@ libavutil      61.  1.100 / 61.  1.100
 
 
 class FfmpegInputEnumerationTest(unittest.TestCase):
+    def test_audio_source_type_and_alternative_identifier_are_preserved(self) -> None:
+        output = '''[dshow @ 000001] "ステレオ ミキサー (Realtek)" (audio)
+[dshow @ 000001]   Alternative name "@device_cm_system"
+[dshow @ 000001] "マイク (USB Audio)" (audio)
+[dshow @ 000001]   Alternative name "@device_cm_microphone"
+'''
+
+        devices = parse_dshow_devices(output)
+
+        self.assertEqual([item.source_type for item in devices], ["system", "microphone"])
+        self.assertEqual(
+            [item.identifier for item in devices],
+            ["@device_cm_system", "@device_cm_microphone"],
+        )
+
+    def test_audio_input_test_distinguishes_active_silent_and_unavailable(self) -> None:
+        device = CaptureInput(
+            kind="audio",
+            display_name="マイク (USB Audio)",
+            identifier="@device_cm_microphone",
+            input_format="dshow",
+            source_type="microphone",
+        )
+
+        active = test_windows_audio_input(
+            Path("ffmpeg.exe"),
+            device,
+            runner=lambda _command, _timeout: CommandResult(
+                0, "", "[Parsed_volumedetect] max_volume: -12.5 dB"
+            ),
+            platform_name="Windows",
+        )
+        silent = test_windows_audio_input(
+            Path("ffmpeg.exe"),
+            device,
+            runner=lambda _command, _timeout: CommandResult(
+                0, "", "[Parsed_volumedetect] max_volume: -inf dB"
+            ),
+            platform_name="Windows",
+        )
+        unavailable = test_windows_audio_input(
+            Path("ffmpeg.exe"),
+            device,
+            runner=lambda _command, _timeout: CommandResult(1, "", "device is busy"),
+            platform_name="Windows",
+        )
+
+        self.assertEqual((active.state, active.peak_db), ("active", -12.5))
+        self.assertEqual(silent.state, "silent")
+        self.assertEqual(unavailable.state, "unavailable")
+
     def test_parse_dshow_devices_preserves_japanese_names(self) -> None:
         output = """[dshow @ 000001] \"マイク (Realtek Audio)\" (audio)
 [dshow @ 000001]   Alternative name \"@device_cm_...\"

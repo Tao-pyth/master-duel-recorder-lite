@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
+import time
 from typing import Callable
 
 from .capture_targets import CaptureInput, CaptureTargetError, resolve_configured_capture
 from .config import AppConfig
-from .duel_records import DuelRecordError, DuelRecordRepository
+from .duel_records import DuelRecordError, DuelRecordRepository, DuelRecordValues
 from .duel_timeline import DuelTimelineRepository
 from .ffmpeg import discover_ffmpeg
 from .frame_capture import FfmpegWindowFrameCapture
@@ -37,6 +39,41 @@ VisualWorkerBuilder = Callable[[datetime], VisualDetectionWorker]
 
 
 @dataclass
+class RecordingVisualLifecycle:
+    confirmed: bool = False
+    play_order: str = "unknown"
+    outcome: str = "unknown"
+    abort_reason: str | None = None
+    result_detected_monotonic: float | None = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def handle(self, candidate: DetectionCandidate) -> None:
+        with self._lock:
+            if candidate.event_type == "duel_confirmed":
+                self.confirmed = True
+                if candidate.play_order in {"first", "second"}:
+                    self.play_order = candidate.play_order
+            elif candidate.event_type == "duel_result":
+                if candidate.outcome in {"win", "loss", "draw"}:
+                    self.outcome = candidate.outcome
+                self.result_detected_monotonic = time.monotonic()
+            elif candidate.event_type == "match_error":
+                self.abort_reason = "マッチング失敗またはゲームサーバーエラーを検出しました"
+            elif candidate.event_type == "replay_detected":
+                self.abort_reason = "リプレイ画面を検出したためライブ対戦として保存しません"
+
+    def snapshot(self) -> tuple[bool, str, str, str | None, float | None]:
+        with self._lock:
+            return (
+                self.confirmed,
+                self.play_order,
+                self.outcome,
+                self.abort_reason,
+                self.result_detected_monotonic,
+            )
+
+
+@dataclass
 class PreparedRecording:
     target: RecordingTarget
     executable: Path
@@ -47,6 +84,7 @@ class PreparedRecording:
     history: RecordingHistoryRepository
     state_store: RecordingStateStore
     visual_worker_builder: VisualWorkerBuilder | None = None
+    visual_lifecycle: RecordingVisualLifecycle = field(default_factory=RecordingVisualLifecycle)
     _history_started: bool = field(default=False, init=False)
     _history_finalized: bool = field(default=False, init=False)
     _source: str | None = field(default=None, init=False)
@@ -65,6 +103,7 @@ class PreparedRecording:
                 container=self.profile.recording_format,
                 source=source,
                 detection_reason=detection_reason,
+                audio_input=self.profile.audio_input or None,
             )
             self._history_started = True
             self._save_state("starting")
@@ -137,10 +176,17 @@ class PreparedRecording:
         try:
             self.history.finalize(self.target.recording_id, self.session.result)
             if self.session.result.succeeded:
-                DuelRecordRepository(self.history.database_path).create_draft(
-                    self.target.recording_id,
-                    source="system",
-                )
+                records = DuelRecordRepository(self.history.database_path)
+                _, play_order, outcome, _, _ = self.visual_lifecycle.snapshot()
+                if play_order != "unknown" or outcome != "unknown":
+                    records.save(
+                        self.target.recording_id,
+                        DuelRecordValues(result=outcome, play_order=play_order),
+                        expected_revision=0,
+                        source="detected",
+                    )
+                else:
+                    records.create_draft(self.target.recording_id, source="system")
             self._save_state(self.session.result.state.value)
         except (DuelRecordError, RecordingHistoryError, RecordingStateStoreError) as exc:
             raise RecordingTrackingError(f"録画履歴を最終状態へ更新できません: {exc}") from exc
@@ -168,6 +214,18 @@ class PreparedRecording:
         if self._visual_failure is not None:
             return VisualDetectionStatus("failed", self._visual_failure, 0, 0, 0)
         return VisualDetectionStatus("disabled", "この録画では自動判定を使用しません", 0, 0, 0)
+
+    @property
+    def duel_confirmed(self) -> bool:
+        return self.visual_lifecycle.snapshot()[0]
+
+    @property
+    def visual_abort_reason(self) -> str | None:
+        return self.visual_lifecycle.snapshot()[3]
+
+    @property
+    def result_detected_monotonic(self) -> float | None:
+        return self.visual_lifecycle.snapshot()[4]
 
     def _start_visual_detection(self) -> None:
         if self.visual_worker_builder is None or self.session.started_at is None:
@@ -240,6 +298,7 @@ def prepare_recording(
 
     try:
         history = RecordingHistoryRepository.from_runtime_paths(paths)
+        visual_lifecycle = RecordingVisualLifecycle()
         visual_worker_builder = (
             _visual_worker_builder(
                 config=config,
@@ -247,6 +306,7 @@ def prepare_recording(
                 capture_input=selected_input,
                 history=history,
                 recording_id=target.recording_id,
+                lifecycle=visual_lifecycle,
             )
             if enable_visual_detection
             else None
@@ -261,6 +321,7 @@ def prepare_recording(
             history=history,
             state_store=RecordingStateStore(paths),
             visual_worker_builder=visual_worker_builder,
+            visual_lifecycle=visual_lifecycle,
         )
     except (OSError, RecordingHistoryError) as exc:
         recording_lock.release()
@@ -274,6 +335,7 @@ def _visual_worker_builder(
     capture_input: CaptureInput,
     history: RecordingHistoryRepository,
     recording_id: str,
+    lifecycle: RecordingVisualLifecycle,
 ) -> VisualWorkerBuilder | None:
     if not config.visual_detection_enabled or config.capture_mode != "master_duel":
         return None
@@ -297,11 +359,15 @@ def _visual_worker_builder(
     def build(started_at: datetime) -> VisualDetectionWorker:
         pipeline = VisualDetectionPipeline(
             consensus=TemporalEventConsensus(
-                minimum_confidence=config.visual_detection_minimum_confidence
+                minimum_confidence=config.visual_detection_minimum_confidence,
+                assume_started=True,
             )
         )
 
         def save_candidate(candidate: DetectionCandidate) -> None:
+            lifecycle.handle(candidate)
+            if candidate.event_type not in {"duel_start", "turn_change", "duel_result"}:
+                return
             repository.add(
                 recording_id,
                 elapsed_ms=candidate.elapsed_ms,
