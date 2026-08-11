@@ -16,12 +16,16 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--ffmpeg", type=Path, default=Path("ffmpeg"))
     parser.add_argument("--fps", type=float, default=2.0)
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--markdown-out", type=Path)
     args = parser.parse_args()
 
     report = evaluate_visual_dataset(
-        load_visual_dataset(args.manifest), args.ffmpeg, sample_fps=args.fps
+        load_visual_dataset(args.manifest),
+        args.ffmpeg,
+        sample_fps=args.fps,
+        max_workers=args.workers,
     )
     markdown = render_evaluation_markdown(report)
     if args.json_out:

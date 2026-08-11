@@ -1,13 +1,24 @@
 import queue
 import unittest
+from datetime import date
 from unittest.mock import Mock
 
 from master_duel_recorder_lite.gui import (
     HISTORY_ROW_ACTIONS,
     ICON_GLYPHS,
+    RECORD_STATUS_PRESENTATIONS,
     RecorderGui,
     WAITING_ACTIVITY_PREFIX,
+    _inspection_status_label,
+    _format_statistics_detail,
+    _format_win_rate,
+    _parse_filter_date,
+    _recovery_failure_label,
+    _recovery_state_label,
+    incomplete_duel_count_presentation,
+    record_status_presentation,
 )
+from master_duel_recorder_lite.duel_statistics import StatisticsMetric
 
 
 class FakeListbox:
@@ -58,6 +69,15 @@ class GuiActivityTest(unittest.TestCase):
         )
         self.assertEqual(len({ICON_GLYPHS[item[0]] for item in HISTORY_ROW_ACTIONS}), 4)
         self.assertEqual([item[2] for item in HISTORY_ROW_ACTIONS], ["Enter", "Ctrl+E", "Ctrl+O", "Delete"])
+        self.assertTrue(
+            all(ord(ICON_GLYPHS[item[0]]) >= 0xE000 for item in HISTORY_ROW_ACTIONS)
+        )
+
+    def test_recovery_states_explain_whether_repair_is_possible(self) -> None:
+        self.assertEqual(_recovery_state_label("repairable"), "修復可能")
+        self.assertEqual(_recovery_state_label("unrecoverable"), "修復不可")
+        self.assertEqual(_recovery_failure_label("output_empty"), "空ファイル")
+        self.assertEqual(_inspection_status_label("valid"), "読取可能")
 
     def test_removing_waiting_activity_preserves_other_history(self) -> None:
         self.gui._activity("録画対象を保存しました")
@@ -81,6 +101,58 @@ class GuiActivityTest(unittest.TestCase):
         gui.service.recording_snapshot.assert_not_called()
         gui.service.visual_detection_status.assert_not_called()
         gui.root.after.assert_called_once_with(500, gui._poll_runtime)
+
+    def test_automatic_watch_statuses_distinguish_waiting_and_recording(self) -> None:
+        waiting = record_status_presentation("watch_waiting")
+        candidate = record_status_presentation("candidate_recording")
+        recording = record_status_presentation("automatic_recording")
+
+        self.assertIn("録画待機", waiting.text)
+        self.assertNotIn("録画中", waiting.text)
+        self.assertIn("録画中", candidate.text)
+        self.assertIn("対戦確認中", candidate.text)
+        self.assertIn("録画中", recording.text)
+        self.assertIn("対戦記録中", recording.text)
+        self.assertEqual(len({waiting.background, candidate.background, recording.background}), 3)
+
+    def test_every_record_status_has_visible_text_and_contrast_colors(self) -> None:
+        self.assertEqual(
+            set(RECORD_STATUS_PRESENTATIONS),
+            {
+                "idle",
+                "starting",
+                "manual_recording",
+                "watch_waiting",
+                "candidate_recording",
+                "automatic_recording",
+                "stopping",
+                "failed",
+            },
+        )
+        for presentation in RECORD_STATUS_PRESENTATIONS.values():
+            self.assertTrue(presentation.text.startswith("● "))
+            self.assertNotEqual(presentation.background, presentation.foreground)
+
+    def test_incomplete_duel_count_highlights_only_positive_counts(self) -> None:
+        complete = incomplete_duel_count_presentation(0)
+        incomplete = incomplete_duel_count_presentation(12)
+
+        self.assertEqual(complete.text, "戦績管理 未完了 0件")
+        self.assertEqual(incomplete.text, "戦績管理 未完了 12件")
+        self.assertNotEqual(complete.background, incomplete.background)
+        with self.assertRaises(ValueError):
+            incomplete_duel_count_presentation(-1)
+
+    def test_statistics_date_and_metric_presentations_are_unambiguous(self) -> None:
+        self.assertEqual(_parse_filter_date("2026-08-12", "開始日"), date(2026, 8, 12))
+        self.assertIsNone(_parse_filter_date("", "開始日"))
+        with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
+            _parse_filter_date("2026/08/12", "開始日")
+
+        metric = StatisticsMetric(matches=7, wins=6, losses=1, draws=0)
+        self.assertEqual(_format_win_rate(metric), "85.7%")
+        self.assertEqual(_format_statistics_detail(metric), "7戦  6勝  1敗  0引分")
+        self.assertEqual(_format_win_rate(StatisticsMetric(0, 0, 0, 0)), "-")
 
 
 if __name__ == "__main__":

@@ -9,11 +9,10 @@ import sys
 import time
 
 from . import __version__
-from .auto_recording import AutoRecordingController, AutoRecordingEvent, AutoRecordingEventAction
+from .application import ApplicationEvent, RecorderApplicationService
 from .capture_targets import CaptureTargetCatalog
 from .config import AppConfig, AppConfigError, LoadedAppConfig, load_app_config, save_app_config
 from .config_management import ConfigValueError, config_value, config_values, updated_config
-from .detection import DetectionPolicy, DuelDetectionStateMachine
 from .duel_records import (
     DUEL_TYPES,
     PLAY_ORDERS,
@@ -34,7 +33,6 @@ from .duel_timeline import (
 )
 from .ffmpeg import discover_ffmpeg, enumerate_windows_inputs
 from .game_window import GameWindowMonitor, GameWindowObservation, GameWindowStatus
-from .master_duel_detector import MasterDuelWindowDetector
 from .media_recovery import InspectionStatus, MediaRecoveryError, MediaRecoveryService
 from .operational_status import collect_operational_status
 from .preflight import CheckStatus, PreflightReport, run_preflight
@@ -1278,46 +1276,29 @@ def _run_watch_command(*, project_root: Path, user_data_dir: Path | None, once: 
         _print_game_window_observation(game)
         return 2 if game.status is GameWindowStatus.ERROR else 0
 
-    paths = default_runtime_paths(project_root=project_root, user_data_dir=user_data_dir)
-    report = run_preflight(paths=paths, config=config, config_loaded=loaded.config_loaded)
-    _print_preflight_report(report)
-    if not report.succeeded:
-        return 2
+    service = RecorderApplicationService(project_root=project_root, user_data_dir=user_data_dir)
+    failed = False
 
-    detector = MasterDuelWindowDetector(monitor)
-    state_machine = DuelDetectionStateMachine(
-        DetectionPolicy(
-            start_confirmations=config.start_confirmations,
-            stop_confirmations=config.stop_confirmations,
-            minimum_confidence=config.detection_minimum_confidence,
-            cooldown_seconds=config.detection_cooldown_seconds,
-            automatic_start=config.auto_start_recording,
-            automatic_stop=config.auto_stop_recording,
-        )
-    )
-    controller = AutoRecordingController(
-        state_machine=state_machine,
-        recording_factory=lambda observation: prepare_recording(
-            paths=paths,
-            config=config,
-            master_duel_window_handle=observation.capture_window_handle,
-            master_duel_window_title=observation.capture_window_title,
-        ),
-    )
-    print("Master Duelウィンドウの監視を開始しました。停止するにはCtrl+Cを押してください。")
+    def report_event(event: ApplicationEvent) -> None:
+        nonlocal failed
+        if event.kind == "visual":
+            return
+        if event.kind == "error":
+            failed = True
+        output = sys.stderr if event.kind == "error" else sys.stdout
+        recording = f" id={event.recording_id}" if event.recording_id else ""
+        print(f"[{event.kind.upper()}]{recording} {event.message}", file=output)
+
+    service.start_watch(report_event)
+    print("Master Duel対戦画面の監視を開始しました。停止するにはCtrl+Cを押してください。")
     try:
-        while True:
-            observation = detector.observe()
-            event = controller.process(observation)
-            _print_auto_recording_event(event)
-            time.sleep(config.detection_poll_interval_seconds)
+        while service.watch_active:
+            time.sleep(0.25)
     except KeyboardInterrupt:
         print("監視の停止要求を受け付けました。")
-        if controller.current is None:
-            return 0
-        event = controller.manual_stop()
-        _print_auto_recording_event(event)
-        return 0 if event.action is AutoRecordingEventAction.STOPPED else 3
+    finally:
+        service.stop_watch()
+    return 3 if failed else 0
 
 
 def _print_game_window_observation(game: GameWindowObservation) -> None:
@@ -1333,22 +1314,6 @@ def _print_game_window_observation(game: GameWindowObservation) -> None:
         print(f"pid: {game.process.pid}")
     if game.window is not None:
         print(f"window: {game.window.handle} {game.window.width}x{game.window.height}")
-
-
-def _print_auto_recording_event(event: AutoRecordingEvent) -> None:
-    if event.action is AutoRecordingEventAction.NONE:
-        if event.decision is not None and (event.decision.start_count or event.decision.stop_count):
-            print(f"[WAIT] {event.message}")
-        return
-    labels = {
-        AutoRecordingEventAction.STARTED: "STARTED",
-        AutoRecordingEventAction.STOPPED: "STOPPED",
-        AutoRecordingEventAction.ERROR: "ERROR",
-        AutoRecordingEventAction.SKIPPED: "SKIPPED",
-    }
-    recording = f" id={event.recording_id}" if event.recording_id else ""
-    output = sys.stderr if event.action is AutoRecordingEventAction.ERROR else sys.stdout
-    print(f"[{labels[event.action]}]{recording} {event.message}", file=output)
 
 
 if __name__ == "__main__":

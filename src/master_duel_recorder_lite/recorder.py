@@ -12,7 +12,7 @@ from .config import AppConfig
 from .duel_records import DuelRecordError, DuelRecordRepository, DuelRecordValues
 from .duel_timeline import DuelTimelineRepository
 from .ffmpeg import discover_ffmpeg
-from .frame_capture import FfmpegWindowFrameCapture
+from .frame_capture import FfmpegWindowFrameCapture, FrameCaptureResult, FrameSample
 from .game_window import WindowSnapshot
 from .recording_command import RecordingCommandError, build_recording_command
 from .recording_history import RecordingHistoryError, RecordingHistoryRepository
@@ -23,7 +23,12 @@ from .recording_profile import RecordingProfile, RecordingProfileError
 from .recording_session import RecordingResult, RecordingSession, RecordingState
 from .recording_state_store import RecordingStateStore, RecordingStateStoreError
 from .runtime_paths import RuntimePaths
-from .visual_detection import DetectionCandidate, TemporalEventConsensus, VisualDetectionPipeline
+from .visual_detection import (
+    DetectionCandidate,
+    FrameAnalysis,
+    TemporalEventConsensus,
+    VisualDetectionPipeline,
+)
 from .visual_worker import VisualDetectionStatus, VisualDetectionWorker
 
 
@@ -36,6 +41,8 @@ class RecordingTrackingError(RuntimeError):
 
 
 VisualWorkerBuilder = Callable[[datetime], VisualDetectionWorker]
+SharedFrameCapture = Callable[[], FrameCaptureResult]
+AnalysisCallback = Callable[[FrameAnalysis], None]
 
 
 @dataclass
@@ -45,6 +52,7 @@ class RecordingVisualLifecycle:
     outcome: str = "unknown"
     abort_reason: str | None = None
     result_detected_monotonic: float | None = None
+    boundary_detected_monotonic: float | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def handle(self, candidate: DetectionCandidate) -> None:
@@ -57,6 +65,8 @@ class RecordingVisualLifecycle:
                 if candidate.outcome in {"win", "loss", "draw"}:
                     self.outcome = candidate.outcome
                 self.result_detected_monotonic = time.monotonic()
+            elif candidate.event_type == "duel_boundary":
+                self.boundary_detected_monotonic = time.monotonic()
             elif candidate.event_type == "match_error":
                 self.abort_reason = "マッチング失敗またはゲームサーバーエラーを検出しました"
             elif candidate.event_type == "replay_detected":
@@ -71,6 +81,10 @@ class RecordingVisualLifecycle:
                 self.abort_reason,
                 self.result_detected_monotonic,
             )
+
+    def boundary_snapshot(self) -> float | None:
+        with self._lock:
+            return self.boundary_detected_monotonic
 
 
 @dataclass
@@ -227,6 +241,10 @@ class PreparedRecording:
     def result_detected_monotonic(self) -> float | None:
         return self.visual_lifecycle.snapshot()[4]
 
+    @property
+    def boundary_detected_monotonic(self) -> float | None:
+        return self.visual_lifecycle.boundary_snapshot()
+
     def _start_visual_detection(self) -> None:
         if self.visual_worker_builder is None or self.session.started_at is None:
             return
@@ -262,6 +280,11 @@ def prepare_recording(
     master_duel_window_handle: int | None = None,
     master_duel_window_title: str | None = None,
     enable_visual_detection: bool = True,
+    visual_frame_capture: SharedFrameCapture | None = None,
+    visual_analysis_callback: AnalysisCallback | None = None,
+    visual_source: str = "",
+    visual_restart_counter: Callable[[], int] | None = None,
+    visual_frame_generation: Callable[[], int] | None = None,
 ) -> PreparedRecording:
     discovery = discover_ffmpeg(config.ffmpeg_path)
     if not discovery.found or discovery.executable is None:
@@ -307,6 +330,11 @@ def prepare_recording(
                 history=history,
                 recording_id=target.recording_id,
                 lifecycle=visual_lifecycle,
+                shared_frame_capture=visual_frame_capture,
+                analysis_callback=visual_analysis_callback,
+                source=visual_source,
+                restart_counter=visual_restart_counter,
+                frame_generation=visual_frame_generation,
             )
             if enable_visual_detection
             else None
@@ -336,6 +364,11 @@ def _visual_worker_builder(
     history: RecordingHistoryRepository,
     recording_id: str,
     lifecycle: RecordingVisualLifecycle,
+    shared_frame_capture: SharedFrameCapture | None = None,
+    analysis_callback: AnalysisCallback | None = None,
+    source: str = "",
+    restart_counter: Callable[[], int] | None = None,
+    frame_generation: Callable[[], int] | None = None,
 ) -> VisualWorkerBuilder | None:
     if not config.visual_detection_enabled or config.capture_mode != "master_duel":
         return None
@@ -353,16 +386,28 @@ def _visual_worker_builder(
         width=0,
         height=0,
     )
-    capture = FfmpegWindowFrameCapture(executable)
+    capture = FfmpegWindowFrameCapture(executable) if shared_frame_capture is None else None
     repository = DuelTimelineRepository(history.database_path)
 
     def build(started_at: datetime) -> VisualDetectionWorker:
-        pipeline = VisualDetectionPipeline(
-            consensus=TemporalEventConsensus(
-                minimum_confidence=config.visual_detection_minimum_confidence,
-                assume_started=True,
+        def new_pipeline() -> VisualDetectionPipeline:
+            return VisualDetectionPipeline(
+                consensus=TemporalEventConsensus(
+                    minimum_confidence=config.visual_detection_minimum_confidence,
+                    assume_started=True,
+                )
             )
-        )
+
+        pipeline = new_pipeline()
+        generation = frame_generation() if frame_generation is not None else 0
+
+        def analyze(frame: FrameSample, elapsed_ms: int) -> FrameAnalysis:
+            nonlocal pipeline, generation
+            current_generation = frame_generation() if frame_generation is not None else generation
+            if current_generation != generation:
+                generation = current_generation
+                pipeline = new_pipeline()
+            return pipeline.analyze_frame(frame, elapsed_ms)
 
         def save_candidate(candidate: DetectionCandidate) -> None:
             lifecycle.handle(candidate)
@@ -384,10 +429,17 @@ def _visual_worker_builder(
 
         return VisualDetectionWorker(
             recording_started_at=started_at,
-            capture=lambda: capture.capture(window),
-            analyze=pipeline.analyze,
+            capture=(
+                shared_frame_capture
+                if shared_frame_capture is not None
+                else lambda: capture.capture(window)  # type: ignore[union-attr]
+            ),
+            analyze=analyze,
             on_candidate=save_candidate,
+            on_analysis=analysis_callback,
             maximum_fps=config.visual_detection_maximum_fps,
+            source=source,
+            restart_counter=restart_counter,
         )
 
     return build

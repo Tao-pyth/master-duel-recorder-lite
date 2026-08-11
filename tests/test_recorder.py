@@ -284,7 +284,7 @@ class RecorderPreparationTest(unittest.TestCase):
                         return_value=frame_result,
                     ),
                     patch(
-                        "master_duel_recorder_lite.recorder.VisualDetectionPipeline.analyze",
+                        "master_duel_recorder_lite.recorder.VisualDetectionPipeline.analyze_frame",
                         return_value=(detected,),
                     ),
                 ):

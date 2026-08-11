@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import date
 import json
+import os
 from pathlib import Path
 import queue
 import sys
@@ -17,6 +19,7 @@ from .application import (
     ApplicationEvent,
     DuelEditorData,
     RecorderApplicationService,
+    RecordingHistoryDashboard,
     RecordingSnapshot,
 )
 from .capture_targets import CaptureTarget
@@ -26,6 +29,12 @@ from .duel_records import (
     duel_choice_label,
     duel_choice_labels,
     duel_choice_value,
+)
+from .duel_statistics import (
+    StatisticsDashboard,
+    StatisticsFilter,
+    StatisticsMetric,
+    StatisticsTrendPoint,
 )
 from .duel_timeline import DuelEvent
 from .ffmpeg_setup import (
@@ -44,14 +53,16 @@ T = TypeVar("T")
 WAITING_ACTIVITY_PREFIX = "対戦開始を判定中です"
 
 ICON_GLYPHS = {
-    "add": "+",
-    "delete": "🗑",
-    "edit": "✎",
-    "folder": "📂",
-    "play": "▶",
-    "refresh": "↻",
-    "save": "▣",
-    "test": "▷",
+    "add": "\ue710",
+    "delete": "\ue74d",
+    "diagnostic": "\ue946",
+    "edit": "\ue70f",
+    "folder": "\ue8b7",
+    "play": "\ue768",
+    "refresh": "\ue72c",
+    "save": "\ue74e",
+    "test": "\ue721",
+    "timeline": "\ue81c",
 }
 HISTORY_ROW_ACTIONS = (
     ("play", "再生", "Enter"),
@@ -67,6 +78,53 @@ class UiResult:
     error_callback: Callable[[BaseException], None] | None
     value: object | None = None
     error: BaseException | None = None
+
+
+@dataclass(frozen=True)
+class RecordStatusPresentation:
+    text: str
+    background: str
+    foreground: str
+
+
+RECORD_STATUS_PRESENTATIONS = {
+    "idle": RecordStatusPresentation("● 停止中", "#e8ebef", "#202124"),
+    "starting": RecordStatusPresentation("● 開始処理中", "#f2c94c", "#202124"),
+    "manual_recording": RecordStatusPresentation("● 手動録画中", "#b3261e", "#ffffff"),
+    "watch_waiting": RecordStatusPresentation(
+        "● 自動監視中 | 録画待機",
+        "#006a6a",
+        "#ffffff",
+    ),
+    "candidate_recording": RecordStatusPresentation(
+        "● 自動監視中 | 録画中（対戦確認中）",
+        "#f2c94c",
+        "#202124",
+    ),
+    "automatic_recording": RecordStatusPresentation(
+        "● 自動監視中 | 録画中（対戦記録中）",
+        "#b3261e",
+        "#ffffff",
+    ),
+    "stopping": RecordStatusPresentation("● 停止処理中", "#9a6700", "#ffffff"),
+    "failed": RecordStatusPresentation("● 録画失敗", "#7f1d1d", "#ffffff"),
+}
+
+
+def record_status_presentation(status: str) -> RecordStatusPresentation:
+    return RECORD_STATUS_PRESENTATIONS[status]
+
+
+def incomplete_duel_count_presentation(count: int) -> RecordStatusPresentation:
+    if count < 0:
+        raise ValueError("未完了件数は0以上である必要があります")
+    if count == 0:
+        return RecordStatusPresentation("戦績管理 未完了 0件", "#dff5e8", "#0f6651")
+    return RecordStatusPresentation(
+        f"戦績管理 未完了 {count}件",
+        "#fff0c2",
+        "#6b4600",
+    )
 
 
 class WidgetTooltip:
@@ -154,19 +212,100 @@ class BackgroundTasks:
             self.root.after(80, self._drain)
 
 
+class StatisticsTrendChart(tk.Canvas):
+    def __init__(self, parent: tk.Misc, *, colors: dict[str, str]) -> None:
+        super().__init__(
+            parent,
+            background=colors["surface"],
+            highlightthickness=0,
+            borderwidth=0,
+            height=300,
+        )
+        self.colors = colors
+        self.points: tuple[StatisticsTrendPoint, ...] = ()
+        self.bind("<Configure>", lambda _event: self.redraw())
+
+    def set_points(self, points: tuple[StatisticsTrendPoint, ...]) -> None:
+        self.points = points
+        self.redraw()
+
+    def redraw(self) -> None:
+        self.delete("all")
+        width = max(self.winfo_width(), 320)
+        height = max(self.winfo_height(), 220)
+        if not self.points:
+            self.create_text(
+                width / 2,
+                height / 2,
+                text="表示できる確定済み対戦がありません",
+                fill=self.colors["muted"],
+                font=("Segoe UI", 10),
+            )
+            return
+        left, top, right, bottom = 50, 32, width - 22, height - 42
+        chart_width = max(1, right - left)
+        chart_height = max(1, bottom - top)
+        for rate in (0, 50, 100):
+            y = bottom - (chart_height * rate / 100)
+            self.create_line(left, y, right, y, fill=self.colors["border"], dash=(2, 4))
+            self.create_text(left - 9, y, text=f"{rate}%", anchor="e", fill=self.colors["muted"], font=("Segoe UI", 8))
+        maximum_wins = max(1, *(point.metric.wins for point in self.points))
+        slot = chart_width / max(1, len(self.points))
+        bar_width = max(2, min(18, slot * 0.48))
+        line_points: list[float] = []
+        for index, point in enumerate(self.points):
+            x = left + (slot * index) + (slot / 2)
+            bar_height = chart_height * point.metric.wins / maximum_wins
+            self.create_rectangle(
+                x - bar_width / 2,
+                bottom - bar_height,
+                x + bar_width / 2,
+                bottom,
+                fill=self.colors["tertiary"],
+                outline="",
+            )
+            if point.metric.win_rate is not None:
+                line_points.extend((x, bottom - chart_height * point.metric.win_rate))
+            label_stride = max(1, (len(self.points) + 7) // 8)
+            if index % label_stride == 0 or index == len(self.points) - 1:
+                self.create_text(x, bottom + 14, text=point.label, fill=self.colors["muted"], font=("Segoe UI", 8))
+        if len(line_points) >= 4:
+            self.create_line(*line_points, fill=self.colors["primary"], width=3, smooth=False)
+        for index in range(0, len(line_points), 2):
+            self.create_oval(
+                line_points[index] - 3,
+                line_points[index + 1] - 3,
+                line_points[index] + 3,
+                line_points[index + 1] + 3,
+                fill=self.colors["primary"],
+                outline=self.colors["surface"],
+            )
+        self.create_rectangle(left, 8, left + 12, 20, fill=self.colors["tertiary"], outline="")
+        self.create_text(left + 18, 14, text="勝利数", anchor="w", fill=self.colors["text"], font=("Segoe UI", 9))
+        self.create_line(left + 78, 14, left + 96, 14, fill=self.colors["primary"], width=3)
+        self.create_text(left + 102, 14, text="勝率", anchor="w", fill=self.colors["text"], font=("Segoe UI", 9))
+
+
 class RecorderGui:
     COLORS = {
-        "canvas": "#f4f5f7",
+        "canvas": "#f7f9f8",
         "surface": "#ffffff",
-        "sidebar": "#20242a",
-        "sidebar_active": "#343a43",
-        "text": "#202124",
-        "muted": "#687078",
-        "border": "#d9dde3",
+        "surface_container": "#edf2f0",
+        "surface_high": "#e3e9e7",
+        "sidebar": "#f0f5f3",
+        "sidebar_active": "#cce8e5",
+        "text": "#191c1c",
+        "muted": "#3f4948",
+        "border": "#bec9c7",
+        "outline": "#6f7978",
+        "primary": "#006a6a",
+        "primary_hover": "#005c5c",
+        "on_primary": "#ffffff",
+        "tertiary": "#4f635f",
         "green": "#147d64",
         "red": "#b3261e",
         "amber": "#9a6700",
-        "blue": "#245ea8",
+        "blue": "#006a6a",
     }
 
     def __init__(
@@ -189,13 +328,20 @@ class RecorderGui:
         self.catalog_name_vars: dict[str, tk.StringVar] = {}
         self.catalog_description_vars: dict[str, tk.StringVar] = {}
         self.catalog_color_vars: dict[str, tk.StringVar] = {}
+        self.catalog_color_buttons: dict[str, tk.Button] = {}
+        self.catalog_color_images: dict[str, tk.PhotoImage] = {}
         self.catalog_update_buttons: dict[str, ttk.Button] = {}
         self.catalog_delete_buttons: dict[str, ttk.Button] = {}
         self.history_views_by_id: dict[str, object] = {}
+        self.history_action_buttons: dict[str, ttk.Button] = {}
+        self.statistics_decks_by_label: dict[str, str | None] = {"すべて": None}
+        self.statistics_tags_by_label: dict[str, int | None] = {"すべて": None}
+        self.recovery_entries_by_id: dict[str, object] = {}
         self.current_page = "record"
         self.watch_events: queue.Queue[ApplicationEvent] = queue.Queue()
         self.busy_operations = 0
         self.closing = False
+        self.automatic_recording_confirmed = False
         self.ffmpeg_setup_prompted = False
         self.ffmpeg_setup_dialog: tk.Toplevel | None = None
         self.tooltips: list[WidgetTooltip] = []
@@ -205,6 +351,7 @@ class RecorderGui:
         self._build_shell()
         self._build_record_page()
         self._build_history_page()
+        self._build_statistics_page()
         self._build_catalog_pages()
         self._build_recovery_page()
         self._build_prepare_page()
@@ -228,11 +375,12 @@ class RecorderGui:
         style.theme_use("clam")
         style.configure("App.TFrame", background=self.COLORS["canvas"])
         style.configure("Surface.TFrame", background=self.COLORS["surface"])
+        style.configure("Container.TFrame", background=self.COLORS["surface_container"])
         style.configure(
             "Title.TLabel",
             background=self.COLORS["canvas"],
             foreground=self.COLORS["text"],
-            font=("Segoe UI Semibold", 18),
+            font=("Segoe UI Semibold", 20),
         )
         style.configure(
             "Heading.TLabel",
@@ -252,22 +400,39 @@ class RecorderGui:
             foreground=self.COLORS["muted"],
             font=("Segoe UI", 9),
         )
-        style.configure("TButton", font=("Segoe UI", 10), padding=(12, 7))
-        style.configure("Icon.TButton", font=("Segoe UI Symbol", 12), padding=(8, 7))
-        style.configure("Primary.TButton", foreground="#ffffff", background=self.COLORS["blue"])
-        style.map("Primary.TButton", background=[("active", "#1d4f91"), ("disabled", "#9ea9b7")])
+        style.configure(
+            "TButton",
+            font=("Segoe UI Semibold", 9),
+            padding=(12, 8),
+            background=self.COLORS["surface_container"],
+            foreground=self.COLORS["text"],
+            bordercolor=self.COLORS["border"],
+        )
+        style.map(
+            "TButton",
+            background=[("pressed", self.COLORS["surface_high"]), ("active", self.COLORS["surface_high"]), ("disabled", "#e1e5e4")],
+            foreground=[("disabled", "#8b9392")],
+        )
+        style.configure("Icon.TButton", font=("Segoe MDL2 Assets", 16), padding=(10, 9))
+        style.configure("Primary.TButton", foreground=self.COLORS["on_primary"], background=self.COLORS["primary"])
+        style.map("Primary.TButton", background=[("pressed", "#004f4f"), ("active", self.COLORS["primary_hover"]), ("disabled", "#9da8a6")])
         style.configure("Record.TButton", foreground="#ffffff", background=self.COLORS["red"])
         style.map("Record.TButton", background=[("active", "#8f1f19"), ("disabled", "#c6a09d")])
         style.configure("Stop.TButton", foreground="#ffffff", background=self.COLORS["green"])
         style.map("Stop.TButton", background=[("active", "#0f6651"), ("disabled", "#9ebdb5")])
-        style.configure("Treeview", rowheight=29, font=("Segoe UI", 9), borderwidth=0)
-        style.configure("Treeview.Heading", font=("Segoe UI Semibold", 9), padding=(6, 7))
-        style.map("Treeview", background=[("selected", "#d9e7f7")], foreground=[("selected", "#202124")])
+        style.configure("Treeview", rowheight=31, font=("Segoe UI", 9), borderwidth=0, background=self.COLORS["surface"], fieldbackground=self.COLORS["surface"])
+        style.configure("Treeview.Heading", font=("Segoe UI Semibold", 9), padding=(7, 8), background=self.COLORS["surface_container"], foreground=self.COLORS["text"])
+        style.map("Treeview", background=[("selected", self.COLORS["sidebar_active"])], foreground=[("selected", self.COLORS["text"])])
+        style.configure("Metric.TLabel", background=self.COLORS["surface"], foreground=self.COLORS["primary"], font=("Segoe UI Semibold", 25))
+        style.configure("MetricLabel.TLabel", background=self.COLORS["surface"], foreground=self.COLORS["muted"], font=("Segoe UI Semibold", 9))
+        style.configure("TNotebook", background=self.COLORS["canvas"], borderwidth=0)
+        style.configure("TNotebook.Tab", font=("Segoe UI Semibold", 9), padding=(16, 9), background=self.COLORS["surface_container"])
+        style.map("TNotebook.Tab", background=[("selected", self.COLORS["sidebar_active"]), ("active", self.COLORS["surface_high"])], foreground=[("selected", self.COLORS["primary"])])
 
     def _build_shell(self) -> None:
         shell = tk.Frame(self.root, background=self.COLORS["canvas"])
         shell.pack(fill="both", expand=True)
-        sidebar = tk.Frame(shell, width=196, background=self.COLORS["sidebar"])
+        sidebar = tk.Frame(shell, width=188, background=self.COLORS["sidebar"])
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
         brand = tk.Label(
@@ -277,7 +442,7 @@ class RecorderGui:
             padx=20,
             pady=22,
             background=self.COLORS["sidebar"],
-            foreground="#ffffff",
+            foreground=self.COLORS["primary"],
             font=("Segoe UI Semibold", 20),
         )
         brand.pack(fill="x")
@@ -288,12 +453,13 @@ class RecorderGui:
             anchor="w",
             padx=20,
             background=self.COLORS["sidebar"],
-            foreground="#aeb5bf",
+            foreground=self.COLORS["muted"],
             font=("Segoe UI", 9),
         ).pack(fill="x", pady=(0, 18))
         for key, label in (
             ("record", "録画"),
             ("history", "録画履歴"),
+            ("statistics", "統計"),
             ("decks", "デッキ名"),
             ("tags", "タグ"),
             ("recovery", "復旧"),
@@ -309,9 +475,9 @@ class RecorderGui:
                 relief="flat",
                 borderwidth=0,
                 background=self.COLORS["sidebar"],
-                foreground="#e5e8ec",
+                foreground=self.COLORS["text"],
                 activebackground=self.COLORS["sidebar_active"],
-                activeforeground="#ffffff",
+                activeforeground=self.COLORS["primary"],
                 font=("Segoe UI Semibold", 10),
                 command=lambda page=key: self.show_page(page),
             )
@@ -324,7 +490,7 @@ class RecorderGui:
             padx=20,
             pady=16,
             background=self.COLORS["sidebar"],
-            foreground="#aeb5bf",
+            foreground=self.COLORS["muted"],
             font=("Segoe UI", 9),
         )
         self.connection_label.pack(side="bottom", fill="x")
@@ -337,6 +503,30 @@ class RecorderGui:
         self.page_title.pack(side="left")
         self.busy_label = ttk.Label(header, text="", style="Title.TLabel", font=("Segoe UI", 9))
         self.busy_label.pack(side="right")
+        self.incomplete_duel_count_var = tk.StringVar(value="戦績管理 集計中")
+        self.incomplete_duel_count_button = tk.Button(
+            header,
+            textvariable=self.incomplete_duel_count_var,
+            command=lambda: self.show_page("history"),
+            relief="flat",
+            borderwidth=0,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            font=("Segoe UI Semibold", 9),
+            background="#e8ebef",
+            foreground=self.COLORS["text"],
+            activebackground="#e8ebef",
+            activeforeground=self.COLORS["text"],
+        )
+        self.incomplete_duel_count_button.pack(side="right", padx=(0, 12))
+        self.widgets["incomplete_duel_count"] = self.incomplete_duel_count_button
+        self.tooltips.append(
+            WidgetTooltip(
+                self.incomplete_duel_count_button,
+                "未完了の対戦記録を録画履歴で確認",
+            )
+        )
         self.page_host = ttk.Frame(content, style="App.TFrame")
         self.page_host.pack(fill="both", expand=True)
 
@@ -396,9 +586,18 @@ class RecorderGui:
 
         controls = self._surface(page, padding=(18, 18))
         controls.pack(fill="x", pady=(0, 12))
-        self.record_state_var = tk.StringVar(value="待機中")
+        self.record_state_var = tk.StringVar()
         self.elapsed_var = tk.StringVar(value="00:00:00")
-        ttk.Label(controls, textvariable=self.record_state_var, style="Heading.TLabel").grid(row=0, column=0, sticky="w")
+        self.record_status_label = tk.Label(
+            controls,
+            textvariable=self.record_state_var,
+            anchor="w",
+            padx=12,
+            pady=9,
+            font=("Segoe UI Semibold", 12),
+        )
+        self.record_status_label.grid(row=0, column=0, sticky="ew", padx=(0, 18))
+        self._set_record_status("idle")
         ttk.Label(controls, textvariable=self.elapsed_var, style="Heading.TLabel", font=("Consolas", 20)).grid(
             row=1, column=0, sticky="w", pady=(5, 2)
         )
@@ -408,7 +607,11 @@ class RecorderGui:
         )
         self.visual_status_var = tk.StringVar(value="自動判定: 録画開始後に状態を表示")
         ttk.Label(
-            controls, textvariable=self.visual_status_var, style="Muted.TLabel"
+            controls,
+            textvariable=self.visual_status_var,
+            style="Muted.TLabel",
+            justify="left",
+            wraplength=500,
         ).grid(row=3, column=0, sticky="w", pady=(5, 0))
         self.record_audio_status_var = tk.StringVar(value="音声: 設定で入力を選択できます")
         ttk.Label(
@@ -427,6 +630,7 @@ class RecorderGui:
         controls.columnconfigure(0, weight=1)
         self.widgets["record_start"] = self.start_button
         self.widgets["record_stop"] = self.stop_button
+        self.widgets["record_status"] = self.record_status_label
         self.widgets["watch_toggle"] = self.watch_button
         self.widgets["visual_status"] = self.visual_status_var
 
@@ -438,6 +642,14 @@ class RecorderGui:
         header.pack(fill="x")
         ttk.Label(header, text="環境診断", style="Heading.TLabel").pack(side="left")
         ttk.Button(header, text="診断実行", command=self.run_diagnosis).pack(side="right")
+        diagnostic_folder = self._icon_button(
+            header,
+            "folder",
+            "自動監視の数値診断フォルダを開く",
+            self.open_visual_diagnostics,
+        )
+        diagnostic_folder.pack(side="right", padx=(0, 8))
+        self.widgets["visual_diagnostics_folder"] = diagnostic_folder
         self.diagnosis_tree = ttk.Treeview(diagnosis, columns=("state", "message"), show="headings", height=8)
         self.diagnosis_tree.heading("state", text="状態")
         self.diagnosis_tree.heading("message", text="項目と結果")
@@ -465,24 +677,55 @@ class RecorderGui:
         toolbar = self._surface(page, padding=(14, 10))
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Label(toolbar, text="録画履歴", style="Heading.TLabel").pack(side="left")
-        ttk.Button(toolbar, text="整合性確認", command=self.check_history).pack(side="right")
-        self._icon_button(toolbar, "refresh", "録画履歴を更新", self.refresh_history).pack(
-            side="right", padx=(0, 8)
+        action_bar = ttk.Frame(toolbar, style="Surface.TFrame")
+        action_bar.pack(side="right")
+        commands = {
+            "play": self.play_selected_history,
+            "edit": self.edit_selected_duel_record,
+            "folder": self.reveal_selected_history,
+            "delete": self.delete_selected_history,
+        }
+        for icon, label, shortcut in HISTORY_ROW_ACTIONS:
+            button = self._icon_button(
+                action_bar,
+                icon,
+                f"{label} ({shortcut})",
+                commands[icon],
+                state="disabled",
+            )
+            button.pack(side="left", padx=(0, 6))
+            self.history_action_buttons[icon] = button
+        ttk.Separator(action_bar, orient="vertical").pack(
+            side="left", fill="y", padx=(2, 8)
         )
-        self.history_timeline_button = ttk.Button(
-            toolbar,
-            text="◷ タイムライン",
+        self.history_timeline_button = self._icon_button(
+            action_bar,
+            "timeline",
+            "タイムラインを表示",
             command=self.show_selected_timeline,
             state="disabled",
         )
-        self.history_timeline_button.pack(side="right", padx=(0, 8))
-        self.history_diagnostic_button = ttk.Button(
-            toolbar,
-            text="ⓘ 診断",
+        self.history_timeline_button.pack(side="left", padx=(0, 6))
+        self.history_diagnostic_button = self._icon_button(
+            action_bar,
+            "diagnostic",
+            "録画診断を表示",
             command=self.show_selected_history_diagnostic,
             state="disabled",
         )
-        self.history_diagnostic_button.pack(side="right", padx=(0, 8))
+        self.history_diagnostic_button.pack(side="left", padx=(0, 6))
+        self._icon_button(
+            action_bar,
+            "refresh",
+            "録画履歴を更新",
+            self.refresh_history,
+        ).pack(side="left", padx=(0, 6))
+        self._icon_button(
+            action_bar,
+            "test",
+            "録画履歴の整合性を確認",
+            self.check_history,
+        ).pack(side="left")
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
         columns = (
@@ -493,7 +736,6 @@ class RecorderGui:
             "duration",
             "size",
             "audio",
-            "actions",
         )
         self.history_tree = ttk.Treeview(panel, columns=columns, show="headings")
         for key, label, width in (
@@ -504,28 +746,107 @@ class RecorderGui:
             ("duration", "時間", 85),
             ("size", "サイズ", 100),
             ("audio", "音声", 85),
-            ("actions", "操作", 150),
         ):
             self.history_tree.heading(key, text=label)
             self.history_tree.column(key, width=width, stretch=key == "started")
         self.history_tree.pack(fill="both", expand=True)
         self.history_tree.bind("<<TreeviewSelect>>", self._history_selection_changed)
-        self.history_tree.bind("<ButtonRelease-1>", self._history_action_clicked, add="+")
-        self.history_tree.bind("<Motion>", self._history_action_motion)
-        self.history_tree.bind("<Leave>", lambda _event: self._hide_history_action_tip())
+        self.history_tree.bind("<Double-Button-1>", lambda _event: self.play_selected_history())
         self.history_tree.bind("<Return>", lambda _event: self.play_selected_history())
         self.history_tree.bind("<Control-e>", lambda _event: self.edit_selected_duel_record())
         self.history_tree.bind("<Control-o>", lambda _event: self.reveal_selected_history())
         self.history_tree.bind("<Delete>", lambda _event: self.delete_selected_history())
-        self.history_action_tip: tk.Toplevel | None = None
-        self.history_action_tip_text = ""
         self.widgets["history_table"] = self.history_tree
-        self.widgets["history_play"] = self.history_tree
-        self.widgets["history_reveal"] = self.history_tree
+        self.widgets["history_play"] = self.history_action_buttons["play"]
+        self.widgets["history_reveal"] = self.history_action_buttons["folder"]
         self.widgets["history_diagnostic"] = self.history_diagnostic_button
-        self.widgets["history_duel"] = self.history_tree
+        self.widgets["history_duel"] = self.history_action_buttons["edit"]
         self.widgets["history_timeline"] = self.history_timeline_button
-        self.widgets["history_delete"] = self.history_tree
+        self.widgets["history_delete"] = self.history_action_buttons["delete"]
+
+    def _build_statistics_page(self) -> None:
+        page = self._new_page("statistics")
+        summary = self._surface(page, padding=(18, 14))
+        summary.pack(fill="x", pady=(0, 10))
+        self.statistics_overall_rate_var = tk.StringVar(value="-")
+        self.statistics_overall_detail_var = tk.StringVar(value="確定済み対戦を集計中")
+        self.statistics_filtered_rate_var = tk.StringVar(value="-")
+        self.statistics_filtered_detail_var = tk.StringVar(value="条件を指定できます")
+        ttk.Label(summary, text="全体勝率", style="MetricLabel.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(summary, textvariable=self.statistics_overall_rate_var, style="Metric.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(summary, textvariable=self.statistics_overall_detail_var, style="Muted.TLabel").grid(row=2, column=0, sticky="w")
+        ttk.Separator(summary, orient="vertical").grid(row=0, column=1, rowspan=3, sticky="ns", padx=26)
+        ttk.Label(summary, text="条件適用後", style="MetricLabel.TLabel").grid(row=0, column=2, sticky="w")
+        ttk.Label(summary, textvariable=self.statistics_filtered_rate_var, style="Metric.TLabel").grid(row=1, column=2, sticky="w", pady=(2, 0))
+        ttk.Label(summary, textvariable=self.statistics_filtered_detail_var, style="Muted.TLabel").grid(row=2, column=2, sticky="w")
+        summary.columnconfigure(0, weight=1)
+        summary.columnconfigure(2, weight=1)
+
+        filters = self._surface(page, padding=(14, 11))
+        filters.pack(fill="x", pady=(0, 10))
+        self.statistics_date_from_var = tk.StringVar()
+        self.statistics_date_to_var = tk.StringVar()
+        self.statistics_deck_var = tk.StringVar(value="すべて")
+        self.statistics_tag_var = tk.StringVar(value="すべて")
+        self.statistics_order_var = tk.StringVar(value="すべて")
+        self.statistics_granularity_var = tk.StringVar(value="月")
+        fields = (
+            ("開始日", self.statistics_date_from_var, 12),
+            ("終了日", self.statistics_date_to_var, 12),
+        )
+        for column, (label, variable, width) in enumerate(fields):
+            ttk.Label(filters, text=label, style="Muted.TLabel").grid(row=0, column=column, sticky="w", padx=(0, 8))
+            ttk.Entry(filters, textvariable=variable, width=width).grid(row=1, column=column, sticky="ew", padx=(0, 8))
+        ttk.Label(filters, text="デッキ", style="Muted.TLabel").grid(row=0, column=2, sticky="w", padx=(0, 8))
+        self.statistics_deck_combo = ttk.Combobox(filters, textvariable=self.statistics_deck_var, state="readonly", values=("すべて",), width=18)
+        self.statistics_deck_combo.grid(row=1, column=2, sticky="ew", padx=(0, 8))
+        ttk.Label(filters, text="タグ", style="Muted.TLabel").grid(row=0, column=3, sticky="w", padx=(0, 8))
+        self.statistics_tag_combo = ttk.Combobox(filters, textvariable=self.statistics_tag_var, state="readonly", values=("すべて",), width=16)
+        self.statistics_tag_combo.grid(row=1, column=3, sticky="ew", padx=(0, 8))
+        ttk.Label(filters, text="先後", style="Muted.TLabel").grid(row=0, column=4, sticky="w", padx=(0, 8))
+        ttk.Combobox(filters, textvariable=self.statistics_order_var, state="readonly", values=("すべて", "先攻", "後攻"), width=8).grid(row=1, column=4, padx=(0, 8))
+        ttk.Label(filters, text="推移単位", style="Muted.TLabel").grid(row=0, column=5, sticky="w", padx=(0, 8))
+        ttk.Combobox(filters, textvariable=self.statistics_granularity_var, state="readonly", values=("日", "週", "月"), width=7).grid(row=1, column=5, padx=(0, 10))
+        ttk.Button(filters, text="条件を適用", style="Primary.TButton", command=self.refresh_statistics).grid(row=1, column=6, padx=(0, 6))
+        ttk.Button(filters, text="クリア", command=self.clear_statistics_filters).grid(row=1, column=7)
+        ttk.Label(filters, text="日付は YYYY-MM-DD", style="Muted.TLabel").grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.statistics_filter_status_var = tk.StringVar(value="すべての確定済み対戦")
+        ttk.Label(filters, textvariable=self.statistics_filter_status_var, style="Muted.TLabel").grid(row=2, column=2, columnspan=6, sticky="e", pady=(5, 0))
+        filters.columnconfigure(2, weight=1)
+        filters.columnconfigure(3, weight=1)
+
+        notebook = ttk.Notebook(page)
+        notebook.pack(fill="both", expand=True)
+        trend_page = ttk.Frame(notebook, style="Surface.TFrame", padding=(12, 10))
+        deck_page = ttk.Frame(notebook, style="Surface.TFrame", padding=(0, 0))
+        order_page = ttk.Frame(notebook, style="Surface.TFrame", padding=(0, 0))
+        notebook.add(trend_page, text="勝利数・勝率推移")
+        notebook.add(deck_page, text="デッキ別")
+        notebook.add(order_page, text="先後別")
+        self.statistics_chart = StatisticsTrendChart(trend_page, colors=self.COLORS)
+        self.statistics_chart.pack(fill="both", expand=True)
+        self.statistics_deck_tree = self._build_statistics_tree(deck_page, "デッキ")
+        self.statistics_order_tree = self._build_statistics_tree(order_page, "先後")
+        self.widgets["statistics_filters"] = filters
+        self.widgets["statistics_chart"] = self.statistics_chart
+        self.widgets["statistics_deck_table"] = self.statistics_deck_tree
+        self.widgets["statistics_order_table"] = self.statistics_order_tree
+
+    def _build_statistics_tree(self, parent: tk.Misc, first_heading: str) -> ttk.Treeview:
+        columns = ("group", "matches", "wins", "losses", "draws", "rate")
+        tree = ttk.Treeview(parent, columns=columns, show="headings")
+        for key, label, width in (
+            ("group", first_heading, 260),
+            ("matches", "対戦数", 100),
+            ("wins", "勝ち", 90),
+            ("losses", "負け", 90),
+            ("draws", "引分", 90),
+            ("rate", "勝率", 110),
+        ):
+            tree.heading(key, text=label)
+            tree.column(key, width=width, anchor="w" if key == "group" else "center", stretch=key == "group")
+        tree.pack(fill="both", expand=True)
+        return tree
 
     def _build_catalog_pages(self) -> None:
         self._build_catalog_page("deck")
@@ -571,6 +892,8 @@ class RecorderGui:
                 command=lambda: self.choose_catalog_color("tag"),
             )
             color_button.grid(row=0, column=3, padx=(0, 12))
+            self.catalog_color_buttons[kind] = color_button
+            self._set_catalog_color(kind, color_var.get())
         self._icon_button(
             editor,
             "add",
@@ -600,11 +923,11 @@ class RecorderGui:
 
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
-        columns = ("name", "description", "color") if is_tag else ("name", "description")
+        columns = ("name", "description")
         tree = ttk.Treeview(
             panel,
             columns=columns,
-            show="headings",
+            show="tree headings" if is_tag else "headings",
             selectmode="browse",
         )
         tree.heading("name", text="名前")
@@ -612,8 +935,8 @@ class RecorderGui:
         tree.column("name", width=220, stretch=False)
         tree.column("description", width=520, stretch=True)
         if is_tag:
-            tree.heading("color", text="カラー")
-            tree.column("color", width=110, stretch=False)
+            tree.heading("#0", text="カラー")
+            tree.column("#0", width=125, stretch=False, anchor="center")
         tree.pack(fill="both", expand=True)
         tree.bind(
             "<<TreeviewSelect>>",
@@ -633,25 +956,61 @@ class RecorderGui:
         self._icon_button(
             toolbar, "refresh", "復旧対象を更新", self.refresh_recovery
         ).pack(side="right", padx=(0, 8))
+        self.recovery_summary_var = tk.StringVar(value="復旧対象を確認しています")
+        ttk.Label(
+            page,
+            textvariable=self.recovery_summary_var,
+            style="Muted.TLabel",
+        ).pack(fill="x", padx=14, pady=(0, 8))
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
-        self.recovery_tree = ttk.Treeview(panel, columns=("state", "code", "file", "id"), show="headings")
+        self.recovery_tree = ttk.Treeview(
+            panel,
+            columns=("state", "code", "file", "message"),
+            show="headings",
+        )
         for key, label, width in (
             ("state", "復旧状態", 110),
             ("code", "分類", 130),
             ("file", "ファイル", 300),
-            ("id", "録画ID", 260),
+            ("message", "判定", 360),
         ):
             self.recovery_tree.heading(key, text=label)
-            self.recovery_tree.column(key, width=width, stretch=key in {"file", "id"})
+            self.recovery_tree.column(key, width=width, stretch=key in {"file", "message"})
         self.recovery_tree.pack(fill="both", expand=True)
+        self.recovery_tree.bind("<<TreeviewSelect>>", self._recovery_selection_changed)
         actions = self._surface(page, padding=(14, 10))
         actions.pack(fill="x", pady=(10, 0))
-        ttk.Button(actions, text="検査", command=self.inspect_selected_recovery).pack(side="left")
-        ttk.Button(actions, text="修復予定", command=lambda: self.repair_selected_recovery(True)).pack(side="left", padx=8)
-        ttk.Button(actions, text="別ファイルへ修復", style="Primary.TButton", command=lambda: self.repair_selected_recovery(False)).pack(side="left")
+        self.recovery_inspect_button = ttk.Button(
+            actions,
+            text="検査",
+            command=self.inspect_selected_recovery,
+            state="disabled",
+        )
+        self.recovery_inspect_button.pack(side="left")
+        self.recovery_preview_button = ttk.Button(
+            actions,
+            text="修復予定",
+            command=lambda: self.repair_selected_recovery(True),
+            state="disabled",
+        )
+        self.recovery_preview_button.pack(side="left", padx=8)
+        self.recovery_repair_button = ttk.Button(
+            actions,
+            text="別ファイルへ修復",
+            style="Primary.TButton",
+            command=lambda: self.repair_selected_recovery(False),
+            state="disabled",
+        )
+        self.recovery_repair_button.pack(side="left")
         self.recovery_result_var = tk.StringVar(value="対象を選択してください")
-        ttk.Label(actions, textvariable=self.recovery_result_var, style="Muted.TLabel").pack(side="right")
+        ttk.Label(
+            actions,
+            textvariable=self.recovery_result_var,
+            style="Muted.TLabel",
+            wraplength=500,
+            justify="right",
+        ).pack(side="right")
         self.widgets["recovery_table"] = self.recovery_tree
 
     def _build_prepare_page(self) -> None:
@@ -823,6 +1182,7 @@ class RecorderGui:
         titles = {
             "record": "録画",
             "history": "録画履歴",
+            "statistics": "統計",
             "decks": "デッキ名",
             "tags": "タグ",
             "recovery": "復旧",
@@ -834,10 +1194,17 @@ class RecorderGui:
         self.pages[key].pack(fill="both", expand=True)
         self.page_title.configure(text=titles[key])
         for name, button in self.nav_buttons.items():
-            button.configure(background=self.COLORS["sidebar_active"] if name == key else self.COLORS["sidebar"])
+            selected = name == key
+            button.configure(
+                background=self.COLORS["sidebar_active"] if selected else self.COLORS["sidebar"],
+                foreground=self.COLORS["primary"] if selected else self.COLORS["text"],
+                font=("Segoe UI Semibold", 10) if selected else ("Segoe UI", 10),
+            )
         self.current_page = key
         if key == "history":
             self.refresh_history()
+        elif key == "statistics":
+            self.refresh_statistics()
         elif key == "decks":
             self.refresh_catalog("deck")
         elif key == "tags":
@@ -854,6 +1221,90 @@ class RecorderGui:
         self.run_diagnosis()
         self.refresh_history()
 
+    def refresh_statistics(self) -> None:
+        if self.smoke_mode:
+            return
+        try:
+            filters = self._statistics_filters()
+        except ValueError as exc:
+            self._show_error(exc)
+            return
+        granularity = {"日": "day", "週": "week", "月": "month"}[
+            self.statistics_granularity_var.get()
+        ]
+        self._run(
+            lambda: (
+                self.service.get_statistics_dashboard(filters, granularity=granularity),
+                self.service.list_decks(),
+                self.service.list_tags(),
+            ),
+            self._statistics_loaded,
+        )
+
+    def clear_statistics_filters(self) -> None:
+        self.statistics_date_from_var.set("")
+        self.statistics_date_to_var.set("")
+        self.statistics_deck_var.set("すべて")
+        self.statistics_tag_var.set("すべて")
+        self.statistics_order_var.set("すべて")
+        self.statistics_granularity_var.set("月")
+        self.refresh_statistics()
+
+    def _statistics_filters(self) -> StatisticsFilter:
+        date_from = _parse_filter_date(self.statistics_date_from_var.get(), "開始日")
+        date_to = _parse_filter_date(self.statistics_date_to_var.get(), "終了日")
+        order = {"すべて": None, "先攻": "first", "後攻": "second"}.get(
+            self.statistics_order_var.get()
+        )
+        return StatisticsFilter(
+            date_from=date_from,
+            date_to=date_to,
+            own_deck=self.statistics_decks_by_label.get(self.statistics_deck_var.get()),
+            tag_entry_id=self.statistics_tags_by_label.get(self.statistics_tag_var.get()),
+            play_order=order,
+        )
+
+    def _statistics_loaded(
+        self,
+        payload: tuple[
+            StatisticsDashboard,
+            tuple[DuelCatalogEntry, ...],
+            tuple[DuelCatalogEntry, ...],
+        ],
+    ) -> None:
+        dashboard, decks, tags = payload
+        selected_deck = self.statistics_deck_var.get()
+        selected_tag = self.statistics_tag_var.get()
+        self.statistics_decks_by_label = {"すべて": None, **{entry.name: entry.name for entry in decks}}
+        self.statistics_tags_by_label = {"すべて": None, **{entry.name: entry.entry_id for entry in tags}}
+        self.statistics_deck_combo.configure(values=tuple(self.statistics_decks_by_label))
+        self.statistics_tag_combo.configure(values=tuple(self.statistics_tags_by_label))
+        self.statistics_deck_var.set(selected_deck if selected_deck in self.statistics_decks_by_label else "すべて")
+        self.statistics_tag_var.set(selected_tag if selected_tag in self.statistics_tags_by_label else "すべて")
+        self.statistics_overall_rate_var.set(_format_win_rate(dashboard.overall))
+        self.statistics_overall_detail_var.set(_format_statistics_detail(dashboard.overall))
+        self.statistics_filtered_rate_var.set(_format_win_rate(dashboard.filtered))
+        self.statistics_filtered_detail_var.set(_format_statistics_detail(dashboard.filtered))
+        active_conditions = []
+        if dashboard.filters.date_from or dashboard.filters.date_to:
+            active_conditions.append(
+                f"期間 {dashboard.filters.date_from or '指定なし'} 〜 {dashboard.filters.date_to or '指定なし'}"
+            )
+        if dashboard.filters.own_deck:
+            active_conditions.append(f"デッキ {dashboard.filters.own_deck}")
+        if dashboard.filters.tag_entry_id:
+            active_conditions.append(f"タグ {selected_tag}")
+        if dashboard.filters.play_order:
+            active_conditions.append("先攻" if dashboard.filters.play_order == "first" else "後攻")
+        self.statistics_filter_status_var.set(" / ".join(active_conditions) or "すべての確定済み対戦")
+        self.statistics_chart.set_points(dashboard.trend)
+        self._clear_tree(self.statistics_deck_tree)
+        self._clear_tree(self.statistics_order_tree)
+        for item in dashboard.by_deck:
+            self.statistics_deck_tree.insert("", "end", values=_statistics_breakdown_values(item.label, item.metric))
+        for item in dashboard.by_play_order:
+            self.statistics_order_tree.insert("", "end", values=_statistics_breakdown_values(item.label, item.metric))
+
     def refresh_catalog(self, kind: str) -> None:
         if self.smoke_mode:
             return
@@ -865,17 +1316,20 @@ class RecorderGui:
             self.catalog_entries_by_id[str(entry.entry_id)] = entry
         tree = self.catalog_trees[kind]
         self._clear_tree(tree)
+        if kind == "tag":
+            self.catalog_color_images.clear()
         for entry in entries:
-            values = (
-                (entry.name, entry.description, entry.color or "")
-                if kind == "tag"
-                else (entry.name, entry.description)
-            )
+            color = entry.color or "#4F6F8F"
+            image = self._tag_color_swatch(color) if kind == "tag" else None
+            if image is not None:
+                self.catalog_color_images[str(entry.entry_id)] = image
             tree.insert(
                 "",
                 "end",
                 iid=str(entry.entry_id),
-                values=values,
+                text=color if kind == "tag" else "",
+                image=image or "",
+                values=(entry.name, entry.description),
             )
         self._catalog_selection_changed(kind)
 
@@ -893,13 +1347,30 @@ class RecorderGui:
         self.catalog_name_vars[kind].set(entry.name)
         self.catalog_description_vars[kind].set(entry.description)
         if kind == "tag":
-            self.catalog_color_vars[kind].set(entry.color or "#4F6F8F")
+            self._set_catalog_color(kind, entry.color or "#4F6F8F")
 
     def choose_catalog_color(self, kind: str) -> None:
         current = self.catalog_color_vars[kind].get() or "#4F6F8F"
         _rgb, selected = colorchooser.askcolor(current, title="タグカラー", parent=self.root)
         if selected:
-            self.catalog_color_vars[kind].set(selected.upper())
+            self._set_catalog_color(kind, selected.upper())
+
+    def _set_catalog_color(self, kind: str, color: str) -> None:
+        self.catalog_color_vars[kind].set(color)
+        button = self.catalog_color_buttons.get(kind)
+        if button is not None:
+            button.configure(
+                background=color,
+                activebackground=color,
+                foreground=_contrast_text_color(color),
+                activeforeground=_contrast_text_color(color),
+            )
+
+    def _tag_color_swatch(self, color: str) -> tk.PhotoImage:
+        image = tk.PhotoImage(master=self.root, width=22, height=18)
+        image.put("#5f6368", to=(0, 0, 22, 18))
+        image.put(color, to=(2, 2, 20, 16))
+        return image
 
     def add_catalog_entry(self, kind: str) -> None:
         name = self.catalog_name_vars[kind].get()
@@ -1006,6 +1477,13 @@ class RecorderGui:
 
     def run_diagnosis(self) -> None:
         self._run(self.service.diagnose, self._diagnosis_loaded)
+
+    def open_visual_diagnostics(self) -> None:
+        directory = self.service.paths.logs / "visual-monitor"
+        directory.mkdir(parents=True, exist_ok=True)
+        if not hasattr(os, "startfile"):
+            raise OSError("数値診断フォルダはWindows Explorerでのみ開けます")
+        os.startfile(str(directory.resolve()))  # type: ignore[attr-defined]
 
     def _diagnosis_loaded(self, report: PreflightReport) -> None:
         for item in self.diagnosis_tree.get_children():
@@ -1211,10 +1689,12 @@ class RecorderGui:
 
     def _recording_failed(self, error: BaseException) -> None:
         self._set_record_controls(starting=False)
+        self._set_record_status("failed")
         self._show_error(error)
 
     def stop_recording(self) -> None:
         self.stop_button.configure(state="disabled")
+        self._set_record_status("stopping")
         self._run(self.service.stop_recording, self._recording_stopped)
 
     def _recording_stopped(self, snapshot: RecordingSnapshot) -> None:
@@ -1222,6 +1702,7 @@ class RecorderGui:
         self._update_record_audio_status(active=False)
         self._activity(f"録画を停止しました: {snapshot.output_path}")
         if snapshot.state is RecordingState.COMPLETED and snapshot.recording_id:
+            self.refresh_history()
             self._open_duel_editor(snapshot.recording_id)
 
     def toggle_watch(self) -> None:
@@ -1239,7 +1720,8 @@ class RecorderGui:
 
     def _watch_started(self) -> None:
         self.watch_button.configure(text="自動監視停止", state="normal")
-        self.record_state_var.set("自動監視中")
+        self.automatic_recording_confirmed = False
+        self._set_record_status("watch_waiting")
         self._update_record_audio_status(active=False)
 
     def _update_record_audio_status(self, *, active: bool) -> None:
@@ -1258,7 +1740,8 @@ class RecorderGui:
     def _watch_stopped(self) -> None:
         self.watch_button.configure(text="自動監視開始", state="normal")
         self.start_button.configure(state="normal")
-        self.record_state_var.set("待機中")
+        self.automatic_recording_confirmed = False
+        self._set_record_status("idle")
 
     def _watch_failed(self, error: BaseException) -> None:
         self._watch_stopped()
@@ -1267,9 +1750,11 @@ class RecorderGui:
     def refresh_history(self) -> None:
         if self.smoke_mode:
             return
-        self._run(self.service.list_history_views, self._history_loaded)
+        self._run(self.service.get_history_dashboard, self._history_loaded)
 
-    def _history_loaded(self, views: tuple[object, ...]) -> None:
+    def _history_loaded(self, dashboard: RecordingHistoryDashboard) -> None:
+        views = dashboard.views
+        self._set_incomplete_duel_count(dashboard.incomplete_duel_record_count)
         previous = self.history_tree.selection()
         previous_id = str(previous[0]) if previous else None
         self._clear_tree(self.history_tree)
@@ -1308,7 +1793,6 @@ class RecorderGui:
                         "warning": "警告",
                         "failed": "失敗",
                     }.get(entry.audio_state, entry.audio_state),
-                    "    ".join(ICON_GLYPHS[icon] for icon, _label, _key in HISTORY_ROW_ACTIONS),
                 ),
             )
         if previous_id is not None and self.history_tree.exists(previous_id):
@@ -1321,63 +1805,8 @@ class RecorderGui:
         state = "normal" if self.history_tree.selection() else "disabled"
         self.history_diagnostic_button.configure(state=state)
         self.history_timeline_button.configure(state=state)
-
-    def _history_action_clicked(self, event: tk.Event[tk.Misc]) -> None:
-        recording_id = self.history_tree.identify_row(event.y)
-        if not recording_id or self.history_tree.identify_column(event.x) != "#8":
-            return
-        bbox = self.history_tree.bbox(recording_id, "actions")
-        if not bbox:
-            return
-        self.history_tree.selection_set(recording_id)
-        self.history_tree.focus(recording_id)
-        action_index = min(3, max(0, int((event.x - bbox[0]) * 4 / max(1, bbox[2]))))
-        actions = (
-            self.play_selected_history,
-            self.edit_selected_duel_record,
-            self.reveal_selected_history,
-            self.delete_selected_history,
-        )
-        actions[action_index]()
-
-    def _history_action_motion(self, event: tk.Event[tk.Misc]) -> None:
-        recording_id = self.history_tree.identify_row(event.y)
-        if not recording_id or self.history_tree.identify_column(event.x) != "#8":
-            self._hide_history_action_tip()
-            return
-        bbox = self.history_tree.bbox(recording_id, "actions")
-        if not bbox:
-            self._hide_history_action_tip()
-            return
-        action_index = min(3, max(0, int((event.x - bbox[0]) * 4 / max(1, bbox[2]))))
-        _icon, label, shortcut = HISTORY_ROW_ACTIONS[action_index]
-        self._show_history_action_tip(f"{label} ({shortcut})")
-
-    def _show_history_action_tip(self, text: str) -> None:
-        if self.history_action_tip is not None and self.history_action_tip_text == text:
-            return
-        self._hide_history_action_tip()
-        tip = tk.Toplevel(self.root)
-        tip.overrideredirect(True)
-        tip.attributes("-topmost", True)
-        tk.Label(
-            tip,
-            text=text,
-            background="#20242a",
-            foreground="#ffffff",
-            padx=7,
-            pady=4,
-            font=("Segoe UI", 9),
-        ).pack()
-        tip.geometry(f"+{self.root.winfo_pointerx() + 12}+{self.root.winfo_pointery() + 12}")
-        self.history_action_tip = tip
-        self.history_action_tip_text = text
-
-    def _hide_history_action_tip(self) -> None:
-        if getattr(self, "history_action_tip", None) is not None:
-            self.history_action_tip.destroy()
-            self.history_action_tip = None
-            self.history_action_tip_text = ""
+        for button in self.history_action_buttons.values():
+            button.configure(state=state)
 
     def play_selected_history(self) -> None:
         selection = self.history_tree.selection()
@@ -1801,9 +2230,57 @@ class RecorderGui:
         self._run(self.service.list_recovery, self._recovery_loaded)
 
     def _recovery_loaded(self, entries: tuple[object, ...]) -> None:
+        previous = self.recovery_tree.selection()
+        previous_id = str(previous[0]) if previous else None
         self._clear_tree(self.recovery_tree)
+        self.recovery_entries_by_id = {
+            str(entry.recording_id): entry for entry in entries
+        }
         for entry in entries:
-            self.recovery_tree.insert("", "end", iid=entry.recording_id, values=(entry.recovery_state, entry.failure_code or "-", entry.output_path, entry.recording_id))
+            self.recovery_tree.insert(
+                "",
+                "end",
+                iid=entry.recording_id,
+                values=(
+                    _recovery_state_label(entry.recovery_state),
+                    _recovery_failure_label(entry.failure_code),
+                    entry.output_path,
+                    entry.recovery_message or "-",
+                ),
+            )
+        repairable = sum(
+            entry.recovery_state == "repairable" for entry in entries
+        )
+        unrecoverable = sum(
+            entry.recovery_state == "unrecoverable" for entry in entries
+        )
+        self.recovery_summary_var.set(
+            f"復旧対象 {len(entries)}件 | 修復可能 {repairable}件 | 修復不可 {unrecoverable}件"
+        )
+        if previous_id is not None and self.recovery_tree.exists(previous_id):
+            self.recovery_tree.selection_set(previous_id)
+            self.recovery_tree.focus(previous_id)
+        self._recovery_selection_changed()
+
+    def _recovery_selection_changed(self, _event: object | None = None) -> None:
+        selection = self.recovery_tree.selection()
+        if not selection:
+            self.recovery_inspect_button.configure(state="disabled")
+            self.recovery_preview_button.configure(state="disabled")
+            self.recovery_repair_button.configure(state="disabled")
+            self.recovery_result_var.set("対象を選択してください")
+            return
+        entry = self.recovery_entries_by_id.get(str(selection[0]))
+        state = getattr(entry, "recovery_state", "")
+        self.recovery_inspect_button.configure(state="normal")
+        repair_state = "normal" if state == "repairable" else "disabled"
+        self.recovery_preview_button.configure(state=repair_state)
+        self.recovery_repair_button.configure(state=repair_state)
+        message = getattr(entry, "recovery_message", None)
+        self.recovery_result_var.set(
+            message
+            or "検査後に修復可否を判定します。修復時も元ファイルは保持されます。"
+        )
 
     def detect_recovery(self) -> None:
         self._run(self.service.detect_recovery, lambda items: (self._activity(f"中断候補を{len(items)}件確認しました"), self.refresh_recovery()))
@@ -1811,7 +2288,15 @@ class RecorderGui:
     def inspect_selected_recovery(self) -> None:
         recording_id = self._selected_id(self.recovery_tree)
         if recording_id:
-            self._run(lambda: self.service.inspect_recovery(recording_id), lambda result: self.recovery_result_var.set(f"{result.status.value}: {result.message}"))
+            self._run(
+                lambda: self.service.inspect_recovery(recording_id),
+                lambda result: (
+                    self.recovery_result_var.set(
+                        f"{_inspection_status_label(result.status.value)}: {result.message}"
+                    ),
+                    self.refresh_recovery(),
+                ),
+            )
 
     def repair_selected_recovery(self, dry_run: bool) -> None:
         recording_id = self._selected_id(self.recovery_tree)
@@ -1968,27 +2453,27 @@ class RecorderGui:
                 event = self.watch_events.get_nowait()
             except queue.Empty:
                 break
-            if (
-                event.kind == "visual"
-                and event.state == "waiting"
-                and event.message.startswith(WAITING_ACTIVITY_PREFIX)
-            ):
-                self._activity(event.message, replace_prefix=WAITING_ACTIVITY_PREFIX)
-            else:
-                if event.kind == "visual" or (
-                    event.kind == "watch" and event.state == "stopped"
-                ):
+            if event.kind != "visual":
+                if event.kind == "watch" and event.state == "stopped":
                     self._remove_activity(WAITING_ACTIVITY_PREFIX)
                 self._activity(event.message)
             if event.kind == "started":
-                self.record_state_var.set("自動録画中")
+                if not self.automatic_recording_confirmed:
+                    self._set_record_status("candidate_recording")
                 self.record_detail_var.set(f"録画ID: {event.recording_id or '-'}\n保存先: 履歴で確認")
             elif event.kind in {"stopped", "error"}:
-                self.record_state_var.set("自動監視中" if self.service.watch_active else "待機中")
+                self.automatic_recording_confirmed = False
+                self._set_record_status(
+                    "watch_waiting" if self.service.watch_active else "idle"
+                )
                 if event.kind == "stopped" and event.recording_id:
                     self._activity(
                         f"対戦記録は未入力です。録画履歴から編集できます: {event.recording_id}"
                     )
+                    self.refresh_history()
+            elif event.kind == "visual_transition" and event.state == "confirmed":
+                self.automatic_recording_confirmed = True
+                self._set_record_status("automatic_recording")
             elif event.kind == "watch" and event.state == "stopped" and not self.closing:
                 self._watch_stopped()
             elif event.kind == "visual":
@@ -2005,35 +2490,60 @@ class RecorderGui:
             if can_poll_service:
                 status = self.service.visual_detection_status()
                 self.visual_status_var.set(
-                    "自動判定: "
-                    f"{status.message} / 候補 {status.candidate_count} / "
-                    f"処理 {status.processed_frames} / 破棄 {status.dropped_frames}"
+                    f"自動判定: {status.message}\n"
+                    f"取得元 {status.source or '-'} / {status.resolution or '-'} / "
+                    f"{status.profile} / {status.effective_fps:.1f}fps / 状態 {status.visual_state}\n"
+                    f"coin {status.coin_score:.2f} / board {status.board_score:.2f} / "
+                    f"turn {status.turn_score:.2f} / order {status.turn_order_score:.2f} / "
+                    f"result {status.result_score:.2f} / "
+                    f"error {status.error_score:.2f} / replay {status.replay_score:.2f} / "
+                    f"overlay {status.overlay_score:.2f} / loading {status.loading_score:.2f} / "
+                    f"合意 {status.agreement or '-'} / "
+                    f"再起動 {status.restart_count}"
                 )
             self.root.after(500, self._poll_runtime)
 
     def _render_recording(self, snapshot: RecordingSnapshot) -> None:
         active = snapshot.active
-        labels = {
-            RecordingState.RECORDING: "録画中",
-            RecordingState.STARTING: "開始処理中",
-            RecordingState.STOPPING: "停止処理中",
-            RecordingState.COMPLETED: "待機中",
-            RecordingState.FAILED: "録画失敗",
-            RecordingState.CREATED: "待機中",
+        statuses = {
+            RecordingState.RECORDING: "manual_recording",
+            RecordingState.STARTING: "starting",
+            RecordingState.STOPPING: "stopping",
+            RecordingState.COMPLETED: "idle",
+            RecordingState.FAILED: "failed",
+            RecordingState.CREATED: "idle",
         }
-        self.record_state_var.set(labels[snapshot.state])
+        self._set_record_status(statuses[snapshot.state])
         self.elapsed_var.set(_format_duration(snapshot.elapsed_seconds))
         self.record_detail_var.set(f"録画ID: {snapshot.recording_id or '-'}\n保存先: {snapshot.output_path or '-'}")
         self.start_button.configure(state="disabled" if active or self.service.watch_active else "normal")
         self.stop_button.configure(state="normal" if active else "disabled")
         self.watch_button.configure(state="disabled" if active else "normal")
 
+    def _set_record_status(self, status: str) -> None:
+        presentation = record_status_presentation(status)
+        self.record_state_var.set(presentation.text)
+        self.record_status_label.configure(
+            background=presentation.background,
+            foreground=presentation.foreground,
+        )
+
+    def _set_incomplete_duel_count(self, count: int) -> None:
+        presentation = incomplete_duel_count_presentation(count)
+        self.incomplete_duel_count_var.set(presentation.text)
+        self.incomplete_duel_count_button.configure(
+            background=presentation.background,
+            foreground=presentation.foreground,
+            activebackground=presentation.background,
+            activeforeground=presentation.foreground,
+        )
+
     def _set_record_controls(self, *, starting: bool) -> None:
         self.start_button.configure(state="disabled" if starting else "normal")
         self.stop_button.configure(state="disabled")
         self.watch_button.configure(state="disabled" if starting else "normal")
         if starting:
-            self.record_state_var.set("開始処理中")
+            self._set_record_status("starting")
 
     def _run(
         self,
@@ -2095,7 +2605,24 @@ class RecorderGui:
         for state, message in (("OK", "設定: 既定値を利用可能"), ("OK", "保存先: 書き込み可能"), ("注意", "FFmpeg: 実環境で診断してください")):
             self.diagnosis_tree.insert("", "end", values=(state, message))
         self._activity("GUI起動スモーク")
-        self.connection_label.configure(text="GUI確認中", foreground="#ffcc80")
+        self._set_incomplete_duel_count(3)
+        self.connection_label.configure(text="GUI確認中", foreground=self.COLORS["amber"])
+        smoke_points = (
+            StatisticsTrendPoint(date(2026, 5, 1), "2026/05", StatisticsMetric(8, 4, 4, 0)),
+            StatisticsTrendPoint(date(2026, 6, 1), "2026/06", StatisticsMetric(12, 7, 5, 0)),
+            StatisticsTrendPoint(date(2026, 7, 1), "2026/07", StatisticsMetric(10, 6, 3, 1)),
+            StatisticsTrendPoint(date(2026, 8, 1), "2026/08", StatisticsMetric(14, 9, 5, 0)),
+        )
+        smoke_dashboard = StatisticsDashboard(
+            overall=StatisticsMetric(44, 26, 17, 1),
+            filtered=StatisticsMetric(44, 26, 17, 1),
+            by_deck=(),
+            by_play_order=(),
+            trend=smoke_points,
+            filters=StatisticsFilter(),
+            granularity="month",
+        )
+        self._statistics_loaded((smoke_dashboard, (), ()))
 
 
 def _format_duration(seconds: float) -> str:
@@ -2103,6 +2630,40 @@ def _format_duration(seconds: float) -> str:
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _parse_filter_date(value: str, label: str) -> date | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{label}はYYYY-MM-DD形式で入力してください") from exc
+
+
+def _format_win_rate(metric: StatisticsMetric) -> str:
+    if metric.win_rate is None:
+        return "-"
+    return f"{metric.win_rate * 100:.1f}%"
+
+
+def _format_statistics_detail(metric: StatisticsMetric) -> str:
+    return (
+        f"{metric.matches}戦  {metric.wins}勝  {metric.losses}敗  "
+        f"{metric.draws}引分"
+    )
+
+
+def _statistics_breakdown_values(label: str, metric: StatisticsMetric) -> tuple[object, ...]:
+    return (
+        label,
+        metric.matches,
+        metric.wins,
+        metric.losses,
+        metric.draws,
+        _format_win_rate(metric),
+    )
 
 
 def _format_elapsed_ms(elapsed_ms: int) -> str:
@@ -2128,6 +2689,39 @@ def _contrast_text_color(color: str) -> str:
         return "#202124"
     luminance = (0.299 * red) + (0.587 * green) + (0.114 * blue)
     return "#202124" if luminance >= 150 else "#ffffff"
+
+
+def _recovery_state_label(value: str) -> str:
+    return {
+        "pending": "検査待ち",
+        "inspecting": "検査中",
+        "repairable": "修復可能",
+        "repaired": "修復済み",
+        "ignored": "対象外",
+        "unrecoverable": "修復不可",
+        "not_required": "復旧不要",
+    }.get(value, value)
+
+
+def _recovery_failure_label(value: str | None) -> str:
+    if value is None:
+        return "-"
+    return {
+        "output_empty": "空ファイル",
+        "output_missing": "ファイルなし",
+        "process_interrupted": "録画中断",
+        "recording_interrupted": "録画中断",
+        "start_interrupted": "開始中断",
+    }.get(value, value)
+
+
+def _inspection_status_label(value: str) -> str:
+    return {
+        "valid": "読取可能",
+        "repairable": "修復可能",
+        "unrecoverable": "修復不可",
+        "retryable": "再試行可能",
+    }.get(value, value)
 
 
 def build_gui_parser() -> argparse.ArgumentParser:

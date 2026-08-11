@@ -75,13 +75,15 @@ duel_editor_preferences
 
 自動監視中は次の対戦検出を妨げないため、録画終了時にモーダルを表示しません。対戦記録を`draft`として作成し、未入力件数と編集導線だけを通知します。失敗録画には自動作成せず、復旧後に利用者が履歴から追加できます。
 
+GUI共通ヘッダーの戦績管理未完了件数は、`recordings.state = completed`かつ、対戦記録が存在しない、または`duel_records.status <> confirmed`の件数です。画面の履歴表示上限とは独立したSQLite集計とし、録画完了、対戦記録保存、履歴削除、履歴更新後に再集計します。録画失敗、録画中、候補破棄は含めません。
+
 ## GUIとCLI
 
 GUIの録画履歴詳細に対戦記録の表示・編集画面を常設します。勝敗、先後、自分・相手デッキ、対戦種別、タグ、メモ、状態、最終更新を表示します。状態、勝敗、先後、対戦種別は日本語表示名と既存の英語内部値を双方向変換します。
 
 自分デッキと相手デッキは同じ`deck`辞書を入力可能な選択欄として利用します。タグは`tag`辞書から複数追加でき、候補にない日本語名も入力できます。対戦記録の保存後、新しいデッキ名とタグを辞書へ追加し、対戦種別、自分デッキ、相手デッキ、タグを`duel_editor_preferences`へ保存します。未作成の記録だけがこの前回値を初期値に使い、既存記録は自身の値を優先します。
 
-サイドメニューの「デッキ名」と「タグ」は独立した管理画面です。どちらにも説明を設定でき、タグには`#RRGGBB`カラーを指定できます。対戦記録編集ではタグ名と色見本を表示します。
+サイドメニューの「デッキ名」と「タグ」は独立した管理画面です。どちらにも説明を設定でき、タグには`#RRGGBB`カラーを指定できます。タグ一覧のカラー列はコードと実色スウォッチを併記し、対戦記録編集でもタグ名と色見本を表示します。
 
 対戦記録は表示用文字列に加えて`duel_record_catalog_links`でカタログの安定IDへ関連付けます。名前変更は同じIDの表示名を更新するため、将来のタグ別集計で同一項目として扱えます。参照中の項目を削除した場合はアーカイブして過去記録の関連を残し、未使用項目だけを恒久削除します。版5から6への移行では既存名称をカタログへ取り込み、対戦記録との関連を補完します。
 
@@ -93,8 +95,9 @@ CLIは`duel show`、`duel set`、`duel confirm`、`duel history`を提供し、J
 - `draft`と`confirmed`を何度でも再編集できる
 - 競合・検証・DB障害時に既存内容を維持する
 - 手動録画後は入力画面、自動録画後は非モーダル通知を提供する
+- 全画面の共通ヘッダーで戦績管理未完了件数を確認し、録画履歴へ移動できる
 - 日本語表示と英語内部値を往復して既存データを再保存できる
 - デッキ名・タグ辞書と前回入力がアプリ再起動後も維持される
 - スキーマ版2から6までの移行前バックアップと失敗時ロールバックを検証する
 
-追跡: [V0.14.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/15)、Issue #86 - #95、および[V0.17.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/30)、Issue #140 - #152
+追跡: [V0.14.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/15)、Issue #86 - #95、[V0.17.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/30)、Issue #140 - #152、[V0.17.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/33)、Issue #198、および[V0.17.4 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/34)、Issue #203、#205

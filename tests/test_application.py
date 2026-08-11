@@ -10,9 +10,15 @@ from unittest.mock import Mock, patch
 from master_duel_recorder_lite.application import (
     ApplicationOperationError,
     RecorderApplicationService,
+    _automatic_capture_input,
+)
+from master_duel_recorder_lite.auto_recording import (
+    AutoRecordingEvent,
+    AutoRecordingEventAction,
 )
 from master_duel_recorder_lite.capture_targets import CaptureInput, CaptureMode, CaptureTarget
 from master_duel_recorder_lite.config import AppConfig
+from master_duel_recorder_lite.detection import DetectionSignal, DuelObservation
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.ffmpeg import FfmpegVersion
 from master_duel_recorder_lite.ffmpeg_setup import FfmpegInstallResult
@@ -24,6 +30,74 @@ from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
+    def test_next_duel_boundary_stops_recording_after_one_second(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        event = AutoRecordingEvent(
+            AutoRecordingEventAction.STOPPED,
+            "stopped",
+            None,
+            None,
+            recording_id="recording",
+        )
+        prepared = SimpleNamespace(
+            visual_abort_reason=None,
+            session=SimpleNamespace(started_at=datetime.now(timezone.utc)),
+            duel_confirmed=True,
+            result_detected_monotonic=None,
+            boundary_detected_monotonic=100.0,
+            target=SimpleNamespace(recording_id="recording"),
+        )
+        controller = SimpleNamespace(
+            current=prepared,
+            manual_stop=Mock(return_value=event),
+        )
+        start_monitor = Mock()
+
+        with patch("master_duel_recorder_lite.application.time.monotonic", return_value=101.1):
+            stopped = service._apply_automatic_visual_lifecycle(
+                controller,
+                start_monitor,
+                None,
+            )
+
+        self.assertIsNotNone(stopped)
+        self.assertIn("次の対戦開始", stopped.message)
+        controller.manual_stop.assert_called_once_with()
+        start_monitor.reset.assert_called_once_with()
+
+    def test_automatic_recording_uses_observed_desktop_region(self) -> None:
+        observation = DuelObservation(
+            DetectionSignal.PRESENT,
+            0.9,
+            "コイントスを検出",
+            datetime.now(timezone.utc),
+            capture_window_handle=42,
+            capture_process_id=100,
+            capture_window_title="Master Duel",
+            capture_left=-3440,
+            capture_top=0,
+            capture_width=3440,
+            capture_height=1440,
+        )
+
+        capture_input = _automatic_capture_input(observation)
+
+        self.assertEqual(capture_input.input_name, "desktop")
+        self.assertEqual(
+            capture_input.options,
+            (
+                "-draw_mouse",
+                "0",
+                "-offset_x",
+                "-3440",
+                "-offset_y",
+                "0",
+                "-video_size",
+                "3440x1440",
+            ),
+        )
+        self.assertNotIn("title=", capture_input.input_name)
+
     def test_history_views_join_duel_fields_without_exposing_id_as_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
@@ -520,7 +594,8 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             ),
             patch("master_duel_recorder_lite.application.GameWindowMonitor"),
             patch("master_duel_recorder_lite.application.MasterDuelWindowDetector"),
-            patch("master_duel_recorder_lite.application.FfmpegWindowFrameCapture"),
+            patch("master_duel_recorder_lite.application.PersistentFfmpegRegionFrameCapture"),
+            patch("master_duel_recorder_lite.application.VisualDiagnosticSession"),
             patch(
                 "master_duel_recorder_lite.application.MasterDuelStartMonitor",
                 return_value=start_monitor,

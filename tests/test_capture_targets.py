@@ -7,6 +7,7 @@ from master_duel_recorder_lite.capture_targets import (
     CaptureTargetError,
     MonitorSnapshot,
     capture_input_for_target,
+    capture_input_for_window_region,
     find_target,
     resolve_configured_capture,
 )
@@ -78,6 +79,44 @@ class CaptureTargetTest(unittest.TestCase):
             capture_input.options,
             ("-offset_x", "-1280", "-offset_y", "0", "-video_size", "1280x1024"),
         )
+
+    def test_master_duel_target_uses_client_region_instead_of_title_input(self) -> None:
+        target = CaptureTarget(
+            CaptureMode.MASTER_DUEL,
+            "master_duel",
+            "Master Duel",
+            window_handle=42,
+            window_title="Master Duel",
+            left=-3440,
+            top=0,
+            width=3440,
+            height=1440,
+        )
+
+        capture_input = capture_input_for_target(target)
+
+        self.assertEqual(capture_input.input_name, "desktop")
+        self.assertEqual(
+            capture_input.options,
+            (
+                "-draw_mouse",
+                "0",
+                "-offset_x",
+                "-3440",
+                "-offset_y",
+                "0",
+                "-video_size",
+                "3440x1440",
+            ),
+        )
+        self.assertNotIn("title=", capture_input.input_name)
+        self.assertEqual(capture_input.window_handle, 42)
+
+    def test_observed_window_region_rejects_invalid_size(self) -> None:
+        window = WindowSnapshot(42, 100, "Master Duel", True, False, 0, 1440)
+
+        with self.assertRaisesRegex(CaptureTargetError, "サイズ"):
+            capture_input_for_window_region(window)
 
     def test_automatic_master_duel_input_keeps_observed_title_and_handle(self) -> None:
         capture_input = resolve_configured_capture(

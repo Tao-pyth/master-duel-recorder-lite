@@ -12,7 +12,8 @@ Master Duel対象は、設定したプロセス名に属し、任意のタイト
 
 ## FFmpeg入力
 
-- ウィンドウ: PID・HWNDで選択対象を固定し、FFmpeg `gdigrab`へは対応形式の`-i title=<window title>`を渡す
+- Master Duel: PID・HWNDで選定対象を固定し、DPI補正したクライアント領域を`gdigrab desktop`の`offset_x` / `offset_y` / `video_size`へ渡す
+- 任意ウィンドウ: PID・HWNDで選択対象を固定し、FFmpeg `gdigrab`へは対応形式の`-i title=<window title>`を渡す
 - モニター: `-offset_x`、`-offset_y`、`-video_size`を指定した`-f gdigrab -i desktop`
 - デスクトップ全体: `-f gdigrab -i desktop`
 

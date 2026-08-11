@@ -13,7 +13,12 @@ DETECTOR_VERSION = "2"
 MAX_NORMALIZED_WIDTH = 640
 MAX_NORMALIZED_HEIGHT = 360
 TIMELINE_EVENT_TYPES = {"duel_start", "turn_change", "duel_result"}
-CONTROL_EVENT_TYPES = {"duel_confirmed", "match_error", "replay_detected"}
+CONTROL_EVENT_TYPES = {
+    "duel_boundary",
+    "duel_confirmed",
+    "match_error",
+    "replay_detected",
+}
 
 
 class MasterDuelState(str, Enum):
@@ -39,6 +44,7 @@ class DetectionCandidate:
     actor: str | None = None
     outcome: str | None = None
     play_order: str | None = None
+    evidence: str | None = None
 
     def __post_init__(self) -> None:
         if self.event_type not in TIMELINE_EVENT_TYPES | CONTROL_EVENT_TYPES:
@@ -96,7 +102,37 @@ class FrameCues:
     overlay_score: float = 0.0
     match_error_score: float = 0.0
     replay_score: float = 0.0
+    loading_score: float = 0.0
     profile_name: str = "unknown"
+
+
+@dataclass(frozen=True)
+class ConsensusAgreement:
+    event_type: str
+    evidence: str | None
+    matched: int
+    required: int
+    window: int
+
+
+@dataclass(frozen=True)
+class FrameAnalysis:
+    elapsed_ms: int
+    state: MasterDuelState
+    profile_name: str
+    source_width: int
+    source_height: int
+    coin_score: float
+    board_score: float
+    turn_score: float
+    turn_order_score: float
+    result_score: float
+    error_score: float
+    replay_score: float
+    overlay_score: float
+    loading_score: float
+    candidates: tuple[DetectionCandidate, ...]
+    agreements: tuple[ConsensusAgreement, ...]
 
 
 class VisualCueExtractor(Protocol):
@@ -174,6 +210,19 @@ def normalize_bmp(frame: FrameSample) -> NormalizedBmp | None:
     target_height = max(1, round(height * scale))
     pixels = bytearray(target_width * target_height * 3)
     top_down = signed_height < 0
+    if target_width == width and target_height == height:
+        source_view = memoryview(data)
+        target_view = memoryview(pixels)
+        for target_y in range(height):
+            source_y = target_y if top_down else height - 1 - target_y
+            source_start = pixel_offset + source_y * stride
+            source_row = source_view[source_start : source_start + width * bytes_per_pixel]
+            target_start = target_y * width * 3
+            target_row = target_view[target_start : target_start + width * 3]
+            target_row[0::3] = source_row[2::bytes_per_pixel]
+            target_row[1::3] = source_row[1::bytes_per_pixel]
+            target_row[2::3] = source_row[0::bytes_per_pixel]
+        return NormalizedBmp(width, height, bytes(pixels), profile.name)
     target = 0
     for target_y in range(target_height):
         y = min(height - 1, target_y * height // target_height)
@@ -212,6 +261,8 @@ class MasterDuelUiCueExtractor:
         result_span = _white_span(image, 0.12, 0.34, 0.88, 0.61)
         replay_controls = _region_features(image, 0.69, 0.88, 0.84, 1.00)
         replay_span = _white_span(image, 0.69, 0.88, 0.84, 1.00)
+        loading_span = _white_span(image, 0.72, 0.78, 1.00, 1.00)
+        loading_region = _region_features(image, 0.72, 0.78, 1.00, 1.00)
         error_header = _region_features(image, 0.42, 0.30, 0.58, 0.43)
         error_panel = _region_features(image, 0.24, 0.27, 0.76, 0.73)
 
@@ -246,19 +297,26 @@ class MasterDuelUiCueExtractor:
         notice_span = _white_span(image, 0.28, 0.52, 0.72, 0.73)
         turn_order_score = min(
             coin_toss_score,
+            _scaled(center_notice.dark_ratio, 0.52, 0.58),
             0.55 * _scaled(center_notice.dark_ratio, 0.25, 0.75)
             + 0.45 * _scaled(notice_span.pixel_ratio, 0.005, 0.045),
         )
 
-        result_shape = _scaled(result_span.pixel_ratio, 0.035, 0.10)
+        loss_shape = _scaled(result_span.pixel_ratio, 0.035, 0.10)
+        win_shape = _scaled(result_span.pixel_ratio, 0.13, 0.18)
         loss_width = _scaled(result_span.ratio, 0.20, 0.28) * _inverse_scaled(
             result_span.ratio, 0.40, 0.34
         )
         win_width = _scaled(result_span.ratio, 0.62, 0.70) * _inverse_scaled(
             result_span.ratio, 0.90, 0.82
         )
-        result_width = max(loss_width, win_width)
-        result_score = min(1.0, result_shape * (0.25 + 0.75 * result_width))
+        result_score = min(
+            1.0,
+            max(
+                loss_shape * (0.25 + 0.75 * loss_width),
+                win_shape * (0.25 + 0.75 * win_width),
+            ),
+        )
         flash_victory = (
             _scaled(result_span.ratio, 0.90, 0.98)
             * _scaled(result_span.pixel_ratio, 0.25, 0.45)
@@ -298,6 +356,11 @@ class MasterDuelUiCueExtractor:
         if image.profile_name == ULTRAWIDE_PROFILE.name:
             replay_score *= 0.95
 
+        loading_score = min(
+            _scaled(loading_span.ratio, 0.20, 0.35),
+            _scaled(loading_region.dark_ratio, 0.85, 0.93),
+        )
+
         dialog_geometry = min(
             _inverse_scaled(error_header.edge_density, 0.18, 0.10),
             _inverse_scaled(error_panel.edge_density, 0.19, 0.10),
@@ -308,6 +371,7 @@ class MasterDuelUiCueExtractor:
             + 0.35 * dialog_geometry
             + 0.25 * _scaled(error_panel.dark_ratio, 0.62, 0.82),
         )
+        match_error_score *= _inverse_scaled(error_panel.bright_ratio, 0.030, 0.015)
         if board_score >= 0.50:
             match_error_score *= 0.25
 
@@ -319,7 +383,7 @@ class MasterDuelUiCueExtractor:
             f"profile={image.profile_name}, coin={coin_toss_score:.2f}, "
             f"board={board_score:.2f}, turn={turn_score:.2f}, "
             f"result={result_score:.2f}, error={match_error_score:.2f}, "
-            f"replay={replay_score:.2f}"
+            f"replay={replay_score:.2f}, loading={loading_score:.2f}"
         )
         return FrameCues(
             True,
@@ -337,6 +401,7 @@ class MasterDuelUiCueExtractor:
             overlay_score=overlay_score,
             match_error_score=match_error_score,
             replay_score=replay_score,
+            loading_score=loading_score,
             profile_name=image.profile_name,
         )
 
@@ -369,16 +434,22 @@ class DuelStartDetector:
         self._coin_elapsed_ms: int | None = None
 
     def detect(self, cues: FrameCues, elapsed_ms: int) -> DetectionCandidate | None:
-        if cues.replay_score >= 0.65 or cues.match_error_score >= 0.65:
+        if (
+            cues.replay_score >= 0.65
+            or cues.match_error_score >= 0.70
+            or cues.result_score >= 0.55
+            or cues.loading_score >= 0.65
+        ):
             return None
         coin_score = max(cues.coin_toss_score, cues.start_animation_score)
-        if coin_score >= 0.62:
+        if coin_score >= 0.62 and cues.turn_order_score >= 0.50:
             self._coin_elapsed_ms = elapsed_ms
             return _cue_candidate(
                 "duel_start",
                 elapsed_ms,
                 min(1.0, 0.25 + coin_score * 0.75),
                 replace(cues, detail=f"Master Duelコイントス, {cues.detail}"),
+                evidence="coin",
             )
         if self._coin_elapsed_ms is not None and elapsed_ms - self._coin_elapsed_ms > self.maximum_transition_ms:
             self._coin_elapsed_ms = None
@@ -393,6 +464,7 @@ class DuelStartDetector:
             elapsed_ms,
             min(1.0, (cues.board_score + 0.75) / 2),
             replace(cues, detail=f"LP・ターンUIを持つ対戦盤面, {cues.detail}"),
+            evidence="board",
         )
 
 
@@ -410,6 +482,7 @@ class DuelConfirmationDetector:
             replace(cues, detail=f"先後表示または対戦盤面を確認, {cues.detail}"),
             actor=cues.actor,
             play_order=cues.play_order,
+            evidence="board",
         )
 
 
@@ -452,14 +525,15 @@ class DuelResultDetector:
 
 class MatchErrorDetector:
     def detect(self, cues: FrameCues, elapsed_ms: int) -> DetectionCandidate | None:
-        if cues.match_error_score < 0.55:
+        if cues.match_error_score < 0.70:
             return None
-        confidence = min(1.0, 0.35 + 0.65 * cues.match_error_score)
-        return _cue_candidate("match_error", elapsed_ms, confidence, cues)
+        return _cue_candidate("match_error", elapsed_ms, cues.match_error_score, cues)
 
 
 class ReplayDetector:
     def detect(self, cues: FrameCues, elapsed_ms: int) -> DetectionCandidate | None:
+        if cues.replay_score < 0.80:
+            return None
         return _cue_candidate("replay_detected", elapsed_ms, cues.replay_score, cues)
 
 
@@ -472,9 +546,9 @@ class MasterDuelUiStateMachine:
     def observe(self, cues: FrameCues) -> MasterDuelState:
         if not cues.layout_valid:
             return self.state
-        if cues.replay_score >= 0.65:
+        if cues.replay_score >= 0.80:
             self.state = MasterDuelState.REPLAY
-        elif cues.match_error_score >= 0.65 and self.state not in {
+        elif cues.match_error_score >= 0.70 and self.state not in {
             MasterDuelState.DUEL_ACTIVE,
             MasterDuelState.OVERLAY,
             MasterDuelState.RESULT,
@@ -486,7 +560,12 @@ class MasterDuelUiStateMachine:
             MasterDuelState.OVERLAY,
         }:
             self.state = MasterDuelState.RESULT
-        elif max(cues.coin_toss_score, cues.start_animation_score) >= 0.62:
+        elif cues.loading_score >= 0.65:
+            self.state = MasterDuelState.MATCHMAKING
+        elif (
+            max(cues.coin_toss_score, cues.start_animation_score) >= 0.62
+            and cues.turn_order_score >= 0.50
+        ):
             self.state = MasterDuelState.COIN_TOSS_CANDIDATE
         elif cues.board_score >= 0.50:
             if self.state in {
@@ -529,15 +608,23 @@ class MasterDuelVisualEventDetector:
         )
 
     def detect(self, frame: FrameSample, elapsed_ms: int) -> tuple[DetectionCandidate, ...]:
+        return self.analyze_cues(frame, elapsed_ms)[2]
+
+    def analyze_cues(
+        self,
+        frame: FrameSample,
+        elapsed_ms: int,
+    ) -> tuple[FrameCues, MasterDuelState, tuple[DetectionCandidate, ...]]:
         cues = self.extractor.extract(frame)
         if not cues.layout_valid:
-            return ()
-        self.state_machine.observe(cues)
-        return tuple(
+            return cues, self.state_machine.state, ()
+        state = self.state_machine.observe(cues)
+        candidates = tuple(
             candidate
             for detector in self.detectors
             if (candidate := detector.detect(cues, elapsed_ms)) is not None
         )
+        return cues, state, candidates
 
 
 def _cue_candidate(
@@ -549,6 +636,7 @@ def _cue_candidate(
     actor: str | None = None,
     outcome: str | None = None,
     play_order: str | None = None,
+    evidence: str | None = None,
 ) -> DetectionCandidate | None:
     if confidence < 0.5:
         return None
@@ -562,19 +650,22 @@ def _cue_candidate(
         actor=actor,
         outcome=outcome,
         play_order=play_order,
+        evidence=evidence,
     )
 
 
 @dataclass
 class _ConsensusTrack:
-    count: int
-    first_elapsed_ms: int
+    samples: list[DetectionCandidate | None]
     last_elapsed_ms: int
-    confidence_total: float
-    latest: DetectionCandidate
+    required: int
+    window: int
 
 
 class TemporalEventConsensus:
+    _SINGLE_FRAME_RESULT_CONFIDENCE = 0.95
+    _NEXT_DUEL_BOUNDARY_DELAY_MS = 15_000
+
     def __init__(
         self,
         *,
@@ -598,7 +689,7 @@ class TemporalEventConsensus:
         self.maximum_gap_ms = maximum_gap_ms
         self.turn_cooldown_ms = turn_cooldown_ms
         self.source = source
-        self._tracks: dict[tuple[str, str | None, str | None], _ConsensusTrack] = {}
+        self._tracks: dict[tuple[str, str | None, str | None, str | None], _ConsensusTrack] = {}
         self._started = assume_started or source == "replay"
         self._confirmed = source == "replay"
         self._resulted = False
@@ -606,6 +697,7 @@ class TemporalEventConsensus:
         self._replay = source == "replay"
         self._last_turn_elapsed_ms: int | None = None
         self._last_turn_actor: str | None = None
+        self._confirmed_elapsed_ms: int | None = None
         self.state = (
             MasterDuelState.REPLAY
             if source == "replay"
@@ -615,11 +707,18 @@ class TemporalEventConsensus:
         )
 
     def process(self, candidates: tuple[DetectionCandidate, ...]) -> tuple[DetectionCandidate, ...]:
-        viable = [item for item in candidates if item.confidence >= self.minimum_confidence]
-        visible_keys = {_candidate_key(item) for item in viable}
-        for key in tuple(self._tracks):
-            if key not in visible_keys:
-                del self._tracks[key]
+        viable = [
+            normalized
+            for item in candidates
+            if item.confidence >= self.minimum_confidence
+            for normalized in (self._normalize_candidate(item),)
+        ]
+        visible = {_candidate_key(item): item for item in viable}
+        for key, track in tuple(self._tracks.items()):
+            if key in visible:
+                continue
+            track.samples.append(None)
+            del track.samples[:-track.window]
 
         emitted: list[DetectionCandidate] = []
         for candidate in sorted(viable, key=lambda item: _event_priority(item.event_type)):
@@ -628,24 +727,22 @@ class TemporalEventConsensus:
             key = _candidate_key(candidate)
             track = self._tracks.get(key)
             if track is None or candidate.elapsed_ms - track.last_elapsed_ms > self.maximum_gap_ms:
-                track = _ConsensusTrack(1, candidate.elapsed_ms, candidate.elapsed_ms, candidate.confidence, candidate)
+                required, window = self._policy_for(candidate)
+                track = _ConsensusTrack([candidate], candidate.elapsed_ms, required, window)
             else:
-                track.count += 1
                 track.last_elapsed_ms = candidate.elapsed_ms
-                track.confidence_total += candidate.confidence
-                track.latest = candidate
+                track.samples.append(candidate)
+                del track.samples[:-track.window]
             self._tracks[key] = track
-            required_confirmations = max(
-                self.confirmations,
-                3 if candidate.event_type == "match_error" else self.confirmations,
-            )
-            if track.count < required_confirmations:
+            matches = [item for item in track.samples if item is not None]
+            if len(matches) < track.required:
                 continue
+            latest = matches[-1]
             accepted = replace(
-                track.latest,
-                elapsed_ms=track.first_elapsed_ms,
-                confidence=min(1.0, track.confidence_total / track.count),
-                reason=f"{track.count}フレーム合意: {track.latest.reason}",
+                latest,
+                elapsed_ms=matches[0].elapsed_ms,
+                confidence=min(1.0, sum(item.confidence for item in matches) / len(matches)),
+                reason=f"直近{track.window}フレーム中{len(matches)}件合意: {latest.reason}",
             )
             emitted.append(accepted)
             del self._tracks[key]
@@ -660,9 +757,43 @@ class TemporalEventConsensus:
                 self._mark_emitted(initial_turn)
         return tuple(emitted)
 
+    @property
+    def agreements(self) -> tuple[ConsensusAgreement, ...]:
+        return tuple(
+            ConsensusAgreement(
+                event_type=key[0],
+                evidence=key[3],
+                matched=sum(item is not None for item in track.samples),
+                required=track.required,
+                window=track.window,
+            )
+            for key, track in sorted(self._tracks.items(), key=lambda item: repr(item[0]))
+        )
+
+    def _policy_for(self, candidate: DetectionCandidate) -> tuple[int, int]:
+        if (
+            candidate.event_type == "duel_result"
+            and candidate.confidence >= self._SINGLE_FRAME_RESULT_CONFIDENCE
+            and candidate.outcome in {"win", "loss", "draw"}
+        ):
+            return 1, 1
+        if candidate.event_type == "duel_boundary":
+            return 2, 4
+        if candidate.event_type == "duel_start" and candidate.evidence == "coin":
+            return 2, 4
+        if candidate.event_type in {"duel_confirmed"} or (
+            candidate.event_type == "duel_start" and candidate.evidence == "board"
+        ):
+            return 3, 5
+        if candidate.event_type == "match_error":
+            return 3, 5
+        if candidate.event_type in {"duel_result", "replay_detected", "turn_change"}:
+            return 2, 4
+        return self.confirmations, max(self.confirmations, 4)
+
     def _state_allows(self, candidate: DetectionCandidate) -> bool:
         if candidate.event_type == "replay_detected":
-            return not self._started and not self._confirmed and not self._resulted and not self._replay
+            return not self._confirmed and not self._resulted and not self._replay
         if candidate.event_type == "match_error":
             return (
                 not self._confirmed
@@ -672,6 +803,8 @@ class TemporalEventConsensus:
             )
         if candidate.event_type == "duel_start":
             return not self._started and not self._resulted and not self._replay and not self._errored
+        if candidate.event_type == "duel_boundary":
+            return self._confirmed and not self._resulted and not self._replay and not self._errored
         if candidate.event_type == "duel_confirmed":
             return (
                 self._started
@@ -688,6 +821,27 @@ class TemporalEventConsensus:
             return self._last_turn_elapsed_ms is None or candidate.elapsed_ms - self._last_turn_elapsed_ms >= self.turn_cooldown_ms
         return self._confirmed and not self._resulted
 
+    def _normalize_candidate(self, candidate: DetectionCandidate) -> DetectionCandidate:
+        if (
+            candidate.event_type == "duel_start"
+            and candidate.evidence == "coin"
+            and self._confirmed
+            and self._confirmed_elapsed_ms is not None
+            and candidate.elapsed_ms - self._confirmed_elapsed_ms
+            >= self._NEXT_DUEL_BOUNDARY_DELAY_MS
+        ):
+            return replace(
+                candidate,
+                event_type="duel_boundary",
+                outcome=None,
+                evidence="next_duel",
+                reason=(
+                    "盤面確定後に次のコイントスを検出したため、"
+                    "前の対戦結果を取り逃した録画境界と判定しました"
+                ),
+            )
+        return candidate
+
     def _mark_emitted(self, candidate: DetectionCandidate) -> None:
         if candidate.event_type == "replay_detected":
             self._replay = True
@@ -697,11 +851,15 @@ class TemporalEventConsensus:
             self.state = MasterDuelState.COIN_TOSS_CANDIDATE
         elif candidate.event_type == "duel_confirmed":
             self._confirmed = True
+            self._confirmed_elapsed_ms = candidate.elapsed_ms
             self.state = MasterDuelState.DUEL_ACTIVE
         elif candidate.event_type == "turn_change":
             self._last_turn_elapsed_ms = candidate.elapsed_ms
             self._last_turn_actor = candidate.actor
         elif candidate.event_type == "duel_result":
+            self._resulted = True
+            self.state = MasterDuelState.RESULT
+        elif candidate.event_type == "duel_boundary":
             self._resulted = True
             self.state = MasterDuelState.RESULT
         elif candidate.event_type == "match_error":
@@ -719,11 +877,41 @@ class VisualDetectionPipeline:
         self.consensus = consensus or TemporalEventConsensus()
 
     def analyze(self, frame: FrameSample, elapsed_ms: int) -> tuple[DetectionCandidate, ...]:
-        return self.consensus.process(self.detector.detect(frame, elapsed_ms))
+        return self.analyze_frame(frame, elapsed_ms).candidates
+
+    def analyze_frame(self, frame: FrameSample, elapsed_ms: int) -> FrameAnalysis:
+        if isinstance(self.detector, MasterDuelVisualEventDetector):
+            cues, detected_state, raw_candidates = self.detector.analyze_cues(frame, elapsed_ms)
+        else:
+            cues = FrameCues(False)
+            detected_state = self.consensus.state
+            raw_candidates = self.detector.detect(frame, elapsed_ms)
+        candidates = self.consensus.process(raw_candidates)
+        state = self.consensus.state if candidates or self.consensus.state is not MasterDuelState.IDLE else detected_state
+        return FrameAnalysis(
+            elapsed_ms=elapsed_ms,
+            state=state,
+            profile_name=cues.profile_name,
+            source_width=frame.width,
+            source_height=frame.height,
+            coin_score=cues.coin_toss_score,
+            board_score=cues.board_score,
+            turn_score=cues.turn_score,
+            turn_order_score=cues.turn_order_score,
+            result_score=cues.result_score,
+            error_score=cues.match_error_score,
+            replay_score=cues.replay_score,
+            overlay_score=cues.overlay_score,
+            loading_score=cues.loading_score,
+            candidates=candidates,
+            agreements=self.consensus.agreements,
+        )
 
 
-def _candidate_key(candidate: DetectionCandidate) -> tuple[str, str | None, str | None]:
-    return candidate.event_type, candidate.actor, candidate.outcome
+def _candidate_key(
+    candidate: DetectionCandidate,
+) -> tuple[str, str | None, str | None, str | None]:
+    return candidate.event_type, candidate.actor, candidate.outcome, candidate.evidence
 
 
 def _event_priority(event_type: str) -> int:
@@ -732,8 +920,9 @@ def _event_priority(event_type: str) -> int:
         "match_error": 1,
         "duel_start": 2,
         "duel_confirmed": 3,
-        "turn_change": 4,
-        "duel_result": 5,
+        "duel_boundary": 4,
+        "turn_change": 5,
+        "duel_result": 6,
     }[event_type]
 
 

@@ -35,6 +35,10 @@ class MasterDuelWindowDetector:
                 capture_window_handle=game.window.handle,
                 capture_process_id=game.process.pid,
                 capture_window_title=game.window.title,
+                capture_left=game.window.left,
+                capture_top=game.window.top,
+                capture_width=game.window.width,
+                capture_height=game.window.height,
             )
         if game.status in {
             GameWindowStatus.NOT_RUNNING,

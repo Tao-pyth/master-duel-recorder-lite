@@ -9,18 +9,25 @@ import time
 
 from .auto_recording import AutoRecordingController, AutoRecordingEvent, AutoRecordingEventAction
 from .capture_targets import (
+    CaptureInput,
     CaptureMode,
     CaptureTarget,
     CaptureTargetCatalog,
     capture_input_for_target,
+    capture_input_for_window_region,
     resolve_configured_capture,
 )
 from .config import AppConfig, LoadedAppConfig, load_app_config, save_app_config, validate_app_config
 from .config_management import updated_config
-from .detection import DetectionPolicy, DuelDetectionStateMachine
+from .detection import DetectionPolicy, DuelDetectionStateMachine, DuelObservation
 from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
 from .duel_start_monitor import MasterDuelStartMonitor
 from .duel_records import DuelRecord, DuelRecordChange, DuelRecordRepository, DuelRecordValues
+from .duel_statistics import (
+    DuelStatisticsRepository,
+    StatisticsDashboard,
+    StatisticsFilter,
+)
 from .duel_timeline import DuelEvent, DuelTimelineRepository
 from .ffmpeg import (
     AudioInputTestResult,
@@ -35,8 +42,8 @@ from .ffmpeg_setup import (
     FfmpegInstaller,
     default_ffmpeg_install_directory,
 )
-from .frame_capture import FfmpegWindowFrameCapture
-from .game_window import GameWindowMonitor
+from .frame_capture import FrameCaptureResult, PersistentFfmpegRegionFrameCapture
+from .game_window import GameWindowMonitor, GameWindowStatus, WindowSnapshot
 from .master_duel_detector import MasterDuelWindowDetector
 from .media_recovery import MediaInspection, MediaRecoveryService, MediaRepairResult
 from .preflight import PreflightReport, run_preflight
@@ -58,7 +65,8 @@ from .upload_media import UploadMediaValidator, find_ffprobe
 from .upload_metadata import UploadMetadata, UploadPrivacy
 from .upload_preparation import UploadPreparationResult, UploadPreparationService
 from .upload_queue import UploadQueueItem, UploadQueueStore
-from .visual_detection import DetectionCandidate
+from .visual_detection import DetectionCandidate, FrameAnalysis
+from .visual_diagnostics import VisualDiagnosticSession
 from .visual_worker import VisualDetectionStatus
 
 
@@ -113,6 +121,12 @@ class RecordingHistoryView:
     @property
     def duel_type(self) -> str:
         return self.duel_record.values.duel_type if self.duel_record is not None else "other"
+
+
+@dataclass(frozen=True)
+class RecordingHistoryDashboard:
+    views: tuple[RecordingHistoryView, ...]
+    incomplete_duel_record_count: int
 
 
 EventCallback = Callable[[ApplicationEvent], None]
@@ -371,6 +385,14 @@ class RecorderApplicationService:
         }
         return tuple(RecordingHistoryView(entry, records.get(entry.recording_id)) for entry in entries)
 
+    def get_history_dashboard(self, *, limit: int = 200) -> RecordingHistoryDashboard:
+        return RecordingHistoryDashboard(
+            views=self.list_history_views(limit=limit),
+            incomplete_duel_record_count=DuelRecordRepository.from_runtime_paths(
+                self.paths
+            ).count_incomplete_recordings(),
+        )
+
     def get_history(self, recording_id: str) -> RecordingHistoryEntry:
         entry = RecordingHistoryRepository.from_runtime_paths(self.paths).get(recording_id)
         if entry is None:
@@ -415,6 +437,16 @@ class RecorderApplicationService:
 
     def list_tags(self) -> tuple[DuelCatalogEntry, ...]:
         return DuelCatalogRepository.from_runtime_paths(self.paths).list_tags()
+
+    def get_statistics_dashboard(
+        self,
+        filters: StatisticsFilter | None = None,
+        *,
+        granularity: str = "month",
+    ) -> StatisticsDashboard:
+        repository = DuelStatisticsRepository.from_runtime_paths(self.paths)
+        selected = filters or StatisticsFilter()
+        return repository.dashboard(selected, granularity=granularity)
 
     def add_duel_catalog_entry(
         self,
@@ -602,6 +634,10 @@ class RecorderApplicationService:
 
     def _watch_loop(self, callback: EventCallback | None) -> None:
         controller: AutoRecordingController | None = None
+        frame_stream: PersistentFfmpegRegionFrameCapture | None = None
+        diagnostics: VisualDiagnosticSession | None = None
+        confirmed_recording_id: str | None = None
+        reported_restart_count = 0
         try:
             loaded = self.load_config()
             config = loaded.config
@@ -630,14 +666,34 @@ class RecorderApplicationService:
                 title_contains=watch_config.game_window_title_contains,
             )
             window_detector = MasterDuelWindowDetector(monitor)
+            frame_stream = PersistentFfmpegRegionFrameCapture(
+                discovery.executable,
+                maximum_fps=watch_config.visual_detection_maximum_fps,
+            )
+            diagnostics = VisualDiagnosticSession(self.paths.logs)
+
+            def capture_current_window() -> FrameCaptureResult:
+                game = monitor.observe()
+                if game.status is not GameWindowStatus.VISIBLE or game.window is None:
+                    return FrameCaptureResult(None, game.message)
+                return frame_stream.capture(game.window)
+
+            def record_analysis(analysis: FrameAnalysis) -> None:
+                if diagnostics is not None:
+                    diagnostics.record(
+                        analysis,
+                        restart_count=frame_stream.restart_count,
+                    )
+
             start_monitor = MasterDuelStartMonitor(
                 window_detector,
-                capture=FfmpegWindowFrameCapture(discovery.executable).capture,
+                capture=frame_stream.capture,
                 minimum_confidence=max(
                     watch_config.visual_detection_minimum_confidence,
                     watch_config.detection_minimum_confidence,
                 ),
                 confirmations=max(2, watch_config.start_confirmations),
+                on_analysis=record_analysis,
             )
             controller = AutoRecordingController(
                 state_machine=DuelDetectionStateMachine(
@@ -653,8 +709,12 @@ class RecorderApplicationService:
                 recording_factory=lambda observation: prepare_recording(
                     paths=self.paths,
                     config=watch_config,
-                    master_duel_window_handle=observation.capture_window_handle,
-                    master_duel_window_title=observation.capture_window_title,
+                    capture_input=_automatic_capture_input(observation),
+                    visual_frame_capture=capture_current_window,
+                    visual_analysis_callback=record_analysis,
+                    visual_source=frame_stream.source_description,
+                    visual_restart_counter=lambda: frame_stream.restart_count,
+                    visual_frame_generation=lambda: frame_stream.generation,
                 ),
             )
             self._emit(callback, ApplicationEvent("watch", "自動監視を開始しました", state="watching"))
@@ -668,24 +728,70 @@ class RecorderApplicationService:
                     break
                 event = controller.process(observation)
                 if event.action is AutoRecordingEventAction.STARTED:
+                    diagnostics.transition("candidate_started", elapsed_ms=0)
                     self._save_automatic_start_candidate(
                         event.recording_id,
                         start_monitor.start_candidate,
                         callback,
                     )
+                lifecycle_prepared = controller.current
                 lifecycle_event = self._apply_automatic_visual_lifecycle(
                     controller,
                     start_monitor,
                     callback,
                 )
                 if lifecycle_event is not None:
+                    transition = "result_stopped"
+                    if lifecycle_prepared is not None:
+                        if (
+                            lifecycle_prepared.visual_abort_reason is not None
+                            or not lifecycle_prepared.duel_confirmed
+                        ):
+                            transition = "candidate_discarded"
+                        elif lifecycle_prepared.boundary_detected_monotonic is not None:
+                            transition = "boundary_stopped"
+                    diagnostics.transition(transition)
                     event = lifecycle_event
                 if controller.current is not None:
+                    if (
+                        controller.current.duel_confirmed
+                        and controller.current.target.recording_id != confirmed_recording_id
+                    ):
+                        confirmed_recording_id = controller.current.target.recording_id
+                        diagnostics.transition("duel_confirmed")
+                        self._emit(
+                            callback,
+                            ApplicationEvent(
+                                "visual_transition",
+                                "対戦盤面を確認し、候補録画を正式履歴へ昇格しました",
+                                recording_id=confirmed_recording_id,
+                                state="confirmed",
+                            ),
+                        )
                     self._publish_visual_status(controller.current, callback)
                 else:
                     if event.action is AutoRecordingEventAction.STOPPED:
+                        if lifecycle_event is None:
+                            diagnostics.transition("recording_stopped")
                         start_monitor.reset()
+                        confirmed_recording_id = None
                     self._set_visual_status(start_monitor.status, callback)
+                current_status = (
+                    controller.current.visual_detection_status
+                    if controller.current is not None
+                    else start_monitor.status
+                )
+                if current_status.restart_count > reported_restart_count:
+                    reported_restart_count = current_status.restart_count
+                    diagnostics.transition("stream_restarted")
+                    self._emit(
+                        callback,
+                        ApplicationEvent(
+                            "visual_transition",
+                            f"判定ストリームを再起動しました ({reported_restart_count}回)",
+                            state="degraded",
+                        ),
+                    )
                 if event.action is not AutoRecordingEventAction.NONE:
                     self._emit(callback, _application_event(event))
                 interval = (
@@ -700,6 +806,10 @@ class RecorderApplicationService:
             if controller is not None and controller.current is not None:
                 event = controller.manual_stop()
                 self._emit(callback, _application_event(event))
+            if frame_stream is not None:
+                frame_stream.stop()
+            if diagnostics is not None:
+                diagnostics.close()
             self._emit(callback, ApplicationEvent("watch", "自動監視を停止しました", state="stopped"))
 
     def _apply_automatic_visual_lifecycle(
@@ -720,8 +830,13 @@ class RecorderApplicationService:
         )
         timed_out = unconfirmed_seconds >= 45.0
         result_detected = prepared.result_detected_monotonic
+        boundary_detected = prepared.boundary_detected_monotonic
         post_roll_complete = (
-            result_detected is not None and time.monotonic() - result_detected >= 3.0
+            (result_detected is not None and time.monotonic() - result_detected >= 3.0)
+            or (
+                boundary_detected is not None
+                and time.monotonic() - boundary_detected >= 1.0
+            )
         )
         if abort_reason is None and not timed_out and not post_roll_complete:
             return None
@@ -748,7 +863,12 @@ class RecorderApplicationService:
                     message=f"対戦不成立として候補録画を取り消しました: {reason}",
                 )
         else:
-            event = replace(event, message="対戦結果の3秒後に録画を停止しました")
+            message = (
+                "次の対戦開始を録画境界として前の録画を停止しました"
+                if boundary_detected is not None
+                else "対戦結果の3秒後に録画を停止しました"
+            )
+            event = replace(event, message=message)
         start_monitor.reset()
         return event
 
@@ -872,6 +992,22 @@ def _application_event(event: AutoRecordingEvent) -> ApplicationEvent:
         event.message,
         recording_id=event.recording_id,
         state=event.result.state.value if event.result is not None else event.action.value,
+    )
+
+
+def _automatic_capture_input(observation: DuelObservation) -> CaptureInput:
+    return capture_input_for_window_region(
+        WindowSnapshot(
+            handle=observation.capture_window_handle or 0,
+            pid=observation.capture_process_id or 0,
+            title=observation.capture_window_title or "",
+            visible=True,
+            minimized=False,
+            width=observation.capture_width or 0,
+            height=observation.capture_height or 0,
+            left=observation.capture_left or 0,
+            top=observation.capture_top or 0,
+        )
     )
 
 

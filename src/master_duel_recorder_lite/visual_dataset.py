@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from concurrent.futures import ProcessPoolExecutor
 import json
 from pathlib import Path
 import struct
@@ -227,19 +228,38 @@ def evaluate_visual_dataset(
     ffmpeg: Path,
     *,
     sample_fps: float = 2.0,
+    max_workers: int = 1,
 ) -> DatasetEvaluation:
-    results: list[VideoEvaluation] = []
-    for entry in dataset.videos:
-        if not entry.file.is_file():
-            results.append(VideoEvaluation(entry.video_id, "skipped", 0, (), "動画未配置"))
-            continue
-        try:
-            detected = analyze_video(ffmpeg, entry, sample_fps=sample_fps)
-            evaluations = _match_events(entry, detected)
-            results.append(VideoEvaluation(entry.video_id, "evaluated", len(detected), evaluations))
-        except Exception as exc:
-            results.append(VideoEvaluation(entry.video_id, "error", 0, (), str(exc)))
+    if max_workers < 1:
+        raise ValueError("max_workersは1以上である必要があります")
+    if max_workers == 1:
+        results = [_evaluate_video_entry(entry, ffmpeg, sample_fps) for entry in dataset.videos]
+    else:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            results = list(
+                executor.map(
+                    _evaluate_video_entry,
+                    dataset.videos,
+                    (ffmpeg for _entry in dataset.videos),
+                    (sample_fps for _entry in dataset.videos),
+                )
+            )
     return DatasetEvaluation(dataset.dataset_id, sample_fps, tuple(results))
+
+
+def _evaluate_video_entry(
+    entry: VideoDatasetEntry,
+    ffmpeg: Path,
+    sample_fps: float,
+) -> VideoEvaluation:
+    if not entry.file.is_file():
+        return VideoEvaluation(entry.video_id, "skipped", 0, (), "動画未配置")
+    try:
+        detected = analyze_video(ffmpeg, entry, sample_fps=sample_fps)
+        evaluations = _match_events(entry, detected)
+        return VideoEvaluation(entry.video_id, "evaluated", len(detected), evaluations)
+    except Exception as exc:
+        return VideoEvaluation(entry.video_id, "error", 0, (), str(exc))
 
 
 def render_evaluation_markdown(report: DatasetEvaluation) -> str:

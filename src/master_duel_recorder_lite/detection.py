@@ -26,6 +26,10 @@ class DuelObservation:
     capture_window_handle: int | None = None
     capture_process_id: int | None = None
     capture_window_title: str | None = None
+    capture_left: int | None = None
+    capture_top: int | None = None
+    capture_width: int | None = None
+    capture_height: int | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:

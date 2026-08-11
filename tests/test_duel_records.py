@@ -64,6 +64,49 @@ class DuelRecordRepositoryTest(unittest.TestCase):
         self.assertEqual(changes[0].source, "system")
         self.assertNotIn("output_path", changes[0].after)
 
+    def test_incomplete_count_includes_only_completed_unconfirmed_recordings(self) -> None:
+        history = RecordingHistoryRepository(
+            database_path=self.database,
+            recordings_root=self.recordings,
+        )
+        for recording_id in ("draft", "confirmed", "failed", "recording"):
+            history.register_starting(
+                recording_id=recording_id,
+                output_path=self.recordings / f"{recording_id}.mkv",
+                container="mkv",
+                source="manual",
+            )
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute(
+                "UPDATE recordings SET state = 'completed' "
+                "WHERE recording_id IN ('recording-1', 'draft', 'confirmed')"
+            )
+            connection.execute(
+                "UPDATE recordings SET state = 'failed' WHERE recording_id = 'failed'"
+            )
+            connection.execute(
+                "UPDATE recordings SET state = 'recording' WHERE recording_id = 'recording'"
+            )
+        self.repository.save(
+            "draft",
+            DuelRecordValues(status="draft"),
+            expected_revision=0,
+        )
+        self.repository.save(
+            "confirmed",
+            DuelRecordValues(status="confirmed"),
+            expected_revision=0,
+        )
+
+        self.assertEqual(self.repository.count_incomplete_recordings(), 2)
+
+        self.repository.save(
+            "recording-1",
+            DuelRecordValues(status="confirmed"),
+            expected_revision=0,
+        )
+        self.assertEqual(self.repository.count_incomplete_recordings(), 1)
+
     def test_confirmed_record_can_be_edited_again(self) -> None:
         draft = self.repository.create_draft("recording-1")
         confirmed = self.repository.save(

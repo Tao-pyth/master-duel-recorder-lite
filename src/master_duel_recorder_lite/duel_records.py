@@ -151,6 +151,21 @@ class DuelRecordRepository:
             )
         return records
 
+    def count_incomplete_recordings(self) -> int:
+        with closing(connect_history_database(self.database_path)) as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM recordings AS recording
+                LEFT JOIN duel_records AS duel
+                    ON duel.recording_id = recording.recording_id
+                WHERE recording.state = 'completed'
+                  AND (duel.recording_id IS NULL OR duel.status <> 'confirmed')
+                """
+            ).fetchone()
+        assert row is not None
+        return int(row["count"])
+
     def create_draft(self, recording_id: str, *, source: str = "system") -> DuelRecord:
         existing = self.get(recording_id)
         if existing is not None:

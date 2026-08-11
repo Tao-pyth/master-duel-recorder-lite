@@ -32,8 +32,9 @@ try {
     }
     $result = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
     $requiredWidgets = @(
-        "activity", "catalog_table", "ffmpeg_setup", "history_delete", "history_diagnostic", "history_duel", "history_play", "history_reveal", "history_table", "history_timeline", "prepare_table", "visual_status",
-        "record_start", "record_stop", "recovery_table", "settings_form", "target_selector",
+        "activity", "catalog_table", "ffmpeg_setup", "history_delete", "history_diagnostic", "history_duel", "history_play", "history_reveal", "history_table", "history_timeline", "incomplete_duel_count", "prepare_table", "visual_diagnostics_folder", "visual_status",
+        "record_start", "record_status", "record_stop", "recovery_table", "settings_form", "statistics_chart",
+        "statistics_deck_table", "statistics_filters", "statistics_order_table", "target_selector",
         "watch_toggle"
     )
     if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600) {

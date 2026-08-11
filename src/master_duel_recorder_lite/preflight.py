@@ -118,7 +118,7 @@ def run_preflight(
         checks.append(
             PreflightCheck(
                 code="inputs",
-                label="録画入力",
+                label="手動録画対象",
                 status=CheckStatus.ERROR,
                 message="FFmpegが見つからないため確認できません",
             )
@@ -169,7 +169,7 @@ def _append_visual_detection_check(
         checks.append(
             PreflightCheck(
                 "visual-detection",
-                "画面イベント判定",
+                "自動監視対象",
                 CheckStatus.WARNING,
                 "設定で無効です。録画は継続できます",
             )
@@ -179,9 +179,12 @@ def _append_visual_detection_check(
         checks.append(
             PreflightCheck(
                 "visual-detection",
-                "画面イベント判定",
-                CheckStatus.WARNING,
-                "Master Duel録画対象ではないため無効です。録画は継続できます",
+                "自動監視対象",
+                CheckStatus.OK,
+                (
+                    "手動録画対象の選択とは独立して、Master Duelクライアント領域を"
+                    f"最大{config.visual_detection_maximum_fps:g}fpsで監視します"
+                ),
             )
         )
         return
@@ -189,7 +192,7 @@ def _append_visual_detection_check(
         checks.append(
             PreflightCheck(
                 "visual-detection",
-                "画面イベント判定",
+                "自動監視対象",
                 CheckStatus.WARNING,
                 "FFmpegがないためフレームを取得できません。録画可否とは別に表示しています",
             )
@@ -198,12 +201,15 @@ def _append_visual_detection_check(
     checks.append(
         PreflightCheck(
             "visual-detection",
-            "画面イベント判定",
+            "自動監視対象",
             CheckStatus.OK,
-            (
-                f"オフラインROI特徴判定を最大{config.visual_detection_maximum_fps:g}fps、"
-                f"閾値{config.visual_detection_minimum_confidence:.2f}で利用できます"
-            ),
+                (
+                    "Master Duelクライアント領域の常駐ROI特徴判定と座標録画を"
+                    f"最大{config.visual_detection_maximum_fps:g}fps、"
+                    f"閾値{config.visual_detection_minimum_confidence:.2f}で利用できます。"
+                    "手動録画対象の選択には影響されません。"
+                    "別ウィンドウを重ねると録画に映ります"
+                ),
         )
     )
 
@@ -227,7 +233,7 @@ def _append_capability_and_input_checks(
         checks.append(
             PreflightCheck(
                 code="inputs",
-                label="録画入力",
+                label="手動録画対象",
                 status=CheckStatus.ERROR,
                 message="FFmpeg能力を確認できないため入力列挙を中止しました",
             )
@@ -295,7 +301,7 @@ def _append_capability_and_input_checks(
     else:
         status = CheckStatus.OK
         message = "設定した画面・音声入力を利用できます"
-    checks.append(PreflightCheck("inputs", "録画入力", status, message))
+    checks.append(PreflightCheck("inputs", "手動録画対象", status, message))
 
 
 def _append_storage_check(

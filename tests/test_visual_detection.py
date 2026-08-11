@@ -77,6 +77,7 @@ def candidate(
     actor: str | None = None,
     outcome: str | None = None,
     play_order: str | None = None,
+    evidence: str | None = None,
 ) -> DetectionCandidate:
     return DetectionCandidate(
         event_type=event_type,
@@ -88,6 +89,7 @@ def candidate(
         actor=actor,
         outcome=outcome,
         play_order=play_order,
+        evidence=evidence,
     )
 
 
@@ -98,6 +100,7 @@ class BmpNormalizationTest(unittest.TestCase):
         self.assertIsNotNone(normalized)
         self.assertEqual((normalized.width, normalized.height), (640, 360))  # type: ignore[union-attr]
         self.assertEqual(normalized.profile_name, "standard-16:9-window")  # type: ignore[union-attr]
+        self.assertEqual(normalized.rgb(0, 0), (10, 20, 30))  # type: ignore[union-attr]
 
     def test_ultrawide_fullscreen_preserves_full_aspect_ratio(self) -> None:
         normalized = normalize_bmp(frame(bmp(688, 288, (10, 20, 30)), 688, 288))
@@ -118,7 +121,7 @@ class VisualDetectorTest(unittest.TestCase):
 
         self.assertEqual(machine.observe(FrameCues(True)), MasterDuelState.MATCHMAKING)
         self.assertEqual(
-            machine.observe(FrameCues(True, coin_toss_score=0.9)),
+            machine.observe(FrameCues(True, coin_toss_score=0.9, turn_order_score=0.8)),
             MasterDuelState.COIN_TOSS_CANDIDATE,
         )
         self.assertEqual(
@@ -146,12 +149,34 @@ class VisualDetectorTest(unittest.TestCase):
 
     def test_coin_toss_creates_start_candidate(self) -> None:
         detected = DuelStartDetector().detect(
-            FrameCues(True, coin_toss_score=0.9, detail="coin"), 20_000
+            FrameCues(True, coin_toss_score=0.9, turn_order_score=0.8, detail="coin"),
+            20_000,
         )
 
         self.assertIsNotNone(detected)
         self.assertEqual(detected.event_type, "duel_start")  # type: ignore[union-attr]
         self.assertGreaterEqual(detected.confidence, 0.9)  # type: ignore[union-attr]
+
+    def test_start_rejects_home_screen_coin_like_colors(self) -> None:
+        detected = DuelStartDetector().detect(
+            FrameCues(True, coin_toss_score=0.78, turn_order_score=0.46),
+            0,
+        )
+
+        self.assertIsNone(detected)
+
+    def test_start_rejects_connecting_screen(self) -> None:
+        detected = DuelStartDetector().detect(
+            FrameCues(
+                True,
+                coin_toss_score=0.9,
+                turn_order_score=0.8,
+                loading_score=0.9,
+            ),
+            0,
+        )
+
+        self.assertIsNone(detected)
 
     def test_board_confirmation_preserves_play_order(self) -> None:
         detected = DuelConfirmationDetector().detect(
@@ -179,6 +204,9 @@ class VisualDetectorTest(unittest.TestCase):
             detector.detect(FrameCues(True, coin_toss_score=0.9, match_error_score=0.8), 0)
         )
         self.assertIsNone(
+            detector.detect(FrameCues(True, coin_toss_score=0.9, result_score=0.8), 0)
+        )
+        self.assertIsNone(
             detector.detect(FrameCues(True, board_score=0.9, overlay_score=0.7), 0)
         )
 
@@ -202,13 +230,19 @@ class VisualDetectorTest(unittest.TestCase):
         self.assertIsNotNone(detected)
         self.assertEqual(detected.outcome, "loss")  # type: ignore[union-attr]
 
-    def test_error_detector_boosts_repeated_dialog_confidence(self) -> None:
+    def test_error_detector_uses_event_specific_threshold(self) -> None:
+        self.assertIsNone(
+            MatchErrorDetector().detect(
+                FrameCues(True, match_error_score=0.6, detail="loading transition"),
+                4500,
+            )
+        )
         detected = MatchErrorDetector().detect(
-            FrameCues(True, match_error_score=0.6, detail="error dialog"), 5000
+            FrameCues(True, match_error_score=0.75, detail="error dialog"), 5000
         )
 
         self.assertIsNotNone(detected)
-        self.assertGreaterEqual(detected.confidence, 0.7)  # type: ignore[union-attr]
+        self.assertEqual(detected.confidence, 0.75)  # type: ignore[union-attr]
 
     def test_master_detector_rejects_unknown_layout(self) -> None:
         detector = MasterDuelVisualEventDetector(FakeExtractor(FrameCues(False)))
@@ -216,6 +250,28 @@ class VisualDetectorTest(unittest.TestCase):
 
 
 class TemporalConsensusTest(unittest.TestCase):
+    def test_coin_requires_two_matches_in_four_frame_window(self) -> None:
+        consensus = TemporalEventConsensus()
+
+        consensus.process((candidate("duel_start", 0, evidence="coin"),))
+        consensus.process(())
+        emitted = consensus.process((candidate("duel_start", 1000, evidence="coin"),))
+
+        self.assertEqual(len(emitted), 1)
+        self.assertIn("直近4フレーム中2件", emitted[0].reason)
+
+    def test_board_fallback_requires_three_matches_in_five_frame_window(self) -> None:
+        consensus = TemporalEventConsensus()
+
+        consensus.process((candidate("duel_start", 0, evidence="board"),))
+        consensus.process(())
+        consensus.process((candidate("duel_start", 1000, evidence="board"),))
+        self.assertEqual(consensus.process(()), ())
+        emitted = consensus.process((candidate("duel_start", 2000, evidence="board"),))
+
+        self.assertEqual(len(emitted), 1)
+        self.assertIn("直近5フレーム中3件", emitted[0].reason)
+
     def test_low_confidence_is_discarded_and_first_observation_time_is_used(self) -> None:
         consensus = TemporalEventConsensus(minimum_confidence=0.70)
 
@@ -234,8 +290,11 @@ class TemporalConsensusTest(unittest.TestCase):
         consensus.process((candidate("duel_start", 2000),))
         self.assertEqual(len(consensus.process((candidate("duel_start", 2500),))), 1)
         consensus.process((candidate("duel_confirmed", 4000, actor="self", play_order="first"),))
-        confirmed = consensus.process(
+        self.assertEqual(consensus.process(
             (candidate("duel_confirmed", 4500, actor="self", play_order="first"),)
+        ), ())
+        confirmed = consensus.process(
+            (candidate("duel_confirmed", 5000, actor="self", play_order="first"),)
         )
 
         self.assertEqual([item.event_type for item in confirmed], ["duel_confirmed", "turn_change"])
@@ -245,6 +304,8 @@ class TemporalConsensusTest(unittest.TestCase):
         consensus = TemporalEventConsensus(turn_cooldown_ms=5000, assume_started=True)
         consensus.process((candidate("duel_confirmed", 1000, actor="self", play_order="first"),))
         consensus.process((candidate("duel_confirmed", 1500, actor="self", play_order="first"),))
+        consensus.process((candidate("duel_confirmed", 1800, actor="self", play_order="first"),))
+        consensus.process((candidate("duel_confirmed", 2000, actor="self", play_order="first"),))
 
         self.assertEqual(consensus.process((candidate("turn_change", 7000, actor="self"),)), ())
         consensus.process((candidate("turn_change", 8000, actor="opponent"),))
@@ -257,13 +318,131 @@ class TemporalConsensusTest(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(consensus.process((candidate("turn_change", 16_000, actor="self"),)), ())
 
+    def test_high_confidence_result_can_finish_on_one_sample_after_confirmation(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (1000, 1500, 2000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="first"),)
+            )
+
+        emitted = consensus.process(
+            (candidate("duel_result", 20_000, 0.95, outcome="win"),)
+        )
+
+        self.assertEqual([item.event_type for item in emitted], ["duel_result"])
+        self.assertEqual(emitted[0].outcome, "win")
+
+    def test_ambiguous_single_result_sample_still_requires_temporal_agreement(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (1000, 1500, 2000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="second"),)
+            )
+
+        self.assertEqual(
+            consensus.process((candidate("duel_result", 20_000, 0.8171, outcome="win"),)),
+            (),
+        )
+
+    def test_next_coin_toss_closes_a_confirmed_duel_as_fallback_boundary(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (1000, 1500, 2000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="first"),)
+            )
+
+        consensus.process((candidate("duel_start", 20_000, evidence="coin"),))
+        emitted = consensus.process(
+            (candidate("duel_start", 21_000, evidence="coin"),)
+        )
+
+        self.assertEqual([item.event_type for item in emitted], ["duel_boundary"])
+        self.assertEqual(emitted[0].evidence, "next_duel")
+        self.assertIn("録画境界", emitted[0].reason)
+
+    def test_v0173_log_sequence_stops_at_next_coin_before_ambiguous_result(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (15_000, 15_500, 16_000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="second"),)
+            )
+
+        consensus.process(
+            (candidate("duel_start", 571_970, 0.89, evidence="coin"),)
+        )
+        boundary = consensus.process(
+            (candidate("duel_start", 573_866, 0.94, evidence="coin"),)
+        )
+        ambiguous_result = consensus.process(
+            (candidate("duel_result", 594_354, 0.8171, outcome="win"),)
+        )
+
+        self.assertEqual([item.event_type for item in boundary], ["duel_boundary"])
+        self.assertEqual(ambiguous_result, ())
+
+    def test_initial_coin_toss_cannot_be_reused_as_next_duel_boundary(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (1000, 1500, 2000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="first"),)
+            )
+
+        for elapsed_ms in (3000, 3500, 4000):
+            self.assertEqual(
+                consensus.process(
+                    (candidate("duel_start", elapsed_ms, evidence="coin"),)
+                ),
+                (),
+            )
+
     def test_replay_like_controls_during_a_live_duel_are_ignored(self) -> None:
         consensus = TemporalEventConsensus(assume_started=True)
         consensus.process((candidate("duel_confirmed", 1000, actor="self", play_order="first"),))
         consensus.process((candidate("duel_confirmed", 1500, actor="self", play_order="first"),))
+        consensus.process((candidate("duel_confirmed", 1800, actor="self", play_order="first"),))
 
         consensus.process((candidate("replay_detected", 2000),))
         self.assertEqual(consensus.process((candidate("replay_detected", 2500),)), ())
+
+    def test_confirmed_replay_discards_unconfirmed_candidate(self) -> None:
+        consensus = TemporalEventConsensus()
+        consensus.process((candidate("duel_start", 1000),))
+        consensus.process((candidate("duel_start", 1500),))
+
+        consensus.process((candidate("replay_detected", 2000),))
+        emitted = consensus.process((candidate("replay_detected", 2500),))
+
+        self.assertEqual(emitted[0].event_type, "replay_detected")
+
+    def test_transient_error_cues_after_duel_start_do_not_discard_candidate(self) -> None:
+        consensus = TemporalEventConsensus()
+        consensus.process((candidate("duel_start", 1000),))
+        self.assertEqual(
+            consensus.process((candidate("duel_start", 1500),))[0].event_type,
+            "duel_start",
+        )
+
+        for elapsed_ms in (2000, 2500):
+            self.assertEqual(
+                consensus.process((candidate("match_error", elapsed_ms),)),
+                (),
+            )
+
+        consensus.process((candidate("duel_confirmed", 3500),))
+        consensus.process((candidate("duel_confirmed", 4000),))
+        confirmed = consensus.process((candidate("duel_confirmed", 4500),))
+        self.assertEqual(confirmed[0].event_type, "duel_confirmed")
+
+    def test_confirmed_match_error_discards_unconfirmed_candidate(self) -> None:
+        consensus = TemporalEventConsensus()
+        consensus.process((candidate("duel_start", 1000),))
+        consensus.process((candidate("duel_start", 1500),))
+        consensus.process((candidate("match_error", 2000),))
+        consensus.process((candidate("match_error", 2500),))
+
+        emitted = consensus.process((candidate("match_error", 3000),))
+
+        self.assertEqual(emitted[0].event_type, "match_error")
 
     def test_error_and_replay_are_control_events_not_duel_events(self) -> None:
         error_consensus = TemporalEventConsensus()
@@ -281,11 +460,14 @@ class TemporalConsensusTest(unittest.TestCase):
             "replay_detected",
         )
 
-    def test_missing_frame_breaks_consecutive_consensus(self) -> None:
+    def test_single_missing_frame_does_not_erase_window_consensus(self) -> None:
         consensus = TemporalEventConsensus()
         consensus.process((candidate("duel_start", 1000),))
         consensus.process(())
-        self.assertEqual(consensus.process((candidate("duel_start", 1500),)), ())
+        emitted = consensus.process((candidate("duel_start", 1500),))
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0].elapsed_ms, 1000)
 
 
 if __name__ == "__main__":

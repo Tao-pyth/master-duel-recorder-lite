@@ -127,7 +127,7 @@ class MasterDuelStartMonitorTest(unittest.TestCase):
         self.assertIn("capture failed", observation.reason)
         self.assertEqual(monitor.status.state, "degraded")
         self.assertEqual(monitor.status.dropped_frames, 1)
-        self.assertEqual(pipeline_count, 3)
+        self.assertEqual(pipeline_count, 2)
 
     def test_target_change_resets_latched_start(self) -> None:
         outputs = [(start_candidate(),), ()]

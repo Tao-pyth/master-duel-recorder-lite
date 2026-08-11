@@ -59,7 +59,7 @@ class PreflightTest(unittest.TestCase):
             ],
         )
 
-    def test_visual_detection_is_warning_for_non_master_duel_target(self) -> None:
+    def test_visual_detection_uses_master_duel_independently_from_manual_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             executable = root / "ffmpeg.exe"
@@ -74,7 +74,8 @@ class PreflightTest(unittest.TestCase):
             )
 
         check = next(item for item in report.checks if item.code == "visual-detection")
-        self.assertIs(check.status, CheckStatus.WARNING)
+        self.assertIs(check.status, CheckStatus.OK)
+        self.assertIn("手動録画対象の選択とは独立", check.message)
         self.assertTrue(report.succeeded)
 
     def test_missing_ffmpeg_fails_but_storage_is_still_checked(self) -> None:

@@ -47,6 +47,16 @@ class RecordingVisualLifecycleTest(unittest.TestCase):
         self.assertFalse(lifecycle.confirmed)
         self.assertIn("リプレイ", lifecycle.abort_reason or "")
 
+    def test_next_duel_boundary_requests_recording_stop_without_fabricating_outcome(self) -> None:
+        lifecycle = RecordingVisualLifecycle(confirmed=True)
+
+        with patch("master_duel_recorder_lite.recorder.time.monotonic", return_value=456.0):
+            lifecycle.handle(candidate("duel_boundary"))
+
+        self.assertEqual(lifecycle.boundary_snapshot(), 456.0)
+        self.assertEqual(lifecycle.outcome, "unknown")
+        self.assertIsNone(lifecycle.result_detected_monotonic)
+
 
 if __name__ == "__main__":
     unittest.main()

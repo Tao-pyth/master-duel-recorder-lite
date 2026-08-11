@@ -11,6 +11,12 @@ from typing import Protocol
 
 DEFAULT_MASTER_DUEL_PROCESS_NAME = "masterduel.exe"
 WINDOWS_MAX_PATH = 260
+DEFAULT_DPI = 96
+
+
+def scale_for_dpi(value: int, dpi: int) -> int:
+    effective_dpi = dpi if dpi > 0 else DEFAULT_DPI
+    return round(value * effective_dpi / DEFAULT_DPI)
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,8 @@ class WindowSnapshot:
     minimized: bool
     width: int
     height: int
+    left: int = 0
+    top: int = 0
 
     @property
     def area(self) -> int:
@@ -148,6 +156,7 @@ class GameWindowMonitor:
 
 class WindowsGameWindowBackend:
     TH32CS_SNAPPROCESS = 0x00000002
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
 
     class PROCESSENTRY32W(ctypes.Structure):
         _fields_ = [
@@ -169,6 +178,7 @@ class WindowsGameWindowBackend:
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         self._configure_signatures()
+        self._physical_coordinates_enabled = self._enable_physical_pixel_coordinates()
 
     def list_processes(self) -> tuple[ProcessSnapshot, ...]:
         snapshot = self.kernel32.CreateToolhelp32Snapshot(self.TH32CS_SNAPPROCESS, 0)
@@ -210,6 +220,19 @@ class WindowsGameWindowBackend:
             has_rectangle = bool(self.user32.GetClientRect(handle, ctypes.byref(rectangle)))
             width = rectangle.right - rectangle.left if has_rectangle else 0
             height = rectangle.bottom - rectangle.top if has_rectangle else 0
+            client_origin = wintypes.POINT(0, 0)
+            has_origin = has_rectangle and bool(
+                self.user32.ClientToScreen(handle, ctypes.byref(client_origin))
+            )
+            left = int(client_origin.x) if has_origin else 0
+            top = int(client_origin.y) if has_origin else 0
+            if has_origin and not self._physical_coordinates_enabled:
+                dpi_reader = getattr(self.user32, "GetDpiForWindow", None)
+                dpi = int(dpi_reader(handle)) if dpi_reader is not None else DEFAULT_DPI
+                left = scale_for_dpi(left, dpi)
+                top = scale_for_dpi(top, dpi)
+                width = scale_for_dpi(width, dpi)
+                height = scale_for_dpi(height, dpi)
             windows.append(
                 WindowSnapshot(
                     handle=int(handle),
@@ -219,6 +242,8 @@ class WindowsGameWindowBackend:
                     minimized=bool(self.user32.IsIconic(handle)),
                     width=width,
                     height=height,
+                    left=left,
+                    top=top,
                 )
             )
             return True
@@ -252,3 +277,17 @@ class WindowsGameWindowBackend:
         self.user32.IsIconic.restype = wintypes.BOOL
         self.user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         self.user32.GetClientRect.restype = wintypes.BOOL
+        self.user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+        self.user32.ClientToScreen.restype = wintypes.BOOL
+        dpi_reader = getattr(self.user32, "GetDpiForWindow", None)
+        if dpi_reader is not None:
+            dpi_reader.argtypes = [wintypes.HWND]
+            dpi_reader.restype = wintypes.UINT
+
+    def _enable_physical_pixel_coordinates(self) -> bool:
+        setter = getattr(self.user32, "SetThreadDpiAwarenessContext", None)
+        if setter is None:
+            return False
+        setter.argtypes = [ctypes.c_void_p]
+        setter.restype = ctypes.c_void_p
+        return bool(setter(self.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))

@@ -194,6 +194,8 @@ class CaptureTargetCatalog:
                     detail=observation.message,
                     window_handle=window.handle if window is not None else None,
                     window_title=window.title if window is not None else None,
+                    left=window.left if window is not None else None,
+                    top=window.top if window is not None else None,
                     width=window.width if window is not None else None,
                     height=window.height if window is not None else None,
                 ),
@@ -219,6 +221,8 @@ class CaptureTargetCatalog:
                     detail=f"{window.width}x{window.height}",
                     window_handle=window.handle,
                     window_title=title,
+                    left=window.left,
+                    top=window.top,
                     width=window.width,
                     height=window.height,
                 )
@@ -231,6 +235,30 @@ def capture_input_for_target(target: CaptureTarget) -> CaptureInput:
         raise CaptureTargetError(f"録画対象を利用できません: {target.label}")
     if target.mode is CaptureMode.DESKTOP:
         return CaptureInput("gdigrab", "desktop", label=target.label)
+    if target.mode is CaptureMode.MASTER_DUEL and None not in {
+        target.left,
+        target.top,
+        target.width,
+        target.height,
+    }:
+        assert target.window_handle is not None
+        assert target.window_title is not None
+        assert target.left is not None and target.top is not None
+        assert target.width is not None and target.height is not None
+        return capture_input_for_window_region(
+            WindowSnapshot(
+                handle=target.window_handle,
+                pid=0,
+                title=target.window_title,
+                visible=True,
+                minimized=False,
+                width=target.width,
+                height=target.height,
+                left=target.left,
+                top=target.top,
+            ),
+            label=target.label,
+        )
     if target.mode in {CaptureMode.WINDOW, CaptureMode.MASTER_DUEL}:
         if target.window_handle is None or target.window_handle <= 0:
             raise CaptureTargetError("録画対象ウィンドウのハンドルが不正です")
@@ -265,6 +293,41 @@ def capture_input_for_target(target: CaptureTarget) -> CaptureInput:
     raise CaptureTargetError(f"未対応の録画対象です: {target.mode.value}")
 
 
+def capture_input_for_window_region(
+    window: WindowSnapshot,
+    *,
+    label: str = "Master Duelクライアント領域",
+) -> CaptureInput:
+    """観測済みクライアント領域をデスクトップから録画します。
+
+    gdigrabのtitle入力はフルスクリーン表示で静止フレームを返す場合が
+    あるため、自動録画とMaster Duel専用録画では物理座標を使います。
+    """
+    if window.handle <= 0:
+        raise CaptureTargetError("録画対象ウィンドウのハンドルが不正です")
+    if not window.title.strip():
+        raise CaptureTargetError("録画対象ウィンドウのタイトルが不正です")
+    if window.width <= 0 or window.height <= 0:
+        raise CaptureTargetError("Master Duelクライアント領域のサイズが不正です")
+    return CaptureInput(
+        "gdigrab",
+        "desktop",
+        (
+            "-draw_mouse",
+            "0",
+            "-offset_x",
+            str(window.left),
+            "-offset_y",
+            str(window.top),
+            "-video_size",
+            f"{window.width}x{window.height}",
+        ),
+        label,
+        window_handle=window.handle,
+        window_title=window.title.strip(),
+    )
+
+
 def find_target(targets: Sequence[CaptureTarget], mode: CaptureMode, identifier: str) -> CaptureTarget:
     if mode in {CaptureMode.DESKTOP, CaptureMode.MASTER_DUEL}:
         identifier = mode.value
@@ -291,6 +354,7 @@ def resolve_configured_capture(
     if mode is CaptureMode.MASTER_DUEL:
         window_handle = master_duel_window_handle
         window_title = master_duel_window_title
+        observed_window: WindowSnapshot | None = None
         if (window_handle is None) != (window_title is None):
             raise CaptureTargetError("Master Duelのハンドルとタイトルは同時に指定してください")
         if window_handle is None or window_title is None:
@@ -302,6 +366,7 @@ def resolve_configured_capture(
                 raise CaptureTargetError(f"Master Duelウィンドウを録画できません: {observation.message}")
             window_handle = observation.window.handle
             window_title = observation.window.title
+            observed_window = observation.window
         return capture_input_for_target(
             CaptureTarget(
                 mode,
@@ -309,6 +374,10 @@ def resolve_configured_capture(
                 f"Master Duel: {window_title or '選択済み'}",
                 window_handle=window_handle,
                 window_title=window_title,
+                left=observed_window.left if observed_window is not None else None,
+                top=observed_window.top if observed_window is not None else None,
+                width=observed_window.width if observed_window is not None else None,
+                height=observed_window.height if observed_window is not None else None,
             )
         )
 

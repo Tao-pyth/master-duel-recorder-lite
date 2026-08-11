@@ -7,6 +7,7 @@ from master_duel_recorder_lite.game_window import (
     GameWindowStatus,
     ProcessSnapshot,
     WindowSnapshot,
+    scale_for_dpi,
 )
 from master_duel_recorder_lite.master_duel_detector import MasterDuelWindowDetector
 
@@ -29,6 +30,11 @@ class FakeBackend:
 
 
 class GameWindowMonitorTest(unittest.TestCase):
+    def test_dpi_fallback_scales_positive_and_negative_coordinates(self) -> None:
+        self.assertEqual(scale_for_dpi(1920, 144), 2880)
+        self.assertEqual(scale_for_dpi(-1280, 120), -1600)
+        self.assertEqual(scale_for_dpi(1080, 0), 1080)
+
     def test_not_running_is_distinct(self) -> None:
         monitor = GameWindowMonitor(backend=FakeBackend())  # type: ignore[arg-type]
 
@@ -88,7 +94,7 @@ class GameWindowMonitorTest(unittest.TestCase):
     def test_detector_maps_visible_and_minimized(self) -> None:
         process = ProcessSnapshot(42, "masterduel.exe")
         visible = GameWindowMonitor(
-            backend=FakeBackend((process,), (WindowSnapshot(2, 42, "Master Duel", True, False, 1920, 1080),))  # type: ignore[arg-type]
+            backend=FakeBackend((process,), (WindowSnapshot(2, 42, "Master Duel", True, False, 1920, 1080, -1920, 120),))  # type: ignore[arg-type]
         )
         minimized = GameWindowMonitor(
             backend=FakeBackend((process,), (WindowSnapshot(2, 42, "Master Duel", True, True, 1920, 1080),))  # type: ignore[arg-type]
@@ -101,6 +107,10 @@ class GameWindowMonitorTest(unittest.TestCase):
         self.assertEqual(visible_observation.capture_window_handle, 2)
         self.assertEqual(visible_observation.capture_process_id, 42)
         self.assertEqual(visible_observation.capture_window_title, "Master Duel")
+        self.assertEqual(visible_observation.capture_left, -1920)
+        self.assertEqual(visible_observation.capture_top, 120)
+        self.assertEqual(visible_observation.capture_width, 1920)
+        self.assertEqual(visible_observation.capture_height, 1080)
         self.assertIn("PID 42, HWND 2", visible_observation.reason)
         self.assertIs(minimized_signal, DetectionSignal.ABSENT)
 
