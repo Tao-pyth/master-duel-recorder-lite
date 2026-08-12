@@ -475,6 +475,19 @@ class RecorderGui:
         )
         style.configure("Icon.TButton", font=("Segoe MDL2 Assets", 13), padding=(10, 7))
         style.configure(
+            "DatePicker.TEntry",
+            padding=(8, 7, 36, 7),
+            fieldbackground=self.COLORS["surface"],
+            foreground=self.COLORS["text"],
+            bordercolor=self.COLORS["border"],
+            insertcolor=self.COLORS["text"],
+        )
+        style.configure(
+            "DatePicker.Icon.TButton",
+            font=("Segoe MDL2 Assets", 12),
+            padding=(5, 7),
+        )
+        style.configure(
             "TEntry",
             padding=(8, 7),
             fieldbackground=self.COLORS["surface"],
@@ -733,6 +746,32 @@ class RecorderGui:
         button.accessible_name = accessible_name  # type: ignore[attr-defined]
         self.tooltips.append(WidgetTooltip(button, accessible_name))
         return button
+
+    def _date_picker(
+        self,
+        parent: tk.Misc,
+        variable: tk.StringVar,
+        accessible_name: str,
+    ) -> tuple[ttk.Frame, ttk.Button]:
+        holder = ttk.Frame(parent, style="Surface.TFrame")
+        ttk.Entry(
+            holder,
+            textvariable=variable,
+            width=10,
+            style="DatePicker.TEntry",
+        ).pack(fill="both", expand=True)
+        button = ttk.Button(
+            holder,
+            text=ICON_GLYPHS["calendar"],
+            width=2,
+            command=lambda: self.open_calendar_picker(variable),
+            style="DatePicker.Icon.TButton",
+            takefocus=True,
+        )
+        button.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne")
+        button.accessible_name = accessible_name  # type: ignore[attr-defined]
+        self.tooltips.append(WidgetTooltip(button, accessible_name))
+        return holder, button
 
     def _build_record_page(self) -> None:
         page = self._new_page("record")
@@ -1058,24 +1097,22 @@ class RecorderGui:
         self.statistics_order_var = tk.StringVar(value="すべて")
         self.statistics_granularity_var = tk.StringVar(value="月")
         fields = (
-            ("開始日", self.statistics_date_from_var, 12),
-            ("終了日", self.statistics_date_to_var, 12),
+            ("開始日", self.statistics_date_from_var),
+            ("終了日", self.statistics_date_to_var),
         )
-        for column, (label, variable, width) in enumerate(fields):
+        for column, (label, variable) in enumerate(fields):
             ttk.Label(filters, text=label, style="Muted.TLabel").grid(
                 row=0, column=column, sticky="w", padx=(0, 8)
             )
-            holder = ttk.Frame(filters)
-            holder.grid(row=1, column=column, sticky="ew", padx=(0, 8))
-            ttk.Entry(holder, textvariable=variable, width=width).pack(
-                side="left", fill="x", expand=True
+            holder, calendar_button = self._date_picker(
+                filters, variable, f"{label}をカレンダーから選択"
             )
-            self._icon_button(
-                holder,
-                "calendar",
-                f"{label}をカレンダーから選択",
-                lambda selected=variable: self.open_calendar_picker(selected),
-            ).pack(side="left")
+            holder.grid(row=1, column=column, sticky="ew", padx=(0, 8))
+            self.widgets[
+                "statistics_date_from_picker"
+                if column == 0
+                else "statistics_date_to_picker"
+            ] = calendar_button
         self.statistics_season_var = tk.StringVar(value="すべて")
         ttk.Label(filters, text="シーズン", style="Muted.TLabel").grid(
             row=0, column=2, sticky="w", padx=(0, 8)
@@ -1148,8 +1185,10 @@ class RecorderGui:
             textvariable=self.statistics_filter_status_var,
             style="Muted.TLabel",
         ).grid(row=2, column=2, columnspan=6, sticky="e", pady=(5, 0))
-        for column in range(9):
+        for column in range(7):
             filters.columnconfigure(column, weight=1, uniform="statistics-filter")
+        filters.columnconfigure(7, weight=0, minsize=106)
+        filters.columnconfigure(8, weight=0, minsize=82)
 
         notebook = ttk.Notebook(page)
         notebook.pack(fill="both", expand=True)
