@@ -29,6 +29,7 @@ from .config import (
     validate_app_config,
 )
 from .config_management import updated_config
+from .data_management import ManagedDataResult, ManagedDataService
 from .detection import DetectionPolicy, DuelDetectionStateMachine, DuelObservation
 from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
 from .duel_start_monitor import MasterDuelStartMonitor
@@ -120,6 +121,7 @@ class DuelEditorData:
 class RecordingHistoryView:
     entry: RecordingHistoryEntry
     duel_record: DuelRecord | None
+    own_deck_color: str | None = None
 
     @property
     def recording_id(self) -> str:
@@ -148,6 +150,10 @@ class RecordingHistoryView:
             if self.duel_record is not None
             else "other"
         )
+
+    @property
+    def own_deck(self) -> str:
+        return self.duel_record.values.own_deck if self.duel_record is not None else ""
 
 
 @dataclass(frozen=True)
@@ -435,10 +441,42 @@ class RecorderApplicationService:
                 limit=1000
             )
         }
+        deck_colors = {
+            item.name.casefold(): item.color
+            for item in DuelCatalogRepository.from_runtime_paths(self.paths).list_decks(
+                include_archived=True
+            )
+        }
         return tuple(
-            RecordingHistoryView(entry, records.get(entry.recording_id))
+            RecordingHistoryView(
+                entry,
+                records.get(entry.recording_id),
+                deck_colors.get(records[entry.recording_id].values.own_deck.casefold())
+                if entry.recording_id in records
+                else None,
+            )
             for entry in entries
         )
+
+    def export_managed_data(self, path: Path) -> ManagedDataResult:
+        self._require_data_management_idle()
+        return ManagedDataService.from_runtime_paths(self.paths).export_to(path)
+
+    def import_managed_data(self, path: Path) -> ManagedDataResult:
+        self._require_data_management_idle()
+        return ManagedDataService.from_runtime_paths(self.paths).import_from(path)
+
+    def reset_managed_data(self, scope: str) -> ManagedDataResult:
+        self._require_data_management_idle()
+        return ManagedDataService.from_runtime_paths(self.paths).reset(scope)
+
+    def _require_data_management_idle(self) -> None:
+        with self._lock:
+            self._collect_manual_terminal_locked()
+            if self._manual_starting or self._current is not None or self.watch_active:
+                raise ApplicationOperationError(
+                    "録画または自動監視の実行中は管理データを変更できません"
+                )
 
     def get_history_dashboard(
         self, *, limit: int = 200, query: HistoryQuery | None = None

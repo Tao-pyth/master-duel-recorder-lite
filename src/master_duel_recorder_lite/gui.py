@@ -11,7 +11,7 @@ from pathlib import Path
 import queue
 import sys
 import tkinter as tk
-from tkinter import colorchooser, filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 from typing import Callable, TypeVar
 import webbrowser
 
@@ -60,11 +60,17 @@ ICON_GLYPHS = {
     "delete": "\ue74d",
     "diagnostic": "\ue946",
     "edit": "\ue70f",
-    "folder": "\ue8b7",
+    "folder": "\ue838",
+    "filter": "\ue71c",
+    "clear_filter": "\ue711",
+    "report": "\ue9f9",
+    "export": "\ue898",
+    "import": "\ue896",
+    "reset": "\ue72c",
     "play": "\ue768",
     "refresh": "\ue72c",
     "save": "\ue74e",
-    "test": "\ue721",
+    "test": "\ue9f9",
     "timeline": "\ue81c",
     "available": "\ue73e",
     "warning": "\ue7ba",
@@ -375,6 +381,9 @@ class RecorderGui:
         self.catalog_delete_buttons: dict[str, ttk.Button] = {}
         self.history_views_by_id: dict[str, object] = {}
         self.history_action_buttons: dict[str, ttk.Button] = {}
+        self.history_color_lines: list[tk.Widget] = []
+        self.seasons_by_id: dict[str, object] = {}
+        self.season_color_images: dict[str, tk.PhotoImage] = {}
         self.statistics_decks_by_label: dict[str, str | None] = {"すべて": None}
         self.statistics_tags_by_label: dict[str, int | None] = {"すべて": None}
         self.statistics_seasons_by_label: dict[str, int | None] = {
@@ -464,7 +473,48 @@ class RecorderGui:
             ],
             foreground=[("disabled", "#8b9392")],
         )
-        style.configure("Icon.TButton", font=("Segoe MDL2 Assets", 16), padding=(10, 9))
+        style.configure("Icon.TButton", font=("Segoe MDL2 Assets", 13), padding=(10, 7))
+        style.configure(
+            "TEntry",
+            padding=(8, 7),
+            fieldbackground=self.COLORS["surface"],
+            foreground=self.COLORS["text"],
+            bordercolor=self.COLORS["border"],
+            insertcolor=self.COLORS["text"],
+        )
+        style.configure(
+            "TCombobox",
+            padding=(8, 7),
+            fieldbackground=self.COLORS["surface"],
+            background=self.COLORS["surface"],
+            foreground=self.COLORS["text"],
+            bordercolor=self.COLORS["border"],
+            arrowcolor=self.COLORS["muted"],
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[
+                ("readonly", self.COLORS["surface"]),
+                ("disabled", self.COLORS["surface_container"]),
+            ],
+            selectbackground=[("readonly", self.COLORS["surface"])],
+            selectforeground=[("readonly", self.COLORS["text"])],
+            background=[("readonly", self.COLORS["surface"])],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=self.COLORS["surface"],
+            foreground=self.COLORS["text"],
+            padding=(0, 3),
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", self.COLORS["surface"])],
+        )
+        self.root.option_add("*TCombobox*Listbox.background", self.COLORS["surface"])
+        self.root.option_add("*TCombobox*Listbox.foreground", self.COLORS["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", self.COLORS["sidebar_active"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", self.COLORS["text"])
         style.configure(
             "Primary.TButton",
             foreground=self.COLORS["on_primary"],
@@ -835,13 +885,19 @@ class RecorderGui:
         toolbar = self._surface(page, padding=(14, 10))
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Label(toolbar, text="録画履歴", style="Heading.TLabel").pack(side="left")
-        self.history_filter_button = ttk.Button(
-            toolbar, text="フィルター", command=self.open_history_filter
+        self.history_filter_button = self._icon_button(
+            toolbar, "filter", "録画履歴を絞り込む", self.open_history_filter
         )
         self.history_filter_button.pack(side="left", padx=(16, 6))
-        ttk.Button(toolbar, text="クリア", command=self.clear_history_filter).pack(
-            side="left"
-        )
+        self.history_filter_count_var = tk.StringVar(value="")
+        ttk.Label(
+            toolbar,
+            textvariable=self.history_filter_count_var,
+            style="Muted.TLabel",
+        ).pack(side="left", padx=(0, 6))
+        self._icon_button(
+            toolbar, "clear_filter", "録画履歴の絞り込みを解除", self.clear_history_filter
+        ).pack(side="left")
         action_bar = ttk.Frame(toolbar, style="Surface.TFrame")
         action_bar.pack(side="right")
         commands = {
@@ -895,22 +951,22 @@ class RecorderGui:
         panel.pack(fill="both", expand=True)
         columns = (
             "started",
+            "deck",
             "result",
             "order",
             "duel_type",
             "duration",
             "size",
-            "audio",
         )
         self.history_tree = ttk.Treeview(panel, columns=columns, show="headings")
         for key, label, width in (
             ("started", "開始日時", 155),
+            ("deck", "デッキ名", 170),
             ("result", "勝敗", 90),
             ("order", "先後", 75),
             ("duel_type", "対戦種別", 105),
             ("duration", "時間", 85),
             ("size", "サイズ", 100),
-            ("audio", "音声", 85),
         ):
             self.history_tree.heading(key, text=label)
             self.history_tree.column(key, width=width, stretch=key == "started")
@@ -928,6 +984,12 @@ class RecorderGui:
         )
         self.history_tree.bind(
             "<Delete>", lambda _event: self.delete_selected_history()
+        )
+        self.history_tree.bind(
+            "<Configure>", lambda _event: self.root.after_idle(self._draw_history_color_lines)
+        )
+        self.history_tree.bind(
+            "<MouseWheel>", lambda _event: self.root.after_idle(self._draw_history_color_lines), add="+"
         )
         self.widgets["history_table"] = self.history_tree
         self.widgets["history_play"] = self.history_action_buttons["play"]
@@ -1057,7 +1119,7 @@ class RecorderGui:
             state="readonly",
             values=("すべて", "先攻", "後攻"),
             width=8,
-        ).grid(row=1, column=5, padx=(0, 8))
+        ).grid(row=1, column=5, sticky="ew", padx=(0, 8))
         ttk.Label(filters, text="推移単位", style="Muted.TLabel").grid(
             row=0, column=6, sticky="w", padx=(0, 8)
         )
@@ -1067,15 +1129,15 @@ class RecorderGui:
             state="readonly",
             values=("日", "週", "月"),
             width=7,
-        ).grid(row=1, column=6, padx=(0, 10))
+        ).grid(row=1, column=6, sticky="ew", padx=(0, 10))
         ttk.Button(
             filters,
             text="条件を適用",
             style="Primary.TButton",
             command=self.refresh_statistics,
-        ).grid(row=1, column=7, padx=(0, 6))
+        ).grid(row=1, column=7, sticky="ew", padx=(0, 6))
         ttk.Button(filters, text="クリア", command=self.clear_statistics_filters).grid(
-            row=1, column=8
+            row=1, column=8, sticky="ew"
         )
         ttk.Label(filters, text="日付は YYYY-MM-DD", style="Muted.TLabel").grid(
             row=2, column=0, columnspan=2, sticky="w", pady=(5, 0)
@@ -1086,8 +1148,8 @@ class RecorderGui:
             textvariable=self.statistics_filter_status_var,
             style="Muted.TLabel",
         ).grid(row=2, column=2, columnspan=6, sticky="e", pady=(5, 0))
-        filters.columnconfigure(2, weight=1)
-        filters.columnconfigure(3, weight=1)
+        for column in range(9):
+            filters.columnconfigure(column, weight=1, uniform="statistics-filter")
 
         notebook = ttk.Notebook(page)
         notebook.pack(fill="both", expand=True)
@@ -1160,23 +1222,31 @@ class RecorderGui:
         self.catalog_name_vars[kind] = name_var
         self.catalog_description_vars[kind] = description_var
         self.catalog_color_vars[kind] = color_var
-        ttk.Label(editor, text="名前").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(editor, text="名前", style="Body.TLabel").grid(
+            row=0, column=0, sticky="w", padx=(0, 8)
+        )
         ttk.Entry(editor, textvariable=name_var).grid(
             row=0, column=1, sticky="ew", padx=(0, 12)
         )
-        ttk.Label(editor, text="説明").grid(
+        ttk.Label(editor, text="説明", style="Body.TLabel").grid(
             row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0)
         )
         ttk.Entry(editor, textvariable=description_var).grid(
             row=1, column=1, sticky="ew", padx=(0, 12), pady=(8, 0)
         )
-        ttk.Label(editor, text="カラー").grid(
+        ttk.Label(editor, text="カラー", style="Body.TLabel").grid(
             row=0, column=2, sticky="w", padx=(0, 8)
         )
         color_button = tk.Button(
             editor,
             textvariable=color_var,
             width=10,
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=1,
+            padx=8,
+            pady=5,
+            font=("Segoe UI Semibold", 9),
             command=lambda selected=kind: self.choose_catalog_color(selected),
         )
         color_button.grid(row=0, column=3, padx=(0, 12))
@@ -1254,57 +1324,114 @@ class RecorderGui:
         ttk.Label(toolbar, text="シーズン管理", style="Heading.TLabel").pack(
             side="left"
         )
-        ttk.Button(
-            toolbar,
-            text="追加",
-            style="Primary.TButton",
-            command=self.add_season_dialog,
+        self._icon_button(
+            toolbar, "refresh", "シーズン一覧を更新", self.refresh_seasons
         ).pack(side="right")
+
+        editor = self._surface(page, padding=(14, 12))
+        editor.pack(fill="x", pady=(0, 10))
+        self.season_name_var = tk.StringVar()
+        self.season_type_var = tk.StringVar(value="ランク")
+        self.season_start_var = tk.StringVar(value=str(date.today()))
+        self.season_end_var = tk.StringVar(value=str(date.today()))
+        self.season_description_var = tk.StringVar()
+        for column, label in enumerate(("名前", "種別", "開始日", "終了日")):
+            ttk.Label(editor, text=label, style="Muted.TLabel").grid(
+                row=0, column=column, sticky="w", padx=(0, 8)
+            )
+        ttk.Entry(editor, textvariable=self.season_name_var).grid(
+            row=1, column=0, sticky="ew", padx=(0, 8)
+        )
+        ttk.Combobox(
+            editor,
+            textvariable=self.season_type_var,
+            values=("ランク", "イベント", "カスタム"),
+            state="readonly",
+            width=12,
+        ).grid(row=1, column=1, sticky="ew", padx=(0, 8))
+        for column, variable, label in (
+            (2, self.season_start_var, "開始日"),
+            (3, self.season_end_var, "終了日"),
+        ):
+            holder = ttk.Frame(editor, style="Surface.TFrame")
+            holder.grid(row=1, column=column, sticky="ew", padx=(0, 8))
+            ttk.Entry(holder, textvariable=variable, width=12).pack(
+                side="left", fill="x", expand=True
+            )
+            self._icon_button(
+                holder,
+                "calendar",
+                f"{label}をカレンダーから選択",
+                lambda selected=variable: self.open_calendar_picker(selected),
+            ).pack(side="left")
+        button_row = ttk.Frame(editor, style="Surface.TFrame")
+        button_row.grid(row=1, column=4, sticky="e")
+        self._icon_button(
+            button_row,
+            "add",
+            "シーズンを追加",
+            self.add_season,
+            style="Primary.TButton",
+        ).pack(side="left", padx=(0, 6))
+        self.season_update_button = self._icon_button(
+            button_row,
+            "save",
+            "選択したシーズンを保存",
+            self.update_selected_season,
+            state="disabled",
+        )
+        self.season_update_button.pack(side="left", padx=(0, 6))
+        self.season_delete_button = self._icon_button(
+            button_row,
+            "delete",
+            "選択したシーズンを削除またはアーカイブ",
+            self.delete_selected_season,
+            state="disabled",
+        )
+        self.season_delete_button.pack(side="left", padx=(0, 6))
+        self.season_report_button = self._icon_button(
+            button_row,
+            "report",
+            "選択したシーズンのレポートを開く",
+            self.open_selected_season_report,
+            state="disabled",
+        )
+        self.season_report_button.pack(side="left")
+        ttk.Label(editor, text="説明", style="Muted.TLabel").grid(
+            row=2, column=0, sticky="w", pady=(8, 0)
+        )
+        ttk.Entry(editor, textvariable=self.season_description_var).grid(
+            row=3, column=0, columnspan=4, sticky="ew", padx=(0, 8)
+        )
+        editor.columnconfigure(0, weight=2)
+        editor.columnconfigure(2, weight=1)
+        editor.columnconfigure(3, weight=1)
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
         self.season_tree = ttk.Treeview(
-            panel, columns=("name", "type", "period", "duel", "status"), show="headings"
+            panel,
+            columns=("name", "type", "period", "status"),
+            show="tree headings",
+            selectmode="browse",
         )
         for key, label, width in (
             ("name", "シーズン", 240),
             ("type", "種別", 100),
             ("period", "期間", 220),
-            ("duel", "対戦種別", 120),
             ("status", "状態", 90),
         ):
             self.season_tree.heading(key, text=label)
             self.season_tree.column(key, width=width, stretch=key == "name")
+        self.season_tree.heading("#0", text="")
+        self.season_tree.column("#0", width=16, minwidth=16, stretch=False)
         self.season_tree.pack(fill="both", expand=True)
         self.season_tree.bind(
-            "<Double-Button-1>", lambda _event: self.edit_selected_season()
+            "<Double-Button-1>", lambda _event: self.open_selected_season_report()
         )
         self.season_tree.bind(
             "<<TreeviewSelect>>", lambda _event: self._season_selection_changed()
         )
         self.widgets["season_table"] = self.season_tree
-        actions = self._surface(page, padding=(14, 10))
-        actions.pack(fill="x", pady=(10, 0))
-        ttk.Button(actions, text="編集", command=self.edit_selected_season).pack(
-            side="left"
-        )
-        ttk.Button(
-            actions, text="削除 / アーカイブ", command=self.delete_selected_season
-        ).pack(side="left", padx=8)
-        report = self._surface(page, padding=(14, 12))
-        report.pack(fill="x", pady=(10, 0))
-        ttk.Label(report, text="ライブ集計レポート", style="Heading.TLabel").pack(
-            anchor="w"
-        )
-        self.season_report_var = tk.StringVar(
-            value="シーズンを選択すると、最新の確定済み対戦を集計します。"
-        )
-        ttk.Label(
-            report,
-            textvariable=self.season_report_var,
-            style="Body.TLabel",
-            justify="left",
-        ).pack(anchor="w", pady=(8, 0))
-        self.widgets["season_report"] = report
 
     def _build_prepare_page(self) -> None:
         page = self._new_page("prepare")
@@ -1358,8 +1485,10 @@ class RecorderGui:
 
     def _build_settings_page(self) -> None:
         page = self._new_page("settings")
-        panel = self._surface(page, padding=(20, 18))
-        panel.pack(fill="both", expand=True)
+        notebook = ttk.Notebook(page)
+        notebook.pack(fill="both", expand=True)
+        panel = self._surface(notebook, padding=(20, 18))
+        notebook.add(panel, text="録画設定")
         ttk.Label(panel, text="録画設定", style="Heading.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w"
         )
@@ -1496,10 +1625,41 @@ class RecorderGui:
         self._icon_button(
             footer, "save", "設定を保存", self.save_settings, style="Primary.TButton"
         ).pack(side="right", padx=(0, 8))
+        data_panel = self._surface(notebook, padding=(20, 18))
+        notebook.add(data_panel, text="管理データ")
+        data_header = ttk.Frame(data_panel, style="Surface.TFrame")
+        data_header.pack(fill="x", pady=(0, 18))
+        ttk.Label(data_header, text="履歴・デッキ・タグ・シーズン", style="Heading.TLabel").pack(side="left")
+        self._icon_button(
+            data_header, "import", "履歴・デッキ・タグ・シーズンを読み込む", self.import_managed_data
+        ).pack(side="right")
+        self._icon_button(
+            data_header, "export", "履歴・デッキ・タグ・シーズンを書き出す", self.export_managed_data
+        ).pack(side="right", padx=(0, 8))
+        ttk.Separator(data_panel, orient="horizontal").pack(fill="x", pady=(0, 18))
+        ttk.Label(data_panel, text="初期化", style="Heading.TLabel").pack(
+            anchor="w", pady=(0, 10)
+        )
+        reset_grid = ttk.Frame(data_panel, style="Surface.TFrame")
+        reset_grid.pack(fill="x")
+        for column, (scope, label) in enumerate((
+            ("history", "履歴情報"),
+            ("decks", "デッキ"),
+            ("tags", "タグ"),
+            ("seasons", "シーズン"),
+        )):
+            ttk.Button(
+                reset_grid,
+                text=f"{label}を初期化",
+                command=lambda selected=scope, name=label: self.reset_managed_data(
+                    selected, name
+                ),
+            ).grid(row=0, column=column, sticky="ew", padx=(0, 8 if column < 3 else 0))
+            reset_grid.columnconfigure(column, weight=1, uniform="reset-control")
         panel.columnconfigure(0, weight=1)
         panel.columnconfigure(1, weight=1)
         panel.columnconfigure(2, weight=1)
-        self.widgets["settings_form"] = panel
+        self.widgets["settings_form"] = notebook
         self.widgets["ffmpeg_setup"] = self.ffmpeg_setup_button
 
     def show_page(self, key: str) -> None:
@@ -1824,6 +1984,12 @@ class RecorderGui:
                 foreground=_contrast_text_color(color),
                 activeforeground=_contrast_text_color(color),
             )
+
+    def _vertical_color_line(self, color: str) -> tk.PhotoImage:
+        image = tk.PhotoImage(master=self.root, width=10, height=22)
+        image.put(self.COLORS["surface"], to=(0, 0, 10, 22))
+        image.put(color, to=(3, 2, 6, 20))
+        return image
 
     def _tag_color_swatch(self, color: str) -> tk.PhotoImage:
         image = tk.PhotoImage(master=self.root, width=22, height=18)
@@ -2258,7 +2424,7 @@ class RecorderGui:
 
     def clear_history_filter(self) -> None:
         self.history_query = HistoryQuery(limit=200)
-        self.history_filter_button.configure(text="フィルター")
+        self.history_filter_count_var.set("")
         self.refresh_history()
 
     def open_history_filter(self) -> None:
@@ -2320,9 +2486,7 @@ class RecorderGui:
                     self.history_query.opponent_deck_id,
                 )
             ) + len(selected_tag_ids)
-            self.history_filter_button.configure(
-                text=f"フィルター ({count})" if count else "フィルター"
-            )
+            self.history_filter_count_var.set(str(count) if count else "")
             dialog.destroy()
             self.refresh_history()
 
@@ -2360,24 +2524,19 @@ class RecorderGui:
                 result = duel_choice_label("result", view.result)
                 play_order = duel_choice_label("play_order", view.play_order)
                 duel_type = duel_choice_label("duel_type", view.duel_type)
+            own_deck = view.own_deck or "未設定"
             self.history_tree.insert(
                 "",
                 "end",
                 iid=entry.recording_id,
                 values=(
                     started.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                    own_deck,
                     result,
                     play_order,
                     duel_type,
                     duration,
                     size,
-                    {
-                        "disabled": "なし",
-                        "configured": "設定済み",
-                        "recorded": "あり",
-                        "warning": "警告",
-                        "failed": "失敗",
-                    }.get(entry.audio_state, entry.audio_state),
                 ),
             )
         if previous_id is not None and self.history_tree.exists(previous_id):
@@ -2385,6 +2544,25 @@ class RecorderGui:
             self.history_tree.focus(previous_id)
             self.history_tree.see(previous_id)
         self._history_selection_changed()
+        self.root.after_idle(self._draw_history_color_lines)
+
+    def _draw_history_color_lines(self) -> None:
+        for widget in self.history_color_lines:
+            widget.destroy()
+        self.history_color_lines.clear()
+        if not self.history_tree.winfo_exists():
+            return
+        for recording_id, view in self.history_views_by_id.items():
+            color = getattr(view, "own_deck_color", None)
+            if not color:
+                continue
+            bounds = self.history_tree.bbox(recording_id, "started")
+            if not bounds:
+                continue
+            x, y, width, height = bounds
+            line = tk.Frame(self.history_tree, background=color, borderwidth=0)
+            line.place(x=x + width - 3, y=y + 5, width=3, height=max(1, height - 10))
+            self.history_color_lines.append(line)
 
     def _history_selection_changed(self, _event: object | None = None) -> None:
         state = "normal" if self.history_tree.selection() else "disabled"
@@ -2888,54 +3066,58 @@ class RecorderGui:
 
     def _seasons_loaded(self, seasons: tuple[object, ...]) -> None:
         self._clear_tree(self.season_tree)
+        self.seasons_by_id = {str(item.season_id): item for item in seasons}
+        self.season_color_images.clear()
         for season in seasons:
+            color = {"ranked": "#006A6A", "event": "#9A6700", "custom": "#6750A4"}[
+                season.season_type
+            ]
+            image = self._vertical_color_line(color)
+            self.season_color_images[str(season.season_id)] = image
             self.season_tree.insert(
                 "",
                 "end",
                 iid=str(season.season_id),
+                image=image,
                 values=(
                     season.name,
                     {"ranked": "ランク", "event": "イベント", "custom": "カスタム"}[
                         season.season_type
                     ],
                     f"{season.start_date} - {season.end_date}",
-                    duel_choice_label("duel_type", season.duel_type),
                     "アーカイブ" if season.is_archived else "利用中",
                 ),
             )
 
     def _season_selection_changed(self) -> None:
         selected = self.season_tree.selection()
-        if not selected or self.smoke_mode:
-            self.season_report_var.set(
-                "シーズンを選択すると、最新の確定済み対戦を集計します。"
-            )
+        state = "normal" if selected else "disabled"
+        self.season_update_button.configure(state=state)
+        self.season_delete_button.configure(state=state)
+        self.season_report_button.configure(state=state)
+        if not selected:
             return
-        season_id = int(selected[0])
-        self.season_report_var.set("集計中です...")
-        self._run(
-            lambda: (
-                self.service.get_statistics_dashboard(
-                    StatisticsFilter(season_id=season_id), granularity="day"
-                ),
-                self.service.get_statistics_dashboard(
-                    StatisticsFilter(season_id=season_id), granularity="week"
-                ),
-                self.service.get_statistics_dashboard(
-                    StatisticsFilter(season_id=season_id), granularity="month"
-                ),
-            ),
-            self._season_report_loaded,
+        season = self.seasons_by_id.get(str(selected[0]))
+        if season is None:
+            return
+        self.season_name_var.set(season.name)
+        self.season_type_var.set(
+            {"ranked": "ランク", "event": "イベント", "custom": "カスタム"}[
+                season.season_type
+            ]
         )
+        self.season_start_var.set(str(season.start_date))
+        self.season_end_var.set(str(season.end_date))
+        self.season_description_var.set(season.description)
 
-    def _season_report_loaded(
+    def _season_report_text(
         self,
         dashboards: tuple[
             StatisticsDashboard,
             StatisticsDashboard,
             StatisticsDashboard,
         ],
-    ) -> None:
+    ) -> str:
         day, week, month = dashboards
         metric = day.filtered
         orders = {item.key: item.metric for item in day.by_play_order}
@@ -2945,7 +3127,7 @@ class RecorderGui:
             f"{item.label} {item.metric.matches}戦 {_format_win_rate(item.metric)}"
             for item in day.by_deck[:5]
         ) or "対戦なし"
-        self.season_report_var.set(
+        return (
             f"{_format_win_rate(metric)}  {_format_statistics_detail(metric)}\n"
             f"先攻時 {_format_win_rate(first)} / 後攻時 {_format_win_rate(second)}\n"
             f"デッキ別: {decks}\n"
@@ -2953,94 +3135,137 @@ class RecorderGui:
             f"月別{len(month.trend)}区間"
         )
 
-    def add_season_dialog(self) -> None:
-        self._show_season_editor(None)
+    def add_season(self) -> None:
+        self._save_season(None)
 
-    def edit_selected_season(self) -> None:
+    def update_selected_season(self) -> None:
         selected = self.season_tree.selection()
         if selected:
-            season_id = int(selected[0])
-            self._run(
-                lambda: next(
-                    item
-                    for item in self.service.list_seasons(include_archived=True)
-                    if item.season_id == season_id
-                ),
-                self._show_season_editor,
-            )
+            self._save_season(int(selected[0]))
 
-    def _show_season_editor(self, season: object | None) -> None:
-        dialog = tk.Toplevel(self.root)
-        dialog.title("シーズン編集")
-        dialog.geometry("620x560")
-        dialog.transient(self.root)
-        frame = ttk.Frame(dialog, padding=18)
-        frame.pack(fill="both", expand=True)
-        fields = {
-            "name": tk.StringVar(value=getattr(season, "name", "")),
-            "season_type": tk.StringVar(value=getattr(season, "season_type", "ranked")),
-            "duel_type": tk.StringVar(value=getattr(season, "duel_type", "ranked")),
-            "start": tk.StringVar(
-                value=str(getattr(season, "start_date", date.today()))
-            ),
-            "end": tk.StringVar(value=str(getattr(season, "end_date", date.today()))),
-        }
-        for row, (label, key) in enumerate(
-            (
-                ("名前", "name"),
-                ("種別", "season_type"),
-                ("対戦種別", "duel_type"),
-                ("開始日", "start"),
-                ("終了日", "end"),
-            )
-        ):
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=5)
-            if key in {"season_type", "duel_type"}:
-                choices = (
-                    ("ranked", "event", "custom")
-                    if key == "season_type"
-                    else ("ranked", "event", "room", "solo", "other")
-                )
-                ttk.Combobox(
-                    frame, textvariable=fields[key], values=choices, state="readonly"
-                ).grid(row=row, column=1, sticky="ew", pady=5)
-            else:
-                ttk.Entry(frame, textvariable=fields[key]).grid(
-                    row=row, column=1, sticky="ew", pady=5
-                )
-        ttk.Label(frame, text="説明").grid(row=5, column=0, sticky="nw", pady=5)
-        description = tk.Text(frame, height=5)
-        description.insert("1.0", getattr(season, "description", ""))
-        description.grid(row=5, column=1, sticky="nsew")
-        ttk.Label(frame, text="レポートメモ").grid(row=6, column=0, sticky="nw", pady=5)
-        notes = tk.Text(frame, height=8)
-        notes.insert("1.0", getattr(season, "report_notes", ""))
-        notes.grid(row=6, column=1, sticky="nsew")
-
-        def save() -> None:
+    def _save_season(self, season_id: int | None) -> None:
+        try:
+            type_value = {
+                "ランク": "ranked",
+                "イベント": "event",
+                "カスタム": "custom",
+            }[self.season_type_var.get()]
             values = dict(
-                name=fields["name"].get(),
-                season_type=fields["season_type"].get(),
-                duel_type=fields["duel_type"].get(),
-                start_date=date.fromisoformat(fields["start"].get()),
-                end_date=date.fromisoformat(fields["end"].get()),
-                description=description.get("1.0", "end-1c"),
-                report_notes=notes.get("1.0", "end-1c"),
+                name=self.season_name_var.get(),
+                season_type=type_value,
+                duel_type={"ranked": "ranked", "event": "event", "custom": "other"}[
+                    type_value
+                ],
+                start_date=date.fromisoformat(self.season_start_var.get()),
+                end_date=date.fromisoformat(self.season_end_var.get()),
+                description=self.season_description_var.get(),
+                report_notes=(
+                    self.seasons_by_id[str(season_id)].report_notes
+                    if season_id is not None
+                    else ""
+                ),
             )
-            operation = (
-                (lambda: self.service.add_season(**values))
-                if season is None
-                else (lambda: self.service.update_season(season.season_id, **values))
-            )
+        except (KeyError, ValueError) as exc:
+            self._show_error(ValueError(f"シーズンの種別または日付を確認してください: {exc}"))
+            return
+        operation = (
+            (lambda: self.service.add_season(**values))
+            if season_id is None
+            else (lambda: self.service.update_season(season_id, **values))
+        )
+        self._run(
+            operation,
+            lambda _saved: (
+                self._activity("シーズンを保存しました"),
+                self.refresh_seasons(),
+            ),
+        )
+
+    def open_selected_season_report(self) -> None:
+        selected = self.season_tree.selection()
+        if not selected or self.smoke_mode:
+            return
+        season = self.seasons_by_id.get(str(selected[0]))
+        if season is None:
+            return
+        season_id = season.season_id
+        self._run(
+            lambda: (
+                season,
+                (
+                    self.service.get_statistics_dashboard(
+                        StatisticsFilter(season_id=season_id), granularity="day"
+                    ),
+                    self.service.get_statistics_dashboard(
+                        StatisticsFilter(season_id=season_id), granularity="week"
+                    ),
+                    self.service.get_statistics_dashboard(
+                        StatisticsFilter(season_id=season_id), granularity="month"
+                    ),
+                ),
+            ),
+            self._show_season_report_dialog,
+        )
+
+    def _show_season_report_dialog(self, payload: tuple[object, object]) -> None:
+        season, dashboards = payload
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"シーズンレポート - {season.name}")
+        dialog.geometry("720x610")
+        dialog.transient(self.root)
+        dialog.configure(background=self.COLORS["canvas"])
+        frame = ttk.Frame(dialog, style="App.TFrame", padding=22)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=season.name, style="Title.TLabel").pack(anchor="w")
+        ttk.Label(
+            frame,
+            text=f"{season.start_date} - {season.end_date} / "
+            f"{ {'ranked': 'ランク', 'event': 'イベント', 'custom': 'カスタム'}[season.season_type] }",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(2, 12))
+        metrics = self._surface(frame, padding=(16, 14))
+        metrics.pack(fill="x", pady=(0, 12))
+        ttk.Label(metrics, text="ライブ集計レポート", style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(
+            metrics,
+            text=self._season_report_text(dashboards),
+            style="Body.TLabel",
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+        ttk.Label(frame, text="レポートメモ", style="Heading.TLabel").pack(anchor="w")
+        notes = tk.Text(
+            frame,
+            height=12,
+            wrap="word",
+            borderwidth=1,
+            relief="solid",
+            background=self.COLORS["surface"],
+            foreground=self.COLORS["text"],
+            font=("Segoe UI", 10),
+            padx=10,
+            pady=10,
+        )
+        notes.insert("1.0", season.report_notes)
+        notes.pack(fill="both", expand=True, pady=(6, 12))
+
+        def save_notes() -> None:
             self._run(
-                operation, lambda _saved: (dialog.destroy(), self.refresh_seasons())
+                lambda: self.service.update_season(
+                    season.season_id,
+                    name=season.name,
+                    season_type=season.season_type,
+                    duel_type=season.duel_type,
+                    start_date=season.start_date,
+                    end_date=season.end_date,
+                    description=season.description,
+                    report_notes=notes.get("1.0", "end-1c"),
+                ),
+                lambda _saved: (dialog.destroy(), self.refresh_seasons()),
             )
 
-        ttk.Button(frame, text="保存", style="Primary.TButton", command=save).grid(
-            row=7, column=1, sticky="e", pady=(14, 0)
-        )
-        frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(6, weight=1)
+        self._icon_button(
+            frame, "save", "レポートメモを保存", save_notes, style="Primary.TButton"
+        ).pack(anchor="e")
         dialog.grab_set()
 
     def delete_selected_season(self) -> None:
@@ -3052,6 +3277,80 @@ class RecorderGui:
                 lambda: self.service.delete_season(int(selected[0])),
                 lambda _item: self.refresh_seasons(),
             )
+
+    def export_managed_data(self) -> None:
+        destination = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="管理データを書き出す",
+            defaultextension=".json",
+            filetypes=(("JSON", "*.json"),),
+            initialdir=str(self.service.paths.exports),
+            initialfile=f"mdrl-managed-data-{date.today()}.json",
+        )
+        if destination:
+            self._run(
+                lambda: self.service.export_managed_data(Path(destination)),
+                lambda result: self._activity(
+                    f"管理データを書き出しました: {result.path} ({result.row_count}行)"
+                ),
+            )
+
+    def import_managed_data(self) -> None:
+        source = filedialog.askopenfilename(
+            parent=self.root,
+            title="管理データを読み込む",
+            filetypes=(("JSON", "*.json"),),
+            initialdir=str(self.service.paths.exports),
+        )
+        if not source:
+            return
+        if not messagebox.askyesno(
+            "管理データの読み込み",
+            "現在の履歴・デッキ・タグ・シーズンを置き換えます。\n"
+            "操作前にSQLiteバックアップを自動作成します。続行しますか？",
+            parent=self.root,
+        ):
+            return
+        self._run(
+            lambda: self.service.import_managed_data(Path(source)),
+            lambda result: (
+                self._activity(
+                    f"管理データを読み込みました: {result.row_count}行 / "
+                    f"バックアップ: {result.backup_path}"
+                ),
+                self.refresh_all(),
+            ),
+        )
+
+    def reset_managed_data(self, scope: str, label: str) -> None:
+        detail = (
+            "録画ファイル自体は削除しません。履歴DBの情報だけを初期化します。"
+            if scope == "history"
+            else "参照中の対戦記録から該当する関連付けも解除します。"
+        )
+        if not messagebox.askyesno(
+            f"{label}の初期化",
+            f"{label}を初期化します。{detail}\n操作前にバックアップを作成します。",
+            parent=self.root,
+        ):
+            return
+        phrase = f"{label}を初期化"
+        entered = simpledialog.askstring(
+            "最終確認",
+            f"取り消せない操作です。続行するには「{phrase}」と入力してください。",
+            parent=self.root,
+        )
+        if entered != phrase:
+            if entered is not None:
+                messagebox.showinfo("初期化を中止", "確認文字列が一致しません。", parent=self.root)
+            return
+        self._run(
+            lambda: self.service.reset_managed_data(scope),
+            lambda result: (
+                self._activity(f"{label}を初期化しました / バックアップ: {result.backup_path}"),
+                self.refresh_all(),
+            ),
+        )
 
     def refresh_preparations(self) -> None:
         if self.smoke_mode:
