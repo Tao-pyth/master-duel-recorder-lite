@@ -4,11 +4,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 8
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -24,6 +25,12 @@ class HistoryDatabaseInfo:
 
 
 Migration = Callable[[sqlite3.Connection], None]
+
+
+@dataclass(frozen=True)
+class _RetiredArtifact:
+    original: Path
+    staged: Path
 
 
 def _migrate_to_v1(connection: sqlite3.Connection) -> None:
@@ -293,6 +300,100 @@ def _migrate_to_v6(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v7(connection: sqlite3.Connection) -> None:
+    """Remove the discontinued recovery subsystem while preserving failure diagnostics."""
+    connection.execute("DROP INDEX IF EXISTS recovery_artifacts_recording_id_idx")
+    connection.execute("DROP INDEX IF EXISTS recordings_recovery_state_idx")
+    connection.execute("DROP TABLE recovery_artifacts")
+    for column in (
+        "recovery_policy",
+        "recovery_state",
+        "recovery_attempts",
+        "recovery_message",
+        "recovery_diagnostic",
+    ):
+        connection.execute(f"ALTER TABLE recordings DROP COLUMN {column}")
+
+
+def _migrate_to_v8(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "ALTER TABLE duel_catalog_entries ADD COLUMN opponent_only INTEGER NOT NULL DEFAULT 0 "
+        "CHECK (opponent_only IN (0, 1))"
+    )
+    connection.execute(
+        "ALTER TABLE duel_catalog_entries ADD COLUMN hidden_from_history_statistics "
+        "INTEGER NOT NULL DEFAULT 0 CHECK (hidden_from_history_statistics IN (0, 1))"
+    )
+    connection.execute(
+        "UPDATE duel_catalog_entries SET color = '#4F6F8F' "
+        "WHERE kind = 'deck' AND color IS NULL"
+    )
+    connection.execute(
+        """
+        CREATE TABLE seasons (
+            season_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+            normalized_name TEXT NOT NULL UNIQUE,
+            season_type TEXT NOT NULL CHECK (season_type IN ('ranked', 'event', 'custom')),
+            duel_type TEXT NOT NULL CHECK (
+                duel_type IN ('ranked', 'event', 'room', 'solo', 'other')
+            ),
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            report_notes TEXT NOT NULL DEFAULT '',
+            is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (start_date <= end_date)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX seasons_dates_idx ON seasons(start_date, end_date, season_id)"
+    )
+    connection.execute(
+        "ALTER TABLE duel_records ADD COLUMN season_id INTEGER REFERENCES seasons(season_id)"
+    )
+    connection.execute(
+        "ALTER TABLE duel_records ADD COLUMN own_deck_id INTEGER "
+        "REFERENCES duel_catalog_entries(entry_id)"
+    )
+    connection.execute(
+        "ALTER TABLE duel_records ADD COLUMN opponent_deck_id INTEGER "
+        "REFERENCES duel_catalog_entries(entry_id)"
+    )
+    connection.execute(
+        """
+        UPDATE duel_records
+        SET own_deck_id = (
+            SELECT entry_id FROM duel_catalog_entries
+            WHERE kind = 'deck' AND normalized_name = lower(trim(duel_records.own_deck))
+        )
+        WHERE length(trim(own_deck)) > 0
+        """
+    )
+    connection.execute(
+        """
+        UPDATE duel_records
+        SET opponent_deck_id = (
+            SELECT entry_id FROM duel_catalog_entries
+            WHERE kind = 'deck' AND normalized_name = lower(trim(duel_records.opponent_deck))
+        )
+        WHERE length(trim(opponent_deck)) > 0
+        """
+    )
+    connection.execute(
+        "CREATE INDEX duel_records_season_idx ON duel_records(season_id)"
+    )
+    connection.execute(
+        "CREATE INDEX duel_records_own_deck_idx ON duel_records(own_deck_id)"
+    )
+    connection.execute(
+        "CREATE INDEX duel_records_opponent_deck_idx ON duel_records(opponent_deck_id)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -300,12 +401,15 @@ _MIGRATIONS: dict[int, Migration] = {
     4: _migrate_to_v4,
     5: _migrate_to_v5,
     6: _migrate_to_v6,
+    7: _migrate_to_v7,
+    8: _migrate_to_v8,
 }
 
 
 def initialize_history_database(
     path: Path,
     *,
+    recordings_root: Path | None = None,
     migrations: Mapping[int, Migration] | None = None,
 ) -> HistoryDatabaseInfo:
     database_path = path.expanduser().resolve()
@@ -314,10 +418,13 @@ def initialize_history_database(
     selected_migrations = dict(_MIGRATIONS if migrations is None else migrations)
     expected_versions = set(range(1, CURRENT_SCHEMA_VERSION + 1))
     if set(selected_migrations) != expected_versions:
-        raise HistoryDatabaseError("マイグレーション定義が現在のスキーマ版と一致しません")
+        raise HistoryDatabaseError(
+            "マイグレーション定義が現在のスキーマ版と一致しません"
+        )
 
     connection: sqlite3.Connection | None = None
     backup_path: Path | None = None
+    retired_artifacts: tuple[_RetiredArtifact, ...] = ()
     try:
         connection = sqlite3.connect(database_path, timeout=10.0)
         connection.execute("PRAGMA foreign_keys = ON")
@@ -333,6 +440,12 @@ def initialize_history_database(
 
         if existed:
             backup_path = _backup_database(connection, database_path, current_version)
+
+        if current_version >= 2 and current_version < 7 and recordings_root is not None:
+            retired_artifacts = _stage_recovery_artifacts(
+                connection,
+                recordings_root.expanduser().resolve(),
+            )
 
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
@@ -354,20 +467,98 @@ def initialize_history_database(
                 (version,),
             )
             connection.execute(f"PRAGMA user_version = {version}")
-        connection.commit()
         _validate_current_schema(connection)
+        connection.commit()
+        _discard_staged_artifacts(retired_artifacts)
         return HistoryDatabaseInfo(database_path, CURRENT_SCHEMA_VERSION, backup_path)
     except HistoryDatabaseError:
         if connection is not None and connection.in_transaction:
             connection.rollback()
+        _restore_staged_artifacts(retired_artifacts)
         raise
     except (OSError, sqlite3.Error, KeyError, RuntimeError, ValueError) as exc:
         if connection is not None and connection.in_transaction:
             connection.rollback()
-        raise HistoryDatabaseError(f"録画履歴DBを初期化できません: {database_path}: {exc}") from exc
+        _restore_staged_artifacts(retired_artifacts)
+        raise HistoryDatabaseError(
+            f"録画履歴DBを初期化できません: {database_path}: {exc}"
+        ) from exc
     finally:
         if connection is not None:
             connection.close()
+
+
+def _stage_recovery_artifacts(
+    connection: sqlite3.Connection,
+    recordings_root: Path,
+) -> tuple[_RetiredArtifact, ...]:
+    table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'recovery_artifacts'"
+    ).fetchone()
+    if table is None:
+        return ()
+    recordings_root.mkdir(parents=True, exist_ok=True)
+    root = recordings_root.resolve()
+    normal_paths = {
+        str(row[0])
+        for row in connection.execute("SELECT output_path FROM recordings").fetchall()
+    }
+    stage_root = root / ".recovery-retirement" / uuid.uuid4().hex
+    moved: list[_RetiredArtifact] = []
+    try:
+        for index, row in enumerate(
+            connection.execute("SELECT output_path FROM recovery_artifacts").fetchall()
+        ):
+            stored = str(row[0])
+            if stored in normal_paths:
+                continue
+            relative = Path(stored)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise HistoryDatabaseError(
+                    f"復旧成果物の保存先が録画保存先外です: {stored}"
+                )
+            original = (root / relative).resolve()
+            if original != root and root not in original.parents:
+                raise HistoryDatabaseError(
+                    f"復旧成果物の保存先が録画保存先外です: {stored}"
+                )
+            if not original.exists():
+                continue
+            if not original.is_file():
+                raise HistoryDatabaseError(f"復旧成果物がファイルではありません: {stored}")
+            stage_root.mkdir(parents=True, exist_ok=True)
+            staged = stage_root / f"{index:06d}-{original.name}"
+            shutil.move(str(original), str(staged))
+            moved.append(_RetiredArtifact(original, staged))
+    except Exception:
+        _restore_staged_artifacts(tuple(moved))
+        raise
+    return tuple(moved)
+
+
+def _restore_staged_artifacts(artifacts: tuple[_RetiredArtifact, ...]) -> None:
+    for artifact in reversed(artifacts):
+        if not artifact.staged.exists():
+            continue
+        artifact.original.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(artifact.staged), str(artifact.original))
+    _remove_empty_stage_directories(artifacts)
+
+
+def _discard_staged_artifacts(artifacts: tuple[_RetiredArtifact, ...]) -> None:
+    for artifact in artifacts:
+        artifact.staged.unlink(missing_ok=True)
+    _remove_empty_stage_directories(artifacts)
+
+
+def _remove_empty_stage_directories(artifacts: tuple[_RetiredArtifact, ...]) -> None:
+    for artifact in artifacts:
+        session = artifact.staged.parent
+        retirement = session.parent
+        if session.exists() and not any(session.iterdir()):
+            session.rmdir()
+        if retirement.exists() and not any(retirement.iterdir()):
+            retirement.rmdir()
 
 
 def connect_history_database(path: Path) -> sqlite3.Connection:
@@ -379,7 +570,9 @@ def connect_history_database(path: Path) -> sqlite3.Connection:
         connection.execute("PRAGMA busy_timeout = 10000")
         return connection
     except sqlite3.Error as exc:
-        raise HistoryDatabaseError(f"録画履歴DBへ接続できません: {info.path}: {exc}") from exc
+        raise HistoryDatabaseError(
+            f"録画履歴DBへ接続できません: {info.path}: {exc}"
+        ) from exc
 
 
 def _read_schema_version(connection: sqlite3.Connection) -> int:
@@ -388,13 +581,20 @@ def _read_schema_version(connection: sqlite3.Connection) -> int:
     ).fetchone()
     if table is None:
         return 0
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(schema_version)")}
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(schema_version)")
+    }
     if not {"singleton", "version"}.issubset(columns):
         raise HistoryDatabaseError("schema_versionテーブルの形式が不正です")
     row = connection.execute(
         "SELECT version FROM schema_version WHERE singleton = 1"
     ).fetchone()
-    if row is None or isinstance(row[0], bool) or not isinstance(row[0], int) or row[0] < 0:
+    if (
+        row is None
+        or isinstance(row[0], bool)
+        or not isinstance(row[0], int)
+        or row[0] < 0
+    ):
         raise HistoryDatabaseError("schema_versionの値が不正です")
     return row[0]
 
@@ -410,11 +610,6 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "diagnostics_json",
         "updated_at",
         "failure_code",
-        "recovery_policy",
-        "recovery_state",
-        "recovery_attempts",
-        "recovery_message",
-        "recovery_diagnostic",
         "audio_input",
         "audio_state",
         "audio_warning",
@@ -422,27 +617,39 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(recordings)")}
     if not required_columns.issubset(columns):
         raise HistoryDatabaseError("録画履歴DBに必須のrecordingsスキーマがありません")
-    artifact_columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(recovery_artifacts)")
+    duel_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(duel_records)")
     }
-    if not {"artifact_id", "recording_id", "output_path", "status"}.issubset(
-        artifact_columns
-    ):
-        raise HistoryDatabaseError("録画履歴DBに必須のrecovery_artifactsスキーマがありません")
-    duel_columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_records)")}
-    if not {"recording_id", "status", "result", "revision", "updated_at"}.issubset(
-        duel_columns
-    ):
+    if not {
+        "recording_id",
+        "status",
+        "result",
+        "revision",
+        "updated_at",
+        "season_id",
+        "own_deck_id",
+        "opponent_deck_id",
+    }.issubset(duel_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のduel_recordsスキーマがありません")
-    tag_columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_record_tags)")}
+    tag_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(duel_record_tags)")
+    }
     if not {"recording_id", "tag", "normalized_tag"}.issubset(tag_columns):
-        raise HistoryDatabaseError("録画履歴DBに必須のduel_record_tagsスキーマがありません")
+        raise HistoryDatabaseError(
+            "録画履歴DBに必須のduel_record_tagsスキーマがありません"
+        )
     change_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_record_changes)")
     }
-    if not {"change_id", "recording_id", "revision", "after_json"}.issubset(change_columns):
-        raise HistoryDatabaseError("録画履歴DBに必須のduel_record_changesスキーマがありません")
-    event_columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_events)")}
+    if not {"change_id", "recording_id", "revision", "after_json"}.issubset(
+        change_columns
+    ):
+        raise HistoryDatabaseError(
+            "録画履歴DBに必須のduel_record_changesスキーマがありません"
+        )
+    event_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(duel_events)")
+    }
     if not {"event_id", "recording_id", "elapsed_ms", "event_type", "status"}.issubset(
         event_columns
     ):
@@ -458,20 +665,48 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "description",
         "color",
         "is_archived",
+        "opponent_only",
+        "hidden_from_history_statistics",
     }.issubset(catalog_columns):
-        raise HistoryDatabaseError("録画履歴DBに必須のduel_catalog_entriesスキーマがありません")
+        raise HistoryDatabaseError(
+            "録画履歴DBに必須のduel_catalog_entriesスキーマがありません"
+        )
     tag_link_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_record_tag_links)")
     }
     if not {"recording_id", "tag_entry_id"}.issubset(tag_link_columns):
-        raise HistoryDatabaseError("録画履歴DBに必須のduel_record_tag_linksスキーマがありません")
-    preference_columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(duel_editor_preferences)")
+        raise HistoryDatabaseError(
+            "録画履歴DBに必須のduel_record_tag_linksスキーマがありません"
+        )
+    season_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(seasons)")
     }
-    if not {"singleton", "duel_type", "own_deck", "opponent_deck", "tags_json"}.issubset(
-        preference_columns
-    ):
-        raise HistoryDatabaseError("録画履歴DBに必須のduel_editor_preferencesスキーマがありません")
+    if not {
+        "season_id",
+        "name",
+        "season_type",
+        "duel_type",
+        "start_date",
+        "end_date",
+        "description",
+        "report_notes",
+        "is_archived",
+    }.issubset(season_columns):
+        raise HistoryDatabaseError("録画履歴DBに必須のseasonsスキーマがありません")
+    preference_columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(duel_editor_preferences)")
+    }
+    if not {
+        "singleton",
+        "duel_type",
+        "own_deck",
+        "opponent_deck",
+        "tags_json",
+    }.issubset(preference_columns):
+        raise HistoryDatabaseError(
+            "録画履歴DBに必須のduel_editor_preferencesスキーマがありません"
+        )
     quick_check = connection.execute("PRAGMA quick_check").fetchone()
     if quick_check is None or quick_check[0] != "ok":
         detail = quick_check[0] if quick_check else "結果なし"
@@ -494,7 +729,9 @@ def _backup_database(
         destination.commit()
         return backup_path
     except (OSError, sqlite3.Error) as exc:
-        raise HistoryDatabaseError(f"移行前バックアップを作成できません: {backup_path}: {exc}") from exc
+        raise HistoryDatabaseError(
+            f"移行前バックアップを作成できません: {backup_path}: {exc}"
+        ) from exc
     finally:
         if destination is not None:
             destination.close()

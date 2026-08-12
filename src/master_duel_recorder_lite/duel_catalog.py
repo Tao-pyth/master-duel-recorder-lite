@@ -21,6 +21,7 @@ from .runtime_paths import RuntimePaths
 CATALOG_KINDS = {"deck", "tag"}
 MAX_DESCRIPTION_LENGTH = 500
 DEFAULT_TAG_COLOR = "#4F6F8F"
+DEFAULT_DECK_COLOR = "#2F6B5F"
 TAG_COLOR_PATTERN = re.compile(r"#[0-9A-F]{6}")
 
 
@@ -36,6 +37,8 @@ class DuelCatalogEntry:
     description: str
     color: str | None
     is_archived: bool
+    opponent_only: bool
+    hidden_from_history_statistics: bool
     created_at: datetime
     updated_at: datetime
 
@@ -88,10 +91,21 @@ class DuelCatalogRepository:
             rows = connection.execute(sql, tuple(parameters)).fetchall()
         return tuple(_entry(row) for row in rows)
 
-    def list_decks(self, *, include_archived: bool = False) -> tuple[DuelCatalogEntry, ...]:
-        return self.list(kind="deck", include_archived=include_archived)
+    def list_decks(
+        self, *, include_archived: bool = False, include_hidden: bool = True
+    ) -> tuple[DuelCatalogEntry, ...]:
+        items = self.list(kind="deck", include_archived=include_archived)
+        return (
+            items
+            if include_hidden
+            else tuple(
+                item for item in items if not item.hidden_from_history_statistics
+            )
+        )
 
-    def list_tags(self, *, include_archived: bool = False) -> tuple[DuelCatalogEntry, ...]:
+    def list_tags(
+        self, *, include_archived: bool = False
+    ) -> tuple[DuelCatalogEntry, ...]:
         return self.list(kind="tag", include_archived=include_archived)
 
     def add(
@@ -108,7 +122,10 @@ class DuelCatalogRepository:
         normalized_color = _color(normalized_kind, color)
         timestamp = datetime.now(timezone.utc).isoformat()
         try:
-            with closing(connect_history_database(self.database_path)) as connection, connection:
+            with (
+                closing(connect_history_database(self.database_path)) as connection,
+                connection,
+            ):
                 cursor = connection.execute(
                     """
                     INSERT INTO duel_catalog_entries (
@@ -133,10 +150,18 @@ class DuelCatalogRepository:
             assert row is not None
             return _entry(row)
         except sqlite3.IntegrityError as exc:
-            raise DuelCatalogError(f"同じ{_kind_label(normalized_kind)}が既にあります: {display_name}") from exc
+            raise DuelCatalogError(
+                f"同じ{_kind_label(normalized_kind)}が既にあります: {display_name}"
+            ) from exc
 
-    def add_deck(self, name: str, *, description: str = "") -> DuelCatalogEntry:
-        return self.add("deck", name, description=description)
+    def add_deck(
+        self,
+        name: str,
+        *,
+        description: str = "",
+        color: str = DEFAULT_DECK_COLOR,
+    ) -> DuelCatalogEntry:
+        return self.add("deck", name, description=description, color=color)
 
     def add_tag(
         self,
@@ -153,7 +178,10 @@ class DuelCatalogRepository:
         normalized_kind = _kind(kind)
         display_name, normalized_name = _name(normalized_kind, name)
         timestamp = datetime.now(timezone.utc).isoformat()
-        with closing(connect_history_database(self.database_path)) as connection, connection:
+        with (
+            closing(connect_history_database(self.database_path)) as connection,
+            connection,
+        ):
             connection.execute(
                 """
                 INSERT INTO duel_catalog_entries (
@@ -166,7 +194,9 @@ class DuelCatalogRepository:
                     normalized_kind,
                     display_name,
                     normalized_name,
-                    DEFAULT_TAG_COLOR if normalized_kind == "tag" else None,
+                    DEFAULT_TAG_COLOR
+                    if normalized_kind == "tag"
+                    else DEFAULT_DECK_COLOR,
                     timestamp,
                     timestamp,
                 ),
@@ -209,10 +239,14 @@ class DuelCatalogRepository:
         normalized_description = _description(description)
         timestamp = datetime.now(timezone.utc).isoformat()
         try:
-            with closing(connect_history_database(self.database_path)) as connection, connection:
+            with (
+                closing(connect_history_database(self.database_path)) as connection,
+                connection,
+            ):
                 connection.execute("BEGIN IMMEDIATE")
                 current = connection.execute(
-                    "SELECT * FROM duel_catalog_entries WHERE entry_id = ?", (identifier,)
+                    "SELECT * FROM duel_catalog_entries WHERE entry_id = ?",
+                    (identifier,),
                 ).fetchone()
                 if current is None:
                     raise DuelCatalogError(f"辞書項目が見つかりません: {identifier}")
@@ -247,15 +281,40 @@ class DuelCatalogRepository:
                         timestamp=timestamp,
                     )
                 row = connection.execute(
-                    "SELECT * FROM duel_catalog_entries WHERE entry_id = ?", (identifier,)
+                    "SELECT * FROM duel_catalog_entries WHERE entry_id = ?",
+                    (identifier,),
                 ).fetchone()
             assert row is not None
             return _entry(row)
         except sqlite3.IntegrityError as exc:
-            raise DuelCatalogError(f"同じ{_kind_label(current['kind'])}が既にあります: {display_name}") from exc
+            raise DuelCatalogError(
+                f"同じ{_kind_label(current['kind'])}が既にあります: {display_name}"
+            ) from exc
 
-    def update_deck(self, entry_id: int, *, name: str, description: str = "") -> DuelCatalogEntry:
-        return self.update(entry_id, name=name, description=description, color=None)
+    def update_deck(
+        self,
+        entry_id: int,
+        *,
+        name: str,
+        description: str = "",
+        color: str = DEFAULT_DECK_COLOR,
+        opponent_only: bool = False,
+        hidden_from_history_statistics: bool = False,
+    ) -> DuelCatalogEntry:
+        entry = self.update(entry_id, name=name, description=description, color=color)
+        with (
+            closing(connect_history_database(self.database_path)) as connection,
+            connection,
+        ):
+            connection.execute(
+                "UPDATE duel_catalog_entries SET opponent_only = ?, hidden_from_history_statistics = ? WHERE entry_id = ? AND kind = 'deck'",
+                (
+                    int(opponent_only),
+                    int(hidden_from_history_statistics),
+                    entry.entry_id,
+                ),
+            )
+        return self.get(entry.entry_id)
 
     def update_tag(
         self,
@@ -272,7 +331,10 @@ class DuelCatalogRepository:
 
     def delete(self, entry_id: int) -> DuelCatalogEntry:
         identifier = _entry_id(entry_id)
-        with closing(connect_history_database(self.database_path)) as connection, connection:
+        with (
+            closing(connect_history_database(self.database_path)) as connection,
+            connection,
+        ):
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT * FROM duel_catalog_entries WHERE entry_id = ?", (identifier,)
@@ -287,18 +349,22 @@ class DuelCatalogRepository:
                     (timestamp, identifier),
                 )
                 updated = connection.execute(
-                    "SELECT * FROM duel_catalog_entries WHERE entry_id = ?", (identifier,)
+                    "SELECT * FROM duel_catalog_entries WHERE entry_id = ?",
+                    (identifier,),
                 ).fetchone()
                 assert updated is not None
                 return _entry(updated)
-            connection.execute("DELETE FROM duel_catalog_entries WHERE entry_id = ?", (identifier,))
+            connection.execute(
+                "DELETE FROM duel_catalog_entries WHERE entry_id = ?", (identifier,)
+            )
             return _entry(row)
 
     def reference_count(self, entry_id: int) -> int:
         entry = self.get(entry_id)
         with closing(connect_history_database(self.database_path)) as connection:
             row = connection.execute(
-                "SELECT * FROM duel_catalog_entries WHERE entry_id = ?", (entry.entry_id,)
+                "SELECT * FROM duel_catalog_entries WHERE entry_id = ?",
+                (entry.entry_id,),
             ).fetchone()
             assert row is not None
             return self._reference_count(connection, row)
@@ -393,7 +459,9 @@ class DuelCatalogRepository:
             return DuelEditorPreferences()
         try:
             tags = json.loads(row["tags_json"])
-            if not isinstance(tags, list) or not all(isinstance(item, str) for item in tags):
+            if not isinstance(tags, list) or not all(
+                isinstance(item, str) for item in tags
+            ):
                 raise ValueError("tags_json must be a string array")
             values = DuelRecordValues(
                 duel_type=row["duel_type"],
@@ -417,7 +485,10 @@ class DuelCatalogRepository:
         for tag in normalized.tags:
             self.remember("tag", tag)
         timestamp = datetime.now(timezone.utc).isoformat()
-        with closing(connect_history_database(self.database_path)) as connection, connection:
+        with (
+            closing(connect_history_database(self.database_path)) as connection,
+            connection,
+        ):
             connection.execute(
                 """
                 INSERT INTO duel_editor_preferences (
@@ -454,6 +525,8 @@ def _entry(row: sqlite3.Row) -> DuelCatalogEntry:
         description=row["description"],
         color=row["color"],
         is_archived=bool(row["is_archived"]),
+        opponent_only=bool(row["opponent_only"]),
+        hidden_from_history_statistics=bool(row["hidden_from_history_statistics"]),
         created_at=_datetime(row["created_at"]),
         updated_at=_datetime(row["updated_at"]),
     )
@@ -476,8 +549,12 @@ def _name(kind: str, value: str) -> tuple[str, str]:
     if not display_name:
         raise DuelCatalogError(f"{_kind_label(kind)}を入力してください")
     if len(display_name) > maximum:
-        raise DuelCatalogError(f"{_kind_label(kind)}は{maximum}文字以内で入力してください")
-    if any(unicodedata.category(character).startswith("C") for character in display_name):
+        raise DuelCatalogError(
+            f"{_kind_label(kind)}は{maximum}文字以内で入力してください"
+        )
+    if any(
+        unicodedata.category(character).startswith("C") for character in display_name
+    ):
         raise DuelCatalogError(f"{_kind_label(kind)}に制御文字は使用できません")
     return display_name, display_name.casefold()
 
@@ -487,20 +564,22 @@ def _description(value: str) -> str:
         raise DuelCatalogError("説明は文字列で入力してください")
     normalized = unicodedata.normalize("NFC", value.strip())
     if len(normalized) > MAX_DESCRIPTION_LENGTH:
-        raise DuelCatalogError(f"説明は{MAX_DESCRIPTION_LENGTH}文字以内で入力してください")
+        raise DuelCatalogError(
+            f"説明は{MAX_DESCRIPTION_LENGTH}文字以内で入力してください"
+        )
     if any(character in "\x00\r" for character in normalized):
         raise DuelCatalogError("説明に使用できない文字が含まれています")
     return normalized
 
 
 def _color(kind: str, value: str | None) -> str | None:
-    if kind == "deck":
-        if value not in (None, ""):
-            raise DuelCatalogError("デッキ名にはカラーを設定できません")
-        return None
-    normalized = (value or DEFAULT_TAG_COLOR).strip().upper()
+    normalized = (
+        (value or (DEFAULT_DECK_COLOR if kind == "deck" else DEFAULT_TAG_COLOR))
+        .strip()
+        .upper()
+    )
     if TAG_COLOR_PATTERN.fullmatch(normalized) is None:
-        raise DuelCatalogError("タグカラーは#RRGGBB形式で入力してください")
+        raise DuelCatalogError("カラーは#RRGGBB形式で入力してください")
     return normalized
 
 

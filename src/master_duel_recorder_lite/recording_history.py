@@ -17,20 +17,11 @@ from .history_database import (
     initialize_history_database,
 )
 from .recording_session import RecordingResult, RecordingState
-from .recording_failure import FailureClassification, RecoveryPolicy, classify_recording_failure
+from .recording_failure import FailureClassification, classify_recording_failure
 from .runtime_paths import RuntimePaths
 
 
 HISTORY_STATES = {"starting", "recording", "completed", "failed"}
-RECOVERY_STATES = {
-    "not_required",
-    "pending",
-    "inspecting",
-    "repairable",
-    "repaired",
-    "ignored",
-    "unrecoverable",
-}
 
 
 class RecordingHistoryError(RuntimeError):
@@ -54,27 +45,9 @@ class RecordingHistoryEntry:
     error: str | None
     diagnostics: tuple[str, ...]
     failure_code: str | None
-    recovery_policy: str | None
-    recovery_state: str
-    recovery_attempts: int
-    recovery_message: str | None
-    recovery_diagnostic: str | None
     audio_input: str | None
     audio_state: str
     audio_warning: str | None
-    updated_at: datetime
-
-
-@dataclass(frozen=True)
-class RecoveryArtifact:
-    artifact_id: str
-    recording_id: str
-    kind: str
-    status: str
-    output_path: Path
-    size_bytes: int | None
-    diagnostic: str | None
-    created_at: datetime
     updated_at: datetime
 
 
@@ -90,6 +63,10 @@ class HistoryQuery:
     state: str | None = None
     since: datetime | None = None
     until: datetime | None = None
+    season_id: int | None = None
+    own_deck_id: int | None = None
+    opponent_deck_id: int | None = None
+    tag_entry_ids: tuple[int, ...] = ()
     limit: int = 50
     offset: int = 0
 
@@ -98,12 +75,38 @@ class HistoryQuery:
             raise ValueError(f"未対応の録画状態です: {self.state}")
         _optional_aware_datetime(self.since, "since")
         _optional_aware_datetime(self.until, "until")
-        if self.since is not None and self.until is not None and self.since > self.until:
+        if (
+            self.since is not None
+            and self.until is not None
+            and self.since > self.until
+        ):
             raise ValueError("since は until 以前である必要があります")
-        if isinstance(self.limit, bool) or not isinstance(self.limit, int) or not 1 <= self.limit <= 1000:
+        if (
+            isinstance(self.limit, bool)
+            or not isinstance(self.limit, int)
+            or not 1 <= self.limit <= 1000
+        ):
             raise ValueError("limit は1から1000の整数である必要があります")
-        if isinstance(self.offset, bool) or not isinstance(self.offset, int) or self.offset < 0:
+        if (
+            isinstance(self.offset, bool)
+            or not isinstance(self.offset, int)
+            or self.offset < 0
+        ):
             raise ValueError("offset は0以上の整数である必要があります")
+        for name, value in (
+            ("season_id", self.season_id),
+            ("own_deck_id", self.own_deck_id),
+            ("opponent_deck_id", self.opponent_deck_id),
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 1
+            ):
+                raise ValueError(f"{name}は1以上の整数である必要があります")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in self.tag_entry_ids
+        ):
+            raise ValueError("tag_entry_idsは1以上の整数で指定してください")
 
 
 class ConsistencyIssueKind(str, Enum):
@@ -131,7 +134,10 @@ class RecordingHistoryRepository:
         self.database_path = database_path.expanduser().resolve()
         self.recordings_root = recordings_root.expanduser().resolve()
         try:
-            initialize_history_database(self.database_path)
+            initialize_history_database(
+                self.database_path,
+                recordings_root=self.recordings_root,
+            )
         except (OSError, HistoryDatabaseError) as exc:
             raise RecordingHistoryError(str(exc)) from exc
 
@@ -160,8 +166,14 @@ class RecordingHistoryRepository:
             raise RecordingHistoryError("container はmkvまたはmp4である必要があります")
         relative_path = self._relative_output_path(output_path)
         timestamp = _utc(created_at or datetime.now(timezone.utc), "created_at")
-        reason = detection_reason.strip() if detection_reason and detection_reason.strip() else None
-        normalized_audio = audio_input.strip() if audio_input and audio_input.strip() else None
+        reason = (
+            detection_reason.strip()
+            if detection_reason and detection_reason.strip()
+            else None
+        )
+        normalized_audio = (
+            audio_input.strip() if audio_input and audio_input.strip() else None
+        )
         audio_state = "configured" if normalized_audio else "disabled"
         try:
             with self._connection() as connection:
@@ -189,9 +201,13 @@ class RecordingHistoryRepository:
             assert entry is not None
             return entry
         except sqlite3.IntegrityError as exc:
-            raise RecordingHistoryError(f"録画履歴を新規登録できません: {identifier}: {exc}") from exc
+            raise RecordingHistoryError(
+                f"録画履歴を新規登録できません: {identifier}: {exc}"
+            ) from exc
 
-    def mark_recording(self, recording_id: str, *, started_at: datetime) -> RecordingHistoryEntry:
+    def mark_recording(
+        self, recording_id: str, *, started_at: datetime
+    ) -> RecordingHistoryEntry:
         identifier = _required_text(recording_id, "recording_id")
         timestamp = _utc(started_at, "started_at")
         formatted = _format_datetime(timestamp)
@@ -217,10 +233,14 @@ class RecordingHistoryRepository:
         assert entry is not None
         return entry
 
-    def finalize(self, recording_id: str, result: RecordingResult) -> RecordingHistoryEntry:
+    def finalize(
+        self, recording_id: str, result: RecordingResult
+    ) -> RecordingHistoryEntry:
         identifier = _required_text(recording_id, "recording_id")
         if result.state not in {RecordingState.COMPLETED, RecordingState.FAILED}:
-            raise RecordingHistoryError("最終状態ではない録画結果は履歴へ確定できません")
+            raise RecordingHistoryError(
+                "最終状態ではない録画結果は履歴へ確定できません"
+            )
         existing_before = self.get(identifier)
         if existing_before is None:
             raise RecordingHistoryError(f"録画履歴が見つかりません: {identifier}")
@@ -230,14 +250,19 @@ class RecordingHistoryRepository:
                 f"録画結果のファイルが開始履歴と一致しません: {identifier}"
             )
         state = result.state.value
-        started_at = _utc(result.started_at, "started_at") if result.started_at else None
-        ended_at = _utc(result.ended_at, "ended_at") if result.ended_at else datetime.now(timezone.utc)
+        started_at = (
+            _utc(result.started_at, "started_at") if result.started_at else None
+        )
+        ended_at = (
+            _utc(result.ended_at, "ended_at")
+            if result.ended_at
+            else datetime.now(timezone.utc)
+        )
         duration = None
         if started_at is not None:
             duration = max(0.0, (ended_at - started_at).total_seconds())
         diagnostics_json = json.dumps(list(result.diagnostics), ensure_ascii=False)
         classification = None
-        recovery_state = "not_required"
         if result.state is RecordingState.FAILED:
             classification = classify_recording_failure(
                 error=result.error,
@@ -245,19 +270,13 @@ class RecordingHistoryRepository:
                 output_exists=result.output_path.is_file(),
                 output_size=result.size_bytes,
             )
-            recovery_state = (
-                "unrecoverable"
-                if classification.policy is RecoveryPolicy.UNRECOVERABLE
-                else "pending"
-            )
         with self._connection() as connection:
             cursor = connection.execute(
                 """
                 UPDATE recordings
                 SET state = ?, started_at = COALESCE(started_at, ?), ended_at = ?,
                     duration_seconds = ?, size_bytes = ?, returncode = ?, error = ?,
-                    diagnostics_json = ?, failure_code = ?, recovery_policy = ?,
-                    recovery_state = ?, recovery_message = ?, recovery_diagnostic = ?,
+                    diagnostics_json = ?, failure_code = ?,
                     audio_state = CASE
                         WHEN audio_state = 'configured' AND ? = 'completed' THEN 'recorded'
                         WHEN audio_state = 'configured' AND ? = 'failed' THEN 'failed'
@@ -276,10 +295,6 @@ class RecordingHistoryRepository:
                     result.error,
                     diagnostics_json,
                     classification.code.value if classification else None,
-                    classification.policy.value if classification else None,
-                    recovery_state,
-                    classification.user_message if classification else None,
-                    classification.internal_diagnostic if classification else None,
                     state,
                     state,
                     _format_datetime(ended_at),
@@ -312,7 +327,10 @@ class RecordingHistoryRepository:
         existing = self.get(identifier)
         if existing is None:
             raise RecordingHistoryError(f"録画履歴が見つかりません: {identifier}")
-        if existing.state == "failed" and existing.failure_code == classification.code.value:
+        if (
+            existing.state == "failed"
+            and existing.failure_code == classification.code.value
+        ):
             return existing
         if existing.state not in {"starting", "recording"}:
             raise RecordingHistoryError(
@@ -321,18 +339,12 @@ class RecordingHistoryRepository:
         duration = None
         if existing.started_at is not None:
             duration = max(0.0, (timestamp - existing.started_at).total_seconds())
-        recovery_state = (
-            "unrecoverable"
-            if classification.policy is RecoveryPolicy.UNRECOVERABLE
-            else "pending"
-        )
         with self._connection() as connection:
             connection.execute(
                 """
                 UPDATE recordings
                 SET state = 'failed', ended_at = ?, duration_seconds = ?, size_bytes = ?,
-                    error = ?, failure_code = ?, recovery_policy = ?, recovery_state = ?,
-                    recovery_message = ?, recovery_diagnostic = ?, updated_at = ?
+                    error = ?, failure_code = ?, updated_at = ?
                     , audio_state = CASE
                         WHEN audio_state = 'configured' THEN 'failed' ELSE audio_state END
                 WHERE recording_id = ? AND state IN ('starting', 'recording')
@@ -343,10 +355,6 @@ class RecordingHistoryRepository:
                     size_bytes,
                     classification.user_message,
                     classification.code.value,
-                    classification.policy.value,
-                    recovery_state,
-                    classification.user_message,
-                    classification.internal_diagnostic,
                     _format_datetime(timestamp),
                     identifier,
                 ),
@@ -354,119 +362,6 @@ class RecordingHistoryRepository:
         entry = self.get(identifier)
         assert entry is not None
         return entry
-
-    def recovery_entries(self) -> tuple[RecordingHistoryEntry, ...]:
-        with self._connection(write=False) as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM recordings
-                WHERE recovery_state NOT IN ('not_required', 'repaired', 'ignored')
-                ORDER BY updated_at DESC, recording_id DESC
-                """
-            ).fetchall()
-        return tuple(self._entry_from_row(row) for row in rows)
-
-    def set_recovery_state(
-        self,
-        recording_id: str,
-        *,
-        state: str,
-        message: str,
-        diagnostic: str,
-        increment_attempts: bool = False,
-    ) -> RecordingHistoryEntry:
-        identifier = _required_text(recording_id, "recording_id")
-        if state not in RECOVERY_STATES - {"not_required"}:
-            raise RecordingHistoryError(f"未対応の復旧状態です: {state}")
-        timestamp = datetime.now(timezone.utc)
-        increment = 1 if increment_attempts else 0
-        with self._connection() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE recordings
-                SET recovery_state = ?, recovery_message = ?, recovery_diagnostic = ?,
-                    recovery_attempts = recovery_attempts + ?, updated_at = ?
-                WHERE recording_id = ? AND state = 'failed'
-                """,
-                (
-                    state,
-                    _required_text(message, "message"),
-                    _required_text(diagnostic, "diagnostic"),
-                    increment,
-                    _format_datetime(timestamp),
-                    identifier,
-                ),
-            )
-        if cursor.rowcount == 0:
-            raise RecordingHistoryError(f"復旧対象の失敗履歴が見つかりません: {identifier}")
-        entry = self.get(identifier)
-        assert entry is not None
-        return entry
-
-    def add_recovery_artifact(
-        self,
-        *,
-        artifact_id: str,
-        recording_id: str,
-        output_path: Path,
-        kind: str,
-        status: str,
-        size_bytes: int | None,
-        diagnostic: str | None,
-    ) -> RecoveryArtifact:
-        if kind not in {"recovered", "partial"}:
-            raise RecordingHistoryError(f"未対応の復旧成果物種別です: {kind}")
-        if status not in {"created", "valid", "failed"}:
-            raise RecordingHistoryError(f"未対応の復旧成果物状態です: {status}")
-        relative_path = self._relative_output_path(output_path)
-        timestamp = datetime.now(timezone.utc)
-        with self._connection() as connection:
-            connection.execute(
-                """
-                INSERT INTO recovery_artifacts (
-                    artifact_id, recording_id, kind, status, output_path,
-                    size_bytes, diagnostic, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    _required_text(artifact_id, "artifact_id"),
-                    _required_text(recording_id, "recording_id"),
-                    kind,
-                    status,
-                    relative_path.as_posix(),
-                    size_bytes,
-                    diagnostic,
-                    _format_datetime(timestamp),
-                    _format_datetime(timestamp),
-                ),
-            )
-        artifacts = self.recovery_artifacts(recording_id)
-        return next(item for item in artifacts if item.artifact_id == artifact_id)
-
-    def recovery_artifacts(self, recording_id: str) -> tuple[RecoveryArtifact, ...]:
-        identifier = _required_text(recording_id, "recording_id")
-        with self._connection(write=False) as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM recovery_artifacts
-                WHERE recording_id = ? ORDER BY created_at DESC, artifact_id DESC
-                """,
-                (identifier,),
-            ).fetchall()
-        return tuple(
-            RecoveryArtifact(
-                artifact_id=row["artifact_id"],
-                recording_id=row["recording_id"],
-                kind=row["kind"],
-                status=row["status"],
-                output_path=Path(row["output_path"]),
-                size_bytes=row["size_bytes"],
-                diagnostic=row["diagnostic"],
-                created_at=_parse_datetime(row["created_at"]),
-                updated_at=_parse_datetime(row["updated_at"]),
-            )
-            for row in rows
-        )
 
     def get(self, recording_id: str) -> RecordingHistoryEntry | None:
         identifier = _required_text(recording_id, "recording_id")
@@ -477,7 +372,9 @@ class RecordingHistoryRepository:
             ).fetchone()
         return self._entry_from_row(row) if row is not None else None
 
-    def query(self, query: HistoryQuery | None = None) -> tuple[RecordingHistoryEntry, ...]:
+    def query(
+        self, query: HistoryQuery | None = None
+    ) -> tuple[RecordingHistoryEntry, ...]:
         selected = query or HistoryQuery()
         clauses: list[str] = []
         parameters: list[object] = []
@@ -490,6 +387,28 @@ class RecordingHistoryRepository:
         if selected.until is not None:
             clauses.append("COALESCE(started_at, created_at) <= ?")
             parameters.append(_format_datetime(_utc(selected.until, "until")))
+        if selected.season_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM duel_records duel WHERE duel.recording_id = recordings.recording_id AND duel.season_id = ?)"
+            )
+            parameters.append(selected.season_id)
+        if selected.own_deck_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM duel_records duel WHERE duel.recording_id = recordings.recording_id AND duel.own_deck_id = ?)"
+            )
+            parameters.append(selected.own_deck_id)
+        if selected.opponent_deck_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM duel_records duel WHERE duel.recording_id = recordings.recording_id AND duel.opponent_deck_id = ?)"
+            )
+            parameters.append(selected.opponent_deck_id)
+        if selected.tag_entry_ids:
+            placeholders = ",".join("?" for _ in selected.tag_entry_ids)
+            clauses.append(
+                "EXISTS (SELECT 1 FROM duel_record_tag_links tags WHERE "
+                f"tags.recording_id = recordings.recording_id AND tags.tag_entry_id IN ({placeholders}))"
+            )
+            parameters.extend(selected.tag_entry_ids)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         parameters.extend((selected.limit, selected.offset))
         sql = (
@@ -506,8 +425,7 @@ class RecordingHistoryRepository:
         entry = self.get(identifier)
         if entry is None:
             raise RecordingHistoryError(f"録画履歴が見つかりません: {identifier}")
-        artifacts = self.recovery_artifacts(identifier)
-        relative_paths = (entry.output_path, *(artifact.output_path for artifact in artifacts))
+        relative_paths = (entry.output_path,)
         paths: list[Path] = []
         for relative_path in relative_paths:
             path = self._resolved_recording_path(relative_path)
@@ -523,7 +441,9 @@ class RecordingHistoryRepository:
                     missing.append(path)
                     continue
                 if not path.is_file():
-                    raise RecordingHistoryError(f"削除対象がファイルではありません: {path}")
+                    raise RecordingHistoryError(
+                        f"削除対象がファイルではありません: {path}"
+                    )
                 staging_root.mkdir(parents=True, exist_ok=True)
                 staged = staging_root / f"{index:04d}-{path.name}"
                 path.replace(staged)
@@ -534,21 +454,26 @@ class RecordingHistoryRepository:
                     "DELETE FROM duel_record_tags WHERE recording_id = ?", (identifier,)
                 )
                 connection.execute(
-                    "DELETE FROM duel_record_tag_links WHERE recording_id = ?", (identifier,)
+                    "DELETE FROM duel_record_tag_links WHERE recording_id = ?",
+                    (identifier,),
                 )
                 connection.execute(
-                    "DELETE FROM duel_record_changes WHERE recording_id = ?", (identifier,)
+                    "DELETE FROM duel_record_changes WHERE recording_id = ?",
+                    (identifier,),
                 )
-                connection.execute("DELETE FROM duel_events WHERE recording_id = ?", (identifier,))
-                connection.execute("DELETE FROM duel_records WHERE recording_id = ?", (identifier,))
                 connection.execute(
-                    "DELETE FROM recovery_artifacts WHERE recording_id = ?", (identifier,)
+                    "DELETE FROM duel_events WHERE recording_id = ?", (identifier,)
+                )
+                connection.execute(
+                    "DELETE FROM duel_records WHERE recording_id = ?", (identifier,)
                 )
                 cursor = connection.execute(
                     "DELETE FROM recordings WHERE recording_id = ?", (identifier,)
                 )
                 if cursor.rowcount != 1:
-                    raise RecordingHistoryError(f"録画履歴が見つかりません: {identifier}")
+                    raise RecordingHistoryError(
+                        f"録画履歴が見つかりません: {identifier}"
+                    )
         except (OSError, RecordingHistoryError) as exc:
             restore_errors: list[str] = []
             for original, staged in reversed(moved):
@@ -583,9 +508,8 @@ class RecordingHistoryRepository:
 
     def check_consistency(self) -> tuple[ConsistencyIssue, ...]:
         with self._connection(write=False) as connection:
-            rows = connection.execute("SELECT * FROM recordings ORDER BY recording_id").fetchall()
-            artifact_rows = connection.execute(
-                "SELECT * FROM recovery_artifacts ORDER BY artifact_id"
+            rows = connection.execute(
+                "SELECT * FROM recordings ORDER BY recording_id"
             ).fetchall()
         entries = tuple(self._entry_from_row(row) for row in rows)
         issues: list[ConsistencyIssue] = []
@@ -623,45 +547,6 @@ class RecordingHistoryRepository:
                         path,
                         f"履歴サイズ{entry.size_bytes} bytes、実ファイル{actual_size} bytesです",
                         entry.recording_id,
-                    )
-                )
-
-        for row in artifact_rows:
-            relative = Path(row["output_path"])
-            try:
-                if relative.is_absolute() or ".." in relative.parts:
-                    raise ValueError("unsafe recovery artifact path")
-                path = (self.recordings_root / relative).resolve()
-                path.relative_to(self.recordings_root)
-            except (OSError, ValueError):
-                issues.append(
-                    ConsistencyIssue(
-                        ConsistencyIssueKind.INVALID_REFERENCE,
-                        relative,
-                        "復旧成果物の参照が録画保存先の外部を指しています",
-                        row["recording_id"],
-                    )
-                )
-                continue
-            registered.add(path)
-            if not path.is_file():
-                issues.append(
-                    ConsistencyIssue(
-                        ConsistencyIssueKind.MISSING,
-                        path,
-                        "履歴に対応する復旧成果物がありません",
-                        row["recording_id"],
-                    )
-                )
-                continue
-            actual_size = path.stat().st_size
-            if row["size_bytes"] is not None and row["size_bytes"] != actual_size:
-                issues.append(
-                    ConsistencyIssue(
-                        ConsistencyIssueKind.SIZE_MISMATCH,
-                        path,
-                        f"復旧履歴サイズ{row['size_bytes']} bytes、実ファイル{actual_size} bytesです",
-                        row["recording_id"],
                     )
                 )
 
@@ -729,7 +614,9 @@ class RecordingHistoryRepository:
                 output_path=output_path,
                 container=row["container"],
                 created_at=_parse_datetime(row["created_at"]),
-                started_at=_parse_datetime(row["started_at"]) if row["started_at"] else None,
+                started_at=_parse_datetime(row["started_at"])
+                if row["started_at"]
+                else None,
                 ended_at=_parse_datetime(row["ended_at"]) if row["ended_at"] else None,
                 duration_seconds=row["duration_seconds"],
                 size_bytes=row["size_bytes"],
@@ -737,18 +624,15 @@ class RecordingHistoryRepository:
                 error=row["error"],
                 diagnostics=tuple(diagnostics_value),
                 failure_code=row["failure_code"],
-                recovery_policy=row["recovery_policy"],
-                recovery_state=row["recovery_state"],
-                recovery_attempts=row["recovery_attempts"],
-                recovery_message=row["recovery_message"],
-                recovery_diagnostic=row["recovery_diagnostic"],
                 audio_input=row["audio_input"],
                 audio_state=row["audio_state"],
                 audio_warning=row["audio_warning"],
                 updated_at=_parse_datetime(row["updated_at"]),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise RecordingHistoryError(f"録画履歴レコードの形式が不正です: {exc}") from exc
+            raise RecordingHistoryError(
+                f"録画履歴レコードの形式が不正です: {exc}"
+            ) from exc
 
     @contextmanager
     def _connection(self, *, write: bool = True) -> Iterator[sqlite3.Connection]:
@@ -763,7 +647,9 @@ class RecordingHistoryRepository:
             else:
                 yield connection
         except sqlite3.Error as exc:
-            raise RecordingHistoryError(f"録画履歴DBの操作に失敗しました: {exc}") from exc
+            raise RecordingHistoryError(
+                f"録画履歴DBの操作に失敗しました: {exc}"
+            ) from exc
         finally:
             connection.close()
 

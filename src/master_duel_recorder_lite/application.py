@@ -7,7 +7,11 @@ from pathlib import Path
 import threading
 import time
 
-from .auto_recording import AutoRecordingController, AutoRecordingEvent, AutoRecordingEventAction
+from .auto_recording import (
+    AutoRecordingController,
+    AutoRecordingEvent,
+    AutoRecordingEventAction,
+)
 from .capture_targets import (
     CaptureInput,
     CaptureMode,
@@ -17,12 +21,23 @@ from .capture_targets import (
     capture_input_for_window_region,
     resolve_configured_capture,
 )
-from .config import AppConfig, LoadedAppConfig, load_app_config, save_app_config, validate_app_config
+from .config import (
+    AppConfig,
+    LoadedAppConfig,
+    load_app_config,
+    save_app_config,
+    validate_app_config,
+)
 from .config_management import updated_config
 from .detection import DetectionPolicy, DuelDetectionStateMachine, DuelObservation
 from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
 from .duel_start_monitor import MasterDuelStartMonitor
-from .duel_records import DuelRecord, DuelRecordChange, DuelRecordRepository, DuelRecordValues
+from .duel_records import (
+    DuelRecord,
+    DuelRecordChange,
+    DuelRecordRepository,
+    DuelRecordValues,
+)
 from .duel_statistics import (
     DuelStatisticsRepository,
     StatisticsDashboard,
@@ -45,7 +60,6 @@ from .ffmpeg_setup import (
 from .frame_capture import FrameCaptureResult, PersistentFfmpegRegionFrameCapture
 from .game_window import GameWindowMonitor, GameWindowStatus, WindowSnapshot
 from .master_duel_detector import MasterDuelWindowDetector
-from .media_recovery import MediaInspection, MediaRecoveryService, MediaRepairResult
 from .preflight import PreflightReport, run_preflight
 from .recorder import PreparedRecording, prepare_recording
 from .recording_history import (
@@ -57,7 +71,7 @@ from .recording_history import (
 )
 from .recording_browsing import RecordingBrowser, RecordingReference
 from .recording_session import RecordingResult, RecordingState
-from .recovery import InterruptedDetection, RecoveryManager
+from .seasons import Season, SeasonRepository
 from .runtime_paths import default_runtime_paths
 from .upload_export import UploadExporter
 from .upload_manifest import UploadManifestWriter
@@ -99,6 +113,7 @@ class DuelEditorData:
     values: DuelRecordValues
     decks: tuple[DuelCatalogEntry, ...]
     tags: tuple[DuelCatalogEntry, ...]
+    seasons: tuple[Season, ...]
 
 
 @dataclass(frozen=True)
@@ -112,15 +127,27 @@ class RecordingHistoryView:
 
     @property
     def result(self) -> str:
-        return self.duel_record.values.result if self.duel_record is not None else "unknown"
+        return (
+            self.duel_record.values.result
+            if self.duel_record is not None
+            else "unknown"
+        )
 
     @property
     def play_order(self) -> str:
-        return self.duel_record.values.play_order if self.duel_record is not None else "unknown"
+        return (
+            self.duel_record.values.play_order
+            if self.duel_record is not None
+            else "unknown"
+        )
 
     @property
     def duel_type(self) -> str:
-        return self.duel_record.values.duel_type if self.duel_record is not None else "other"
+        return (
+            self.duel_record.values.duel_type
+            if self.duel_record is not None
+            else "other"
+        )
 
 
 @dataclass(frozen=True)
@@ -144,7 +171,9 @@ class RecorderApplicationService:
     ) -> None:
         self.project_root = project_root
         self.user_data_dir = user_data_dir
-        self.paths = default_runtime_paths(project_root=project_root, user_data_dir=user_data_dir)
+        self.paths = default_runtime_paths(
+            project_root=project_root, user_data_dir=user_data_dir
+        )
         self._target_catalog = target_catalog
         self._recording_browser = recording_browser
         self._ffmpeg_installer = ffmpeg_installer or FfmpegInstaller()
@@ -158,7 +187,9 @@ class RecorderApplicationService:
         )
 
     def load_config(self) -> LoadedAppConfig:
-        return load_app_config(project_root=self.project_root, user_data_dir=self.user_data_dir)
+        return load_app_config(
+            project_root=self.project_root, user_data_dir=self.user_data_dir
+        )
 
     def save_settings(self, values: Mapping[str, str]) -> AppConfig:
         loaded = self.load_config()
@@ -181,7 +212,9 @@ class RecorderApplicationService:
         if not target.available:
             raise ApplicationOperationError(f"録画対象を利用できません: {target.label}")
         loaded = self.load_config()
-        target_id = "" if target.mode.value in {"desktop", "master_duel"} else target.identifier
+        target_id = (
+            "" if target.mode.value in {"desktop", "master_duel"} else target.identifier
+        )
         config = replace(
             loaded.config,
             capture_mode=target.mode.value,
@@ -193,7 +226,9 @@ class RecorderApplicationService:
 
     def diagnose(self) -> PreflightReport:
         loaded = self.load_config()
-        return run_preflight(paths=self.paths, config=loaded.config, config_loaded=loaded.config_loaded)
+        return run_preflight(
+            paths=self.paths, config=loaded.config, config_loaded=loaded.config_loaded
+        )
 
     def runtime_data_directory(self) -> Path:
         return self.paths.root
@@ -239,7 +274,9 @@ class RecorderApplicationService:
             None,
         )
         if device is None:
-            return AudioInputTestResult("unavailable", "選択した音声入力が見つかりません")
+            return AudioInputTestResult(
+                "unavailable", "選択した音声入力が見つかりません"
+            )
         return test_windows_audio_input(discovery.executable, device)
 
     def start_recording(self, target: CaptureTarget | None = None) -> RecordingSnapshot:
@@ -262,8 +299,14 @@ class RecorderApplicationService:
                 config_loaded=loaded.config_loaded,
             )
             if not report.succeeded:
-                failures = [check.message for check in report.checks if check.status.value == "error"]
-                raise ApplicationOperationError(" / ".join(failures) or "録画環境を利用できません")
+                failures = [
+                    check.message
+                    for check in report.checks
+                    if check.status.value == "error"
+                ]
+                raise ApplicationOperationError(
+                    " / ".join(failures) or "録画環境を利用できません"
+                )
             capture_input = None
             if target is not None:
                 capture_input = (
@@ -347,7 +390,9 @@ class RecorderApplicationService:
         with self._lock:
             self._collect_manual_terminal_locked()
             if self._manual_starting:
-                raise ApplicationOperationError("手動録画の開始処理中は自動監視を開始できません")
+                raise ApplicationOperationError(
+                    "手動録画の開始処理中は自動監視を開始できません"
+                )
             if self._current is not None:
                 raise ApplicationOperationError("手動録画中は自動監視を開始できません")
             if self.watch_active:
@@ -374,27 +419,41 @@ class RecorderApplicationService:
         with self._lock:
             self._watch_thread = None
 
-    def list_history(self, *, limit: int = 200) -> tuple[RecordingHistoryEntry, ...]:
-        return RecordingHistoryRepository.from_runtime_paths(self.paths).query(HistoryQuery(limit=limit))
+    def list_history(
+        self, *, limit: int = 200, query: HistoryQuery | None = None
+    ) -> tuple[RecordingHistoryEntry, ...]:
+        selected = query or HistoryQuery(limit=limit)
+        return RecordingHistoryRepository.from_runtime_paths(self.paths).query(selected)
 
-    def list_history_views(self, *, limit: int = 200) -> tuple[RecordingHistoryView, ...]:
-        entries = self.list_history(limit=limit)
+    def list_history_views(
+        self, *, limit: int = 200, query: HistoryQuery | None = None
+    ) -> tuple[RecordingHistoryView, ...]:
+        entries = self.list_history(limit=limit, query=query)
         records = {
             item.recording_id: item
-            for item in DuelRecordRepository.from_runtime_paths(self.paths).list(limit=1000)
+            for item in DuelRecordRepository.from_runtime_paths(self.paths).list(
+                limit=1000
+            )
         }
-        return tuple(RecordingHistoryView(entry, records.get(entry.recording_id)) for entry in entries)
+        return tuple(
+            RecordingHistoryView(entry, records.get(entry.recording_id))
+            for entry in entries
+        )
 
-    def get_history_dashboard(self, *, limit: int = 200) -> RecordingHistoryDashboard:
+    def get_history_dashboard(
+        self, *, limit: int = 200, query: HistoryQuery | None = None
+    ) -> RecordingHistoryDashboard:
         return RecordingHistoryDashboard(
-            views=self.list_history_views(limit=limit),
+            views=self.list_history_views(limit=limit, query=query),
             incomplete_duel_record_count=DuelRecordRepository.from_runtime_paths(
                 self.paths
             ).count_incomplete_recordings(),
         )
 
     def get_history(self, recording_id: str) -> RecordingHistoryEntry:
-        entry = RecordingHistoryRepository.from_runtime_paths(self.paths).get(recording_id)
+        entry = RecordingHistoryRepository.from_runtime_paths(self.paths).get(
+            recording_id
+        )
         if entry is None:
             raise ApplicationOperationError(f"録画履歴が見つかりません: {recording_id}")
         return entry
@@ -405,12 +464,19 @@ class RecorderApplicationService:
     def get_duel_editor_data(self, recording_id: str) -> DuelEditorData:
         record = self.get_duel_record(recording_id)
         catalog = DuelCatalogRepository.from_runtime_paths(self.paths)
-        values = record.values if record is not None else catalog.preferences().to_record_values()
+        values = (
+            record.values
+            if record is not None
+            else catalog.preferences().to_record_values()
+        )
         return DuelEditorData(
             record=record,
             values=values,
             decks=catalog.list(kind="deck"),
             tags=catalog.list(kind="tag"),
+            seasons=SeasonRepository.from_runtime_paths(self.paths).list(
+                include_archived=True
+            ),
         )
 
     def save_duel_record(
@@ -426,7 +492,9 @@ class RecorderApplicationService:
             expected_revision=expected_revision,
             source="user",
         )
-        DuelCatalogRepository.from_runtime_paths(self.paths).remember_record_values(saved.values)
+        DuelCatalogRepository.from_runtime_paths(self.paths).remember_record_values(
+            saved.values
+        )
         return saved
 
     def list_duel_catalog(self) -> tuple[DuelCatalogEntry, ...]:
@@ -437,6 +505,22 @@ class RecorderApplicationService:
 
     def list_tags(self) -> tuple[DuelCatalogEntry, ...]:
         return DuelCatalogRepository.from_runtime_paths(self.paths).list_tags()
+
+    def list_seasons(self, *, include_archived: bool = False) -> tuple[Season, ...]:
+        return SeasonRepository.from_runtime_paths(self.paths).list(
+            include_archived=include_archived
+        )
+
+    def add_season(self, **values: object) -> Season:
+        return SeasonRepository.from_runtime_paths(self.paths).add(**values)
+
+    def update_season(self, season_id: int, **values: object) -> Season:
+        return SeasonRepository.from_runtime_paths(self.paths).update(
+            season_id, **values
+        )
+
+    def delete_season(self, season_id: int) -> Season:
+        return SeasonRepository.from_runtime_paths(self.paths).delete(season_id)
 
     def get_statistics_dashboard(
         self,
@@ -463,10 +547,17 @@ class RecorderApplicationService:
             color=color,
         )
 
-    def add_deck(self, name: str, *, description: str = "") -> DuelCatalogEntry:
+    def add_deck(
+        self,
+        name: str,
+        *,
+        description: str = "",
+        color: str = "#2F6B5F",
+    ) -> DuelCatalogEntry:
         return DuelCatalogRepository.from_runtime_paths(self.paths).add_deck(
             name,
             description=description,
+            color=color,
         )
 
     def add_tag(
@@ -483,7 +574,9 @@ class RecorderApplicationService:
         )
 
     def rename_duel_catalog_entry(self, entry_id: int, name: str) -> DuelCatalogEntry:
-        return DuelCatalogRepository.from_runtime_paths(self.paths).rename(entry_id, name)
+        return DuelCatalogRepository.from_runtime_paths(self.paths).rename(
+            entry_id, name
+        )
 
     def update_deck(
         self,
@@ -491,11 +584,17 @@ class RecorderApplicationService:
         *,
         name: str,
         description: str = "",
+        color: str = "#2F6B5F",
+        opponent_only: bool = False,
+        hidden_from_history_statistics: bool = False,
     ) -> DuelCatalogEntry:
         return DuelCatalogRepository.from_runtime_paths(self.paths).update_deck(
             entry_id,
             name=name,
             description=description,
+            color=color,
+            opponent_only=opponent_only,
+            hidden_from_history_statistics=hidden_from_history_statistics,
         )
 
     def update_tag(
@@ -560,14 +659,20 @@ class RecorderApplicationService:
         return DuelTimelineRepository.from_runtime_paths(self.paths).reject(event_id)
 
     def check_history(self) -> tuple[ConsistencyIssue, ...]:
-        return RecordingHistoryRepository.from_runtime_paths(self.paths).check_consistency()
+        return RecordingHistoryRepository.from_runtime_paths(
+            self.paths
+        ).check_consistency()
 
     def delete_history(self, recording_id: str) -> HistoryDeletionResult:
         with self._lock:
             self._collect_manual_terminal_locked()
             if self._manual_starting or self._current is not None or self.watch_active:
-                raise ApplicationOperationError("録画または自動監視の実行中は履歴を削除できません")
-        return RecordingHistoryRepository.from_runtime_paths(self.paths).delete(recording_id)
+                raise ApplicationOperationError(
+                    "録画または自動監視の実行中は履歴を削除できません"
+                )
+        return RecordingHistoryRepository.from_runtime_paths(self.paths).delete(
+            recording_id
+        )
 
     def resolve_recording(self, recording_id: str) -> RecordingReference:
         return self._browser().resolve(recording_id)
@@ -577,18 +682,6 @@ class RecorderApplicationService:
 
     def reveal_recording(self, recording_id: str) -> RecordingReference:
         return self._browser().reveal(recording_id)
-
-    def detect_recovery(self) -> tuple[InterruptedDetection, ...]:
-        return RecoveryManager(paths=self.paths).detect_interrupted()
-
-    def list_recovery(self) -> tuple[RecordingHistoryEntry, ...]:
-        return RecordingHistoryRepository.from_runtime_paths(self.paths).recovery_entries()
-
-    def inspect_recovery(self, recording_id: str) -> MediaInspection:
-        return self._media_recovery_service().inspect(recording_id)
-
-    def repair_recovery(self, recording_id: str, *, dry_run: bool = True) -> MediaRepairResult:
-        return self._media_recovery_service().repair(recording_id, dry_run=dry_run)
 
     def list_preparations(self) -> tuple[UploadQueueItem, ...]:
         return UploadQueueStore(self.paths).list()
@@ -614,7 +707,9 @@ class RecorderApplicationService:
             metadata=metadata,
         )
 
-    def process_preparations(self, queue_id: str | None = None) -> tuple[UploadPreparationResult, ...]:
+    def process_preparations(
+        self, queue_id: str | None = None
+    ) -> tuple[UploadPreparationResult, ...]:
         return self._upload_preparation_service().process(queue_id)
 
     def close(self) -> None:
@@ -657,10 +752,14 @@ class RecorderApplicationService:
             )
             if not report.succeeded:
                 detail = report.error_summary or "失敗項目を取得できません"
-                raise ApplicationOperationError(f"自動監視の開始前診断に失敗しました: {detail}")
+                raise ApplicationOperationError(
+                    f"自動監視の開始前診断に失敗しました: {detail}"
+                )
             discovery = discover_ffmpeg(watch_config.ffmpeg_path)
             if not discovery.found or discovery.executable is None:
-                raise ApplicationOperationError("対戦開始判定に使うFFmpegを再検出できません")
+                raise ApplicationOperationError(
+                    "対戦開始判定に使うFFmpegを再検出できません"
+                )
             monitor = GameWindowMonitor(
                 process_name=watch_config.game_process_name,
                 title_contains=watch_config.game_window_title_contains,
@@ -717,7 +816,10 @@ class RecorderApplicationService:
                     visual_frame_generation=lambda: frame_stream.generation,
                 ),
             )
-            self._emit(callback, ApplicationEvent("watch", "自動監視を開始しました", state="watching"))
+            self._emit(
+                callback,
+                ApplicationEvent("watch", "自動監視を開始しました", state="watching"),
+            )
             while not self._watch_stop.is_set():
                 observation = (
                     start_monitor.observe()
@@ -755,7 +857,8 @@ class RecorderApplicationService:
                 if controller.current is not None:
                     if (
                         controller.current.duel_confirmed
-                        and controller.current.target.recording_id != confirmed_recording_id
+                        and controller.current.target.recording_id
+                        != confirmed_recording_id
                     ):
                         confirmed_recording_id = controller.current.target.recording_id
                         diagnostics.transition("duel_confirmed")
@@ -810,7 +913,10 @@ class RecorderApplicationService:
                 frame_stream.stop()
             if diagnostics is not None:
                 diagnostics.close()
-            self._emit(callback, ApplicationEvent("watch", "自動監視を停止しました", state="stopped"))
+            self._emit(
+                callback,
+                ApplicationEvent("watch", "自動監視を停止しました", state="stopped"),
+            )
 
     def _apply_automatic_visual_lifecycle(
         self,
@@ -832,11 +938,10 @@ class RecorderApplicationService:
         result_detected = prepared.result_detected_monotonic
         boundary_detected = prepared.boundary_detected_monotonic
         post_roll_complete = (
-            (result_detected is not None and time.monotonic() - result_detected >= 3.0)
-            or (
-                boundary_detected is not None
-                and time.monotonic() - boundary_detected >= 1.0
-            )
+            result_detected is not None and time.monotonic() - result_detected >= 3.0
+        ) or (
+            boundary_detected is not None
+            and time.monotonic() - boundary_detected >= 1.0
         )
         if abort_reason is None and not timed_out and not post_roll_complete:
             return None
@@ -846,7 +951,9 @@ class RecorderApplicationService:
         if abort_reason is not None or timed_out:
             reason = abort_reason or "45秒以内に対戦盤面を確認できませんでした"
             try:
-                RecordingHistoryRepository.from_runtime_paths(self.paths).delete(recording_id)
+                RecordingHistoryRepository.from_runtime_paths(self.paths).delete(
+                    recording_id
+                )
             except Exception as exc:
                 self._emit(
                     callback,
@@ -928,11 +1035,15 @@ class RecorderApplicationService:
         if status == self._visual_status:
             return
         self._visual_status = status
-        self._emit(callback, ApplicationEvent("visual", status.message, state=status.state))
+        self._emit(
+            callback, ApplicationEvent("visual", status.message, state=status.state)
+        )
 
     def _manual_snapshot_locked(self) -> RecordingSnapshot:
         if self._current is None:
-            return RecordingSnapshot(False, RecordingState.COMPLETED, None, None, None, 0.0)
+            return RecordingSnapshot(
+                False, RecordingState.COMPLETED, None, None, None, 0.0
+            )
         session = self._current.session
         return RecordingSnapshot(
             session.state is RecordingState.RECORDING,
@@ -942,15 +1053,6 @@ class RecorderApplicationService:
             session.started_at,
             _elapsed(session.started_at),
             session.result,
-        )
-
-    def _media_recovery_service(self) -> MediaRecoveryService:
-        discovery = discover_ffmpeg(self.load_config().config.ffmpeg_path)
-        if not discovery.found or discovery.executable is None:
-            raise ApplicationOperationError("FFmpegが見つかりません")
-        return MediaRecoveryService(
-            repository=RecordingHistoryRepository.from_runtime_paths(self.paths),
-            ffmpeg_executable=discovery.executable,
         )
 
     def _browser(self) -> RecordingBrowser:
@@ -967,7 +1069,9 @@ class RecorderApplicationService:
             raise ApplicationOperationError("FFmpegが見つかりません")
         repository = RecordingHistoryRepository.from_runtime_paths(self.paths)
         queue = UploadQueueStore(self.paths)
-        validator = UploadMediaValidator(ffprobe_executable=find_ffprobe(discovery.executable))
+        validator = UploadMediaValidator(
+            ffprobe_executable=find_ffprobe(discovery.executable)
+        )
         return UploadPreparationService(
             paths=self.paths,
             repository=repository,
@@ -991,7 +1095,9 @@ def _application_event(event: AutoRecordingEvent) -> ApplicationEvent:
         event.action.value,
         event.message,
         recording_id=event.recording_id,
-        state=event.result.state.value if event.result is not None else event.action.value,
+        state=event.result.state.value
+        if event.result is not None
+        else event.action.value,
     )
 
 

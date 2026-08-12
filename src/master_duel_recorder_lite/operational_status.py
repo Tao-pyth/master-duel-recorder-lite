@@ -7,13 +7,17 @@ from pathlib import Path
 
 from .config import LoadedAppConfig
 from .preflight import CheckStatus, PreflightReport, run_preflight
-from .recording_history import HistoryQuery, RecordingHistoryError, RecordingHistoryRepository
+from .recording_history import (
+    HistoryQuery,
+    RecordingHistoryError,
+    RecordingHistoryRepository,
+)
 from .recording_state_store import RecordingStateStore, RecordingStateStoreError
 from .runtime_paths import RuntimePaths
 from .upload_queue import UploadQueueError, UploadQueueState, UploadQueueStore
 
 
-STATUS_SCHEMA_VERSION = 1
+STATUS_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -37,7 +41,9 @@ def collect_operational_status(
 
     runner = preflight_runner or run_preflight
     try:
-        report = runner(paths=paths, config=loaded.config, config_loaded=loaded.config_loaded)
+        report = runner(
+            paths=paths, config=loaded.config, config_loaded=loaded.config_loaded
+        )
         environment = _environment_document(report, paths, loaded)
         environment_error = environment["status"] == "error"
     except Exception as exc:
@@ -69,20 +75,29 @@ def collect_operational_status(
         recording = {
             "status": "ok",
             "state": loaded_state.value.state if loaded_state is not None else "idle",
-            "recording_id": loaded_state.value.recording_id if loaded_state is not None else None,
-            "used_previous": loaded_state.used_previous if loaded_state is not None else False,
+            "recording_id": loaded_state.value.recording_id
+            if loaded_state is not None
+            else None,
+            "used_previous": loaded_state.used_previous
+            if loaded_state is not None
+            else False,
         }
         if loaded_state is not None and loaded_state.used_previous:
             recording["status"] = "warning"
             attention = True
     except RecordingStateStoreError as exc:
-        recording = {"status": "error", "state": "unknown", "recording_id": None, "used_previous": False}
+        recording = {
+            "status": "error",
+            "state": "unknown",
+            "recording_id": None,
+            "used_previous": False,
+        }
         errors.append(
             _error(
                 "recording",
                 "E_STATUS_RECORDING",
                 _redact(str(exc), paths, loaded),
-                "recovery listを実行してください。",
+                "statusとhistory checkで状態を確認してください。",
             )
         )
 
@@ -94,7 +109,9 @@ def collect_operational_status(
         history = {
             "status": "warning" if consistency else "ok",
             "total": len(entries),
-            "state_counts": dict(sorted(Counter(entry.state for entry in entries).items())),
+            "state_counts": dict(
+                sorted(Counter(entry.state for entry in entries).items())
+            ),
             "consistency_issues": len(consistency),
             "truncated": len(entries) == 1000,
         }
@@ -115,30 +132,6 @@ def collect_operational_status(
                 "history checkを実行してください。",
             )
         )
-
-    if repository is None:
-        recovery = {"status": "error", "pending": None, "state_counts": {}}
-    else:
-        try:
-            recovery_entries = repository.recovery_entries()
-            recovery = {
-                "status": "warning" if recovery_entries else "ok",
-                "pending": len(recovery_entries),
-                "state_counts": dict(
-                    sorted(Counter(entry.recovery_state for entry in recovery_entries).items())
-                ),
-            }
-            attention = attention or bool(recovery_entries)
-        except RecordingHistoryError as exc:
-            recovery = {"status": "error", "pending": None, "state_counts": {}}
-            errors.append(
-                _error(
-                    "recovery",
-                    "E_STATUS_RECOVERY",
-                    _redact(str(exc), paths, loaded),
-                    "recovery listを実行してください。",
-                )
-            )
 
     try:
         queue_items = UploadQueueStore(paths).list()
@@ -163,7 +156,11 @@ def collect_operational_status(
 
     if errors or environment_error:
         overall = "error"
-    elif attention or environment["status"] == "warning" or runtime["status"] == "warning":
+    elif (
+        attention
+        or environment["status"] == "warning"
+        or runtime["status"] == "warning"
+    ):
         overall = "warning"
     else:
         overall = "ok"
@@ -175,7 +172,6 @@ def collect_operational_status(
         "runtime": runtime,
         "recording": recording,
         "history": history,
-        "recovery": recovery,
         "upload_queue": upload_queue,
         "errors": errors,
     }

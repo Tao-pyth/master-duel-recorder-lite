@@ -2,14 +2,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from master_duel_recorder_lite.duel_catalog import DuelCatalogError, DuelCatalogRepository
+from master_duel_recorder_lite.duel_catalog import (
+    DuelCatalogError,
+    DuelCatalogRepository,
+)
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths
 
 
 class DuelCatalogRepositoryTest(unittest.TestCase):
     def repository(self, root: Path) -> DuelCatalogRepository:
-        return DuelCatalogRepository.from_runtime_paths(default_runtime_paths(user_data_dir=root))
+        return DuelCatalogRepository.from_runtime_paths(
+            default_runtime_paths(user_data_dir=root)
+        )
 
     def test_add_rename_and_delete_japanese_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -24,7 +29,9 @@ class DuelCatalogRepositoryTest(unittest.TestCase):
 
         self.assertEqual(renamed.name, "青眼デッキ")
         self.assertEqual(deleted.name, "ランク戦練習")
-        self.assertEqual([(item.kind, item.name) for item in entries], [("deck", "青眼デッキ")])
+        self.assertEqual(
+            [(item.kind, item.name) for item in entries], [("deck", "青眼デッキ")]
+        )
 
     def test_duplicate_normalized_name_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -76,15 +83,38 @@ class DuelCatalogRepositoryTest(unittest.TestCase):
             tags = reloaded.list_tags()
 
         self.assertEqual(decks[0].description, "更新済み")
-        self.assertIsNone(decks[0].color)
+        self.assertEqual(decks[0].color, "#2F6B5F")
         self.assertEqual(tags[0].description, "公式イベント")
         self.assertEqual(tags[0].color, "#112233")
+
+    def test_deck_color_and_usage_flags_are_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repository = self.repository(Path(tmp_dir) / "user_data")
+            deck = repository.add_deck("烙印", color="#123ABC")
+
+            updated = repository.update_deck(
+                deck.entry_id,
+                name=deck.name,
+                description="相手確認用",
+                color="#ABC123",
+                opponent_only=True,
+                hidden_from_history_statistics=True,
+            )
+            reloaded = self.repository(Path(tmp_dir) / "user_data").list_decks(
+                include_hidden=True
+            )[0]
+
+        self.assertEqual(updated.color, "#ABC123")
+        self.assertTrue(reloaded.opponent_only)
+        self.assertTrue(reloaded.hidden_from_history_statistics)
 
     def test_used_tag_is_archived_and_keeps_stable_recording_link(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir) / "user_data"
             repository = self.repository(root)
-            from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
+            from master_duel_recorder_lite.recording_history import (
+                RecordingHistoryRepository,
+            )
             from master_duel_recorder_lite.duel_records import DuelRecordRepository
 
             paths = default_runtime_paths(user_data_dir=root)

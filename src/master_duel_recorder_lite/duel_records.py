@@ -65,6 +65,7 @@ class DuelRecordValues:
     duel_type: str = "other"
     tags: tuple[str, ...] = ()
     notes: str = ""
+    season_id: int | None = None
 
     def normalized(self) -> DuelRecordValues:
         return DuelRecordValues(
@@ -76,6 +77,7 @@ class DuelRecordValues:
             duel_type=_choice(self.duel_type, DUEL_TYPES, "duel_type"),
             tags=_tags(self.tags),
             notes=_text(self.notes, MAX_NOTES_LENGTH, "notes", multiline=True),
+            season_id=_optional_id(self.season_id, "season_id"),
         )
 
 
@@ -98,6 +100,7 @@ class DuelRecord:
             "duel_type": self.values.duel_type,
             "tags": list(self.values.tags),
             "notes": self.values.notes,
+            "season_id": self.values.season_id,
             "revision": self.revision,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
@@ -137,7 +140,11 @@ class DuelRecordRepository:
         return _record(row, tags)
 
     def list(self, *, limit: int = 200, offset: int = 0) -> tuple[DuelRecord, ...]:
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 1000
+        ):
             raise ValueError("limitは1から1000の整数である必要があります")
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise ValueError("offsetは0以上の整数である必要があります")
@@ -147,7 +154,8 @@ class DuelRecordRepository:
                 (limit, offset),
             ).fetchall()
             records = tuple(
-                _record(row, self._read_tags(connection, row["recording_id"])) for row in rows
+                _record(row, self._read_tags(connection, row["recording_id"]))
+                for row in rows
             )
         return records
 
@@ -188,14 +196,19 @@ class DuelRecordRepository:
         identifier = _identifier(recording_id)
         normalized = values.normalized()
         normalized_source = _choice(source, SOURCES, "source")
-        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+        if isinstance(expected_revision, bool) or not isinstance(
+            expected_revision, int
+        ):
             raise ValueError("expected_revisionは整数である必要があります")
         if expected_revision < 0:
             raise ValueError("expected_revisionは0以上である必要があります")
         now = datetime.now(timezone.utc)
         timestamp = now.isoformat()
         try:
-            with closing(connect_history_database(self.database_path)) as connection, connection:
+            with (
+                closing(connect_history_database(self.database_path)) as connection,
+                connection,
+            ):
                 connection.execute("BEGIN IMMEDIATE")
                 recording = connection.execute(
                     "SELECT state FROM recordings WHERE recording_id = ?", (identifier,)
@@ -206,9 +219,15 @@ class DuelRecordRepository:
                     "SELECT * FROM duel_records WHERE recording_id = ?", (identifier,)
                 ).fetchone()
                 current_tags = (
-                    self._read_tags(connection, identifier) if current_row is not None else ()
+                    self._read_tags(connection, identifier)
+                    if current_row is not None
+                    else ()
                 )
-                current = _record(current_row, current_tags) if current_row is not None else None
+                current = (
+                    _record(current_row, current_tags)
+                    if current_row is not None
+                    else None
+                )
                 actual_revision = current.revision if current is not None else 0
                 if actual_revision != expected_revision:
                     raise DuelRecordConflictError(
@@ -219,13 +238,18 @@ class DuelRecordRepository:
                         "自動判定は既存の対戦記録を上書きできません。候補として確認してください"
                     )
                 revision = actual_revision + 1
+                own_deck_id = self._deck_id(connection, normalized.own_deck, timestamp)
+                opponent_deck_id = self._deck_id(
+                    connection, normalized.opponent_deck, timestamp
+                )
                 if current is None:
                     connection.execute(
                         """
                         INSERT INTO duel_records (
                             recording_id, status, result, play_order, own_deck,
-                            opponent_deck, duel_type, notes, revision, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            opponent_deck, duel_type, notes, revision, created_at, updated_at,
+                            season_id, own_deck_id, opponent_deck_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             identifier,
@@ -239,6 +263,9 @@ class DuelRecordRepository:
                             revision,
                             timestamp,
                             timestamp,
+                            normalized.season_id,
+                            own_deck_id,
+                            opponent_deck_id,
                         ),
                     )
                     created_at = now
@@ -247,7 +274,8 @@ class DuelRecordRepository:
                         """
                         UPDATE duel_records
                         SET status = ?, result = ?, play_order = ?, own_deck = ?,
-                            opponent_deck = ?, duel_type = ?, notes = ?, revision = ?, updated_at = ?
+                            opponent_deck = ?, duel_type = ?, notes = ?, revision = ?, updated_at = ?,
+                            season_id = ?, own_deck_id = ?, opponent_deck_id = ?
                         WHERE recording_id = ? AND revision = ?
                         """,
                         (
@@ -260,18 +288,24 @@ class DuelRecordRepository:
                             normalized.notes,
                             revision,
                             timestamp,
+                            normalized.season_id,
+                            own_deck_id,
+                            opponent_deck_id,
                             identifier,
                             expected_revision,
                         ),
                     )
                     if cursor.rowcount != 1:
-                        raise DuelRecordConflictError("対戦記録の更新競合を検出しました")
+                        raise DuelRecordConflictError(
+                            "対戦記録の更新競合を検出しました"
+                        )
                     created_at = current.created_at
                 connection.execute(
                     "DELETE FROM duel_record_tags WHERE recording_id = ?", (identifier,)
                 )
                 connection.execute(
-                    "DELETE FROM duel_record_tag_links WHERE recording_id = ?", (identifier,)
+                    "DELETE FROM duel_record_tag_links WHERE recording_id = ?",
+                    (identifier,),
                 )
                 connection.executemany(
                     "INSERT INTO duel_record_tags(recording_id, tag, normalized_tag) VALUES (?, ?, ?)",
@@ -356,9 +390,36 @@ class DuelRecordRepository:
         )
 
     @staticmethod
-    def _read_tags(connection: sqlite3.Connection, recording_id: str) -> tuple[str, ...]:
+    def _deck_id(
+        connection: sqlite3.Connection, name: str, timestamp: str
+    ) -> int | None:
+        if not name:
+            return None
+        key = unicodedata.normalize("NFC", name).casefold()
+        connection.execute(
+            """
+            INSERT INTO duel_catalog_entries (
+                kind, name, normalized_name, description, color, is_archived,
+                opponent_only, hidden_from_history_statistics, created_at, updated_at
+            ) VALUES ('deck', ?, ?, '', '#2F6B5F', 0, 0, 0, ?, ?)
+            ON CONFLICT(kind, normalized_name) DO UPDATE SET is_archived = 0
+            """,
+            (name, key, timestamp, timestamp),
+        )
+        row = connection.execute(
+            "SELECT entry_id FROM duel_catalog_entries WHERE kind = 'deck' AND normalized_name = ?",
+            (key,),
+        ).fetchone()
+        assert row is not None
+        return int(row["entry_id"])
+
+    @staticmethod
+    def _read_tags(
+        connection: sqlite3.Connection, recording_id: str
+    ) -> tuple[str, ...]:
         rows = connection.execute(
-            "SELECT tag FROM duel_record_tags WHERE recording_id = ? ORDER BY rowid", (recording_id,)
+            "SELECT tag FROM duel_record_tags WHERE recording_id = ? ORDER BY rowid",
+            (recording_id,),
         ).fetchall()
         return tuple(row["tag"] for row in rows)
 
@@ -400,6 +461,7 @@ def _record(row: sqlite3.Row, tags: tuple[str, ...]) -> DuelRecord:
             duel_type=row["duel_type"],
             tags=tags,
             notes=row["notes"],
+            season_id=row["season_id"],
         ),
         revision=row["revision"],
         created_at=_datetime(row["created_at"]),
@@ -410,7 +472,9 @@ def _record(row: sqlite3.Row, tags: tuple[str, ...]) -> DuelRecord:
 def _choice(value: str, allowed: set[str], key: str) -> str:
     normalized = unicodedata.normalize("NFC", value.strip()).casefold()
     if normalized not in allowed:
-        raise ValueError(f"{key}は{', '.join(sorted(allowed))}のいずれかである必要があります")
+        raise ValueError(
+            f"{key}は{', '.join(sorted(allowed))}のいずれかである必要があります"
+        )
     return normalized
 
 
@@ -447,6 +511,14 @@ def _tag_key(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
+def _optional_id(value: int | None, key: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{key}は1以上の整数である必要があります")
+    return value
+
+
 def _identifier(value: str) -> str:
     normalized = value.strip()
     if not normalized or len(normalized) > 200:
@@ -477,4 +549,6 @@ def _audit_json(value: dict[str, object]) -> str:
         "updated_at",
     }
     filtered = {key: item for key, item in value.items() if key in allowed}
-    return json.dumps(filtered, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        filtered, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )

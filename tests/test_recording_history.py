@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from master_duel_recorder_lite.duel_records import DuelRecordRepository, DuelRecordValues
+from master_duel_recorder_lite.duel_records import (
+    DuelRecordRepository,
+    DuelRecordValues,
+)
+from master_duel_recorder_lite.duel_catalog import DuelCatalogRepository
+from master_duel_recorder_lite.seasons import SeasonRepository
 from master_duel_recorder_lite.duel_timeline import DuelTimelineRepository
 from master_duel_recorder_lite.recording_history import (
     ConsistencyIssueKind,
@@ -58,7 +63,9 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
             )
             repository.mark_recording("recording-1", started_at=BASE_TIME)
             first = repository.finalize("recording-1", completed_result(output, size=5))
-            second = repository.finalize("recording-1", completed_result(output, size=5))
+            second = repository.finalize(
+                "recording-1", completed_result(output, size=5)
+            )
             entries = repository.query()
 
         self.assertEqual(first.state, "completed")
@@ -89,6 +96,61 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
             )
 
         self.assertEqual([entry.recording_id for entry in entries], ["b", "a"])
+
+    def test_query_combines_season_decks_and_tag_or_before_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repository = self.make_repository(root)
+            records = DuelRecordRepository(repository.database_path)
+            catalog = DuelCatalogRepository(repository.database_path)
+            seasons = SeasonRepository(repository.database_path)
+            season = seasons.add(
+                name="Season 40",
+                season_type="ranked",
+                duel_type="ranked",
+                start_date=BASE_TIME.date(),
+                end_date=BASE_TIME.date(),
+            )
+            for index, (recording_id, own, opponent, tags) in enumerate(
+                (
+                    ("target", "青眼", "烙印", ("大会",)),
+                    ("wrong-own", "粛声", "烙印", ("大会",)),
+                    ("wrong-tag", "青眼", "烙印", ("練習",)),
+                )
+            ):
+                repository.register_starting(
+                    recording_id=recording_id,
+                    output_path=root / "recordings" / f"{recording_id}.mkv",
+                    container="mkv",
+                    source="automatic",
+                    created_at=BASE_TIME + timedelta(seconds=index),
+                )
+                records.save(
+                    recording_id,
+                    DuelRecordValues(
+                        own_deck=own,
+                        opponent_deck=opponent,
+                        tags=tags,
+                        season_id=season.season_id,
+                    ),
+                    expected_revision=0,
+                )
+            decks = {item.name: item.entry_id for item in catalog.list_decks()}
+            tags = {item.name: item.entry_id for item in catalog.list_tags()}
+
+            entries = repository.query(
+                HistoryQuery(
+                    season_id=season.season_id,
+                    own_deck_id=decks["青眼"],
+                    opponent_deck_id=decks["烙印"],
+                    tag_entry_ids=(tags["大会"], tags["公式"])
+                    if "公式" in tags
+                    else (tags["大会"],),
+                    limit=1,
+                )
+            )
+
+        self.assertEqual([entry.recording_id for entry in entries], ["target"])
 
     def test_unknown_recording_returns_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -126,7 +188,7 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
             with self.assertRaisesRegex(RecordingHistoryError, "一致しません"):
                 repository.finalize("recording", completed_result(other, size=5))
 
-    def test_failed_result_is_classified_for_recovery(self) -> None:
+    def test_failed_result_keeps_failure_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             output = root / "recordings" / "partial.mkv"
@@ -154,10 +216,8 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
             entry = repository.finalize("failed", failed)
 
         self.assertEqual(entry.failure_code, "process_crash")
-        self.assertEqual(entry.recovery_policy, "manual_review")
-        self.assertEqual(entry.recovery_state, "pending")
 
-    def test_interrupted_active_recording_becomes_pending_recovery(self) -> None:
+    def test_interrupted_active_recording_becomes_failed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             output = root / "recordings" / "partial.mkv"
@@ -189,10 +249,11 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
 
         self.assertEqual(entry.state, "failed")
         self.assertEqual(entry.failure_code, "application_interrupted")
-        self.assertEqual(entry.recovery_state, "pending")
         self.assertEqual(entry.duration_seconds, 10.0)
 
-    def test_consistency_distinguishes_missing_untracked_and_size_mismatch(self) -> None:
+    def test_consistency_distinguishes_missing_untracked_and_size_mismatch(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             recordings = root / "recordings"
@@ -232,15 +293,13 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
         )
         self.assertTrue(untracked_preserved)
 
-    def test_delete_removes_files_recovery_and_all_recording_relations(self) -> None:
+    def test_delete_removes_file_and_all_recording_relations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             recordings = root / "recordings"
             output = recordings / "partial.mkv"
-            recovered = recordings / "recovered.mp4"
             recordings.mkdir()
             output.write_bytes(b"partial")
-            recovered.write_bytes(b"recovered")
             repository = self.make_repository(root)
             repository.register_starting(
                 recording_id="delete-me",
@@ -263,15 +322,6 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
                 ended_at=BASE_TIME + timedelta(seconds=10),
                 size_bytes=7,
             )
-            repository.add_recovery_artifact(
-                artifact_id="artifact",
-                recording_id="delete-me",
-                output_path=recovered,
-                kind="recovered",
-                status="valid",
-                size_bytes=9,
-                diagnostic=None,
-            )
             DuelRecordRepository(repository.database_path).save(
                 "delete-me",
                 DuelRecordValues(own_deck="青眼", tags=("大会",)),
@@ -288,10 +338,11 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
 
             with closing(sqlite3.connect(repository.database_path)) as connection:
                 counts = {
-                    table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    table: connection.execute(
+                        f"SELECT COUNT(*) FROM {table}"
+                    ).fetchone()[0]
                     for table in (
                         "recordings",
-                        "recovery_artifacts",
                         "duel_records",
                         "duel_record_tags",
                         "duel_record_changes",
@@ -300,11 +351,9 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
                 }
 
         self.assertEqual(result.recording_id, "delete-me")
-        self.assertEqual(set(result.deleted_files), {output.resolve(), recovered.resolve()})
+        self.assertEqual(set(result.deleted_files), {output.resolve()})
         self.assertFalse(output.exists())
-        self.assertFalse(recovered.exists())
         self.assertIsNone(repository.get("delete-me"))
-        self.assertEqual(repository.recovery_entries(), ())
         self.assertEqual(set(counts.values()), {0})
 
     def test_delete_with_missing_file_still_removes_history(self) -> None:

@@ -9,12 +9,9 @@ from master_duel_recorder_lite.gui import (
     RECORD_STATUS_PRESENTATIONS,
     RecorderGui,
     WAITING_ACTIVITY_PREFIX,
-    _inspection_status_label,
     _format_statistics_detail,
     _format_win_rate,
     _parse_filter_date,
-    _recovery_failure_label,
-    _recovery_state_label,
     incomplete_duel_count_presentation,
     record_status_presentation,
 )
@@ -62,22 +59,21 @@ class GuiActivityTest(unittest.TestCase):
             ["対戦開始を判定中です (4s)", "自動監視を開始しました"],
         )
 
-    def test_history_row_has_four_distinct_icon_actions_and_keyboard_paths(self) -> None:
+    def test_history_row_has_four_distinct_icon_actions_and_keyboard_paths(
+        self,
+    ) -> None:
         self.assertEqual(
             [item[1] for item in HISTORY_ROW_ACTIONS],
             ["再生", "対戦記録を編集", "保存場所を開く", "削除"],
         )
         self.assertEqual(len({ICON_GLYPHS[item[0]] for item in HISTORY_ROW_ACTIONS}), 4)
-        self.assertEqual([item[2] for item in HISTORY_ROW_ACTIONS], ["Enter", "Ctrl+E", "Ctrl+O", "Delete"])
+        self.assertEqual(
+            [item[2] for item in HISTORY_ROW_ACTIONS],
+            ["Enter", "Ctrl+E", "Ctrl+O", "Delete"],
+        )
         self.assertTrue(
             all(ord(ICON_GLYPHS[item[0]]) >= 0xE000 for item in HISTORY_ROW_ACTIONS)
         )
-
-    def test_recovery_states_explain_whether_repair_is_possible(self) -> None:
-        self.assertEqual(_recovery_state_label("repairable"), "修復可能")
-        self.assertEqual(_recovery_state_label("unrecoverable"), "修復不可")
-        self.assertEqual(_recovery_failure_label("output_empty"), "空ファイル")
-        self.assertEqual(_inspection_status_label("valid"), "読取可能")
 
     def test_removing_waiting_activity_preserves_other_history(self) -> None:
         self.gui._activity("録画対象を保存しました")
@@ -113,7 +109,9 @@ class GuiActivityTest(unittest.TestCase):
         self.assertIn("対戦確認中", candidate.text)
         self.assertIn("録画中", recording.text)
         self.assertIn("対戦記録中", recording.text)
-        self.assertEqual(len({waiting.background, candidate.background, recording.background}), 3)
+        self.assertEqual(
+            len({waiting.background, candidate.background, recording.background}), 3
+        )
 
     def test_every_record_status_has_visible_text_and_contrast_colors(self) -> None:
         self.assertEqual(

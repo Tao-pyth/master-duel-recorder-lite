@@ -22,6 +22,8 @@ class StatisticsFilter:
     own_deck: str | None = None
     tag_entry_id: int | None = None
     play_order: str | None = None
+    season_id: int | None = None
+    season_unassigned: bool = False
 
     def __post_init__(self) -> None:
         if self.date_from is not None and not isinstance(self.date_from, date):
@@ -32,12 +34,22 @@ class StatisticsFilter:
             if self.date_from > self.date_to:
                 raise ValueError("開始日は終了日以前である必要があります")
         if self.tag_entry_id is not None:
-            if isinstance(self.tag_entry_id, bool) or not isinstance(self.tag_entry_id, int):
+            if isinstance(self.tag_entry_id, bool) or not isinstance(
+                self.tag_entry_id, int
+            ):
                 raise ValueError("tag_entry_idは整数である必要があります")
             if self.tag_entry_id <= 0:
                 raise ValueError("tag_entry_idは1以上である必要があります")
         if self.play_order is not None and self.play_order not in PLAY_ORDER_FILTERS:
             raise ValueError(f"未対応の先後条件です: {self.play_order}")
+        if self.season_id is not None and (
+            isinstance(self.season_id, bool)
+            or not isinstance(self.season_id, int)
+            or self.season_id < 1
+        ):
+            raise ValueError("season_idは1以上の整数である必要があります")
+        if self.season_id is not None and self.season_unassigned:
+            raise ValueError("シーズン指定と未設定指定は同時に使用できません")
 
 
 @dataclass(frozen=True)
@@ -74,6 +86,7 @@ class StatisticsDashboard:
     filtered: StatisticsMetric
     by_deck: tuple[StatisticsBreakdown, ...]
     by_play_order: tuple[StatisticsBreakdown, ...]
+    by_deck_play_order: tuple[StatisticsBreakdown, ...]
     trend: tuple[StatisticsTrendPoint, ...]
     filters: StatisticsFilter
     granularity: str
@@ -85,6 +98,7 @@ class _StatisticsRow:
     result: str
     play_order: str
     own_deck: str
+    season_id: int | None
 
 
 class DuelStatisticsRepository:
@@ -120,12 +134,15 @@ class DuelStatisticsRepository:
             filtered=_metric(filtered_rows),
             by_deck=_breakdown_by_deck(filtered_rows),
             by_play_order=_breakdown_by_play_order(filtered_rows),
+            by_deck_play_order=_breakdown_by_deck_play_order(filtered_rows),
             trend=_trend(filtered_rows, selected, granularity),
             filters=selected,
             granularity=granularity,
         )
 
-    def _read_rows(self, *, tag_entry_id: int | None = None) -> tuple[_StatisticsRow, ...]:
+    def _read_rows(
+        self, *, tag_entry_id: int | None = None
+    ) -> tuple[_StatisticsRow, ...]:
         tag_clause = ""
         parameters: tuple[object, ...] = ()
         if tag_entry_id is not None:
@@ -146,12 +163,18 @@ class DuelStatisticsRepository:
                     duel.result,
                     duel.play_order,
                     duel.own_deck
+                    , duel.season_id
                 FROM recordings AS recording
                 JOIN duel_records AS duel
                   ON duel.recording_id = recording.recording_id
                 WHERE recording.state = 'completed'
                   AND duel.status = 'confirmed'
                   AND duel.result IN ('win', 'loss', 'draw')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM duel_catalog_entries AS hidden_deck
+                      WHERE hidden_deck.entry_id = duel.own_deck_id
+                        AND hidden_deck.hidden_from_history_statistics = 1
+                  )
                   {tag_clause}
                 ORDER BY occurred_at, recording.recording_id
                 """,
@@ -163,9 +186,11 @@ class DuelStatisticsRepository:
                 result=str(row["result"]),
                 play_order=str(row["play_order"]),
                 own_deck=str(row["own_deck"]),
+                season_id=row["season_id"],
             )
             for row in rows
         )
+
 
 def _matches(row: _StatisticsRow, filters: StatisticsFilter) -> bool:
     local_date = row.occurred_at.astimezone().date()
@@ -177,17 +202,25 @@ def _matches(row: _StatisticsRow, filters: StatisticsFilter) -> bool:
         return False
     if filters.play_order is not None and row.play_order != filters.play_order:
         return False
+    if filters.season_id is not None and row.season_id != filters.season_id:
+        return False
+    if filters.season_unassigned and row.season_id is not None:
+        return False
     return True
 
 
-def _metric(rows: tuple[_StatisticsRow, ...] | list[_StatisticsRow]) -> StatisticsMetric:
+def _metric(
+    rows: tuple[_StatisticsRow, ...] | list[_StatisticsRow],
+) -> StatisticsMetric:
     wins = sum(row.result == "win" for row in rows)
     losses = sum(row.result == "loss" for row in rows)
     draws = sum(row.result == "draw" for row in rows)
     return StatisticsMetric(len(rows), wins, losses, draws)
 
 
-def _breakdown_by_deck(rows: tuple[_StatisticsRow, ...]) -> tuple[StatisticsBreakdown, ...]:
+def _breakdown_by_deck(
+    rows: tuple[_StatisticsRow, ...],
+) -> tuple[StatisticsBreakdown, ...]:
     grouped: dict[str, list[_StatisticsRow]] = defaultdict(list)
     labels: dict[str, str] = {}
     for row in rows:
@@ -197,7 +230,9 @@ def _breakdown_by_deck(rows: tuple[_StatisticsRow, ...]) -> tuple[StatisticsBrea
     items = (
         StatisticsBreakdown(key, labels[key], _metric(grouped[key])) for key in grouped
     )
-    return tuple(sorted(items, key=lambda item: (-item.metric.matches, item.label.casefold())))
+    return tuple(
+        sorted(items, key=lambda item: (-item.metric.matches, item.label.casefold()))
+    )
 
 
 def _breakdown_by_play_order(
@@ -212,6 +247,31 @@ def _breakdown_by_play_order(
         for key in ("first", "second", "unknown")
         if key in grouped
     )
+
+
+def _breakdown_by_deck_play_order(
+    rows: tuple[_StatisticsRow, ...],
+) -> tuple[StatisticsBreakdown, ...]:
+    grouped: dict[tuple[str, str], list[_StatisticsRow]] = defaultdict(list)
+    labels: dict[str, str] = {}
+    order_labels = {"first": "先攻時", "second": "後攻時", "unknown": "未設定"}
+    for row in rows:
+        deck_key = _normalized(row.own_deck) if row.own_deck.strip() else ""
+        labels.setdefault(deck_key, row.own_deck.strip() or "未設定")
+        grouped[(deck_key, row.play_order)].append(row)
+    result: list[StatisticsBreakdown] = []
+    for deck_key in sorted(labels, key=lambda key: labels[key].casefold()):
+        for play_order in ("first", "second", "unknown"):
+            values = grouped.get((deck_key, play_order))
+            if values:
+                result.append(
+                    StatisticsBreakdown(
+                        f"{deck_key}:{play_order}",
+                        f"{labels[deck_key]} {order_labels[play_order]}",
+                        _metric(values),
+                    )
+                )
+    return tuple(result)
 
 
 def _trend(
@@ -230,12 +290,16 @@ def _trend(
     last = _period_start(end, granularity)
     grouped: dict[date, list[_StatisticsRow]] = defaultdict(list)
     for row in rows:
-        grouped[_period_start(row.occurred_at.astimezone().date(), granularity)].append(row)
+        grouped[_period_start(row.occurred_at.astimezone().date(), granularity)].append(
+            row
+        )
     points: list[StatisticsTrendPoint] = []
     current = first
     while current <= last:
         points.append(
-            StatisticsTrendPoint(current, _period_label(current, granularity), _metric(grouped[current]))
+            StatisticsTrendPoint(
+                current, _period_label(current, granularity), _metric(grouped[current])
+            )
         )
         current = _next_period(current, granularity)
     return tuple(points)

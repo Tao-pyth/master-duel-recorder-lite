@@ -12,6 +12,8 @@ from master_duel_recorder_lite.history_database import (
     _migrate_to_v3,
     _migrate_to_v4,
     _migrate_to_v5,
+    _migrate_to_v6,
+    _migrate_to_v7,
     initialize_history_database,
 )
 
@@ -22,12 +24,118 @@ def create_version_zero_database(path: Path) -> None:
             "CREATE TABLE schema_version "
             "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
         )
-        connection.execute("INSERT INTO schema_version(singleton, version) VALUES (1, 0)")
+        connection.execute(
+            "INSERT INTO schema_version(singleton, version) VALUES (1, 0)"
+        )
         connection.execute("CREATE TABLE legacy_marker (value TEXT NOT NULL)")
         connection.execute("INSERT INTO legacy_marker(value) VALUES ('preserve-me')")
 
 
+def create_version_six_database(path: Path) -> None:
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute(
+            "CREATE TABLE schema_version "
+            "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+        )
+        connection.execute("INSERT INTO schema_version VALUES (1, 6)")
+        for migration in (
+            _migrate_to_v1,
+            _migrate_to_v2,
+            _migrate_to_v3,
+            _migrate_to_v4,
+            _migrate_to_v5,
+            _migrate_to_v6,
+        ):
+            migration(connection)
+        timestamp = "2026-08-12T00:00:00+00:00"
+        connection.execute(
+            "INSERT INTO recordings (recording_id, state, source, output_path, container, "
+            "created_at, diagnostics_json, updated_at) VALUES "
+            "('recording', 'failed', 'automatic', 'original.mkv', 'mkv', ?, '[]', ?)",
+            (timestamp, timestamp),
+        )
+        connection.execute(
+            "INSERT INTO recovery_artifacts "
+            "(artifact_id, recording_id, kind, status, output_path, created_at, updated_at) "
+            "VALUES ('artifact', 'recording', 'recovered', 'valid', "
+            "'recovered/recovered.mkv', ?, ?)",
+            (timestamp, timestamp),
+        )
+
+
 class HistoryDatabaseTest(unittest.TestCase):
+    def test_version_six_removes_only_recovery_artifacts_after_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            recordings = root / "recordings"
+            recovered = recordings / "recovered" / "recovered.mkv"
+            original = recordings / "original.mkv"
+            recovered.parent.mkdir(parents=True)
+            recovered.write_bytes(b"recovered")
+            original.write_bytes(b"original")
+            path = root / "history.sqlite3"
+            create_version_six_database(path)
+
+            info = initialize_history_database(path, recordings_root=recordings)
+            with closing(sqlite3.connect(path)) as connection:
+                recovery_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'recovery_artifacts'"
+                ).fetchone()
+                recording = connection.execute(
+                    "SELECT output_path, failure_code FROM recordings"
+                ).fetchone()
+            original_exists = original.exists()
+            recovered_exists = recovered.exists()
+
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
+        self.assertIsNone(recovery_table)
+        self.assertEqual(recording, ("original.mkv", None))
+        self.assertTrue(original_exists)
+        self.assertFalse(recovered_exists)
+
+    def test_recovery_artifact_is_restored_when_migration_fails(self) -> None:
+        def fail_v8(_connection: sqlite3.Connection) -> None:
+            raise RuntimeError("injected failure")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            recordings = root / "recordings"
+            recovered = recordings / "recovered" / "recovered.mkv"
+            recovered.parent.mkdir(parents=True)
+            recovered.write_bytes(b"recovered")
+            path = root / "history.sqlite3"
+            create_version_six_database(path)
+            migrations = {
+                1: _migrate_to_v1,
+                2: _migrate_to_v2,
+                3: _migrate_to_v3,
+                4: _migrate_to_v4,
+                5: _migrate_to_v5,
+                6: _migrate_to_v6,
+                7: _migrate_to_v7,
+                8: fail_v8,
+            }
+
+            with self.assertRaises(HistoryDatabaseError):
+                initialize_history_database(
+                    path,
+                    recordings_root=recordings,
+                    migrations=migrations,
+                )
+            with closing(sqlite3.connect(path)) as connection:
+                version = connection.execute(
+                    "SELECT version FROM schema_version WHERE singleton = 1"
+                ).fetchone()[0]
+                artifact = connection.execute(
+                    "SELECT output_path FROM recovery_artifacts"
+                ).fetchone()
+            recovered_exists = recovered.exists()
+
+        self.assertEqual(version, 6)
+        self.assertEqual(artifact, ("recovered/recovered.mkv",))
+        self.assertTrue(recovered_exists)
+
     def test_new_database_is_initialized_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "db" / "history.sqlite3"
@@ -84,6 +192,8 @@ class HistoryDatabaseTest(unittest.TestCase):
                         4: fail_after_change,
                         5: lambda _connection: None,
                         6: lambda _connection: None,
+                        7: lambda _connection: None,
+                        8: lambda _connection: None,
                     },
                 )
 
@@ -94,7 +204,9 @@ class HistoryDatabaseTest(unittest.TestCase):
                 rolled_back = connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'must_rollback'"
                 ).fetchone()
-                marker = connection.execute("SELECT value FROM legacy_marker").fetchone()[0]
+                marker = connection.execute(
+                    "SELECT value FROM legacy_marker"
+                ).fetchone()[0]
             backups = tuple(path.parent.glob("*.backup.sqlite3"))
 
         self.assertEqual(version, 0)
@@ -136,7 +248,9 @@ class HistoryDatabaseTest(unittest.TestCase):
             with self.assertRaisesRegex(HistoryDatabaseError, "recordings"):
                 initialize_history_database(path)
 
-    def test_version_one_failed_record_is_migrated_to_pending_recovery(self) -> None:
+    def test_version_one_failed_record_keeps_failure_code_without_recovery_columns(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "history.sqlite3"
             with closing(sqlite3.connect(path)) as connection, connection:
@@ -160,11 +274,11 @@ class HistoryDatabaseTest(unittest.TestCase):
             info = initialize_history_database(path)
             with closing(sqlite3.connect(path)) as connection:
                 row = connection.execute(
-                    "SELECT failure_code, recovery_policy, recovery_state FROM recordings"
+                    "SELECT failure_code FROM recordings"
                 ).fetchone()
 
         self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
-        self.assertEqual(row, ("legacy_failure", "manual_review", "pending"))
+        self.assertEqual(row, ("legacy_failure",))
 
     def test_version_two_is_backed_up_before_duel_record_migration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -340,7 +454,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                     "SELECT recording_id FROM duel_record_tag_links"
                 ).fetchall()
 
-        self.assertEqual(info.version, 6)
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(catalog, ("", None, 0))
         self.assertEqual(links, [("recording",)])
 

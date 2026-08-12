@@ -37,9 +37,11 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         result: str,
         play_order: str,
         deck: str,
+        opponent_deck: str = "",
         tags: tuple[str, ...] = (),
         status: str = "confirmed",
         state: str = "completed",
+        season_id: int | None = None,
     ) -> None:
         self.history.register_starting(
             recording_id=recording_id,
@@ -60,12 +62,14 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
                 result=result,
                 play_order=play_order,
                 own_deck=deck,
+                opponent_deck=opponent_deck,
                 tags=tags,
+                season_id=season_id,
             ),
             expected_revision=0,
         )
         self.catalog.remember_record_values(
-            DuelRecordValues(own_deck=deck, tags=tags)
+            DuelRecordValues(own_deck=deck, opponent_deck=opponent_deck, tags=tags)
         )
 
     def test_overall_excludes_drafts_unknown_results_and_failed_recordings(self) -> None:
@@ -160,6 +164,43 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual([point.label for point in dashboard.trend], ["2026/01", "2026/02", "2026/03"])
         self.assertEqual([point.metric.matches for point in dashboard.trend], [1, 0, 1])
         self.assertEqual([point.metric.wins for point in dashboard.trend], [1, 0, 0])
+
+    def test_hidden_own_deck_is_excluded_but_hidden_opponent_is_not(self) -> None:
+        base = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+        self._record(
+            "hidden-own",
+            occurred_at=base,
+            result="win",
+            play_order="first",
+            deck="非表示デッキ",
+        )
+        self._record(
+            "hidden-opponent",
+            occurred_at=base,
+            result="loss",
+            play_order="second",
+            deck="青眼",
+            opponent_deck="非表示デッキ",
+        )
+        hidden = next(
+            item for item in self.catalog.list_decks() if item.name == "非表示デッキ"
+        )
+        self.catalog.update_deck(
+            hidden.entry_id,
+            name=hidden.name,
+            description=hidden.description,
+            color=hidden.color or "#4F6F8F",
+            opponent_only=False,
+            hidden_from_history_statistics=True,
+        )
+
+        dashboard = self.statistics.dashboard()
+
+        self.assertEqual(dashboard.overall.matches, 1)
+        self.assertEqual(dashboard.overall.losses, 1)
+        self.assertEqual(
+            [item.label for item in dashboard.by_deck_play_order], ["青眼 後攻時"]
+        )
 
     def test_filter_validation_rejects_invalid_ranges_and_choices(self) -> None:
         with self.assertRaises(ValueError):
