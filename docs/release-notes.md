@@ -1,5 +1,20 @@
 # リリースノート
 
+## V0.21.3: V0.22.0-V0.25.0実装計画策定 - 2026-08-13
+
+- V0.22.0を「戦績入力体験」とし、簡易入力、候補値、未完了連続処理、一括編集、保存済みフィルターを計画した
+- V0.23.0を「自動監視信頼性」とし、単一状態機械、イベント別評価、診断レポート、Windows通知、実戦E2Eを計画した
+- V0.24.0を「データ保全」とし、原子的バックアップ、検証付き復元、統合診断、録画再関連付け、重複検出を計画した
+- V0.25.0を「シーズンレポート」とし、期間比較、デッキ・先後・コイントス分析、推移、振り返り、HTML出力を計画した
+- 4 Milestone、4バージョンラベル、4親Issue、48子Issueを作成し、Issue #276 - #327へ細分化した
+- `docs/implementation-plan-v0.22-v0.25.md`を追加し、実装順、重要な設計判断、バージョン間依存、完了条件を記録した
+- 本版ではV0.22.0以降の機能実装を行わず、V0.21.2の既存挙動を維持する
+- Ruff、単体テスト362件（skip 2件）、CLI/GUI EXEビルド、両EXEのV0.21.3スモークを通過した
+- CLI EXE SHA-256: `BCCE431F8C7390C2D7D8A0E50F56A14914BAD0B5DDB53EF10151842EC5B1BE40`
+- GUI EXE SHA-256: `F42F62F9047D321E6E5638A6585290CBFD0795E3E0DC198EEDB2F5F7E7F144B6`
+
+追跡: [V0.21.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/48)、Issue #328、[V0.22.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/44)から[V0.25.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/47)、Issue #276 - #327
+
 ## V0.21.2: 初期画面・戦績更新排他 - 2026-08-13
 
 - 初期画面の録画操作、状態、ログを維持し、録画なしの「戦績を追加」を追加した
