@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import threading
 import time
+import zipfile
 from uuid import uuid4
 
 from .visual_detection import FrameAnalysis
@@ -118,6 +119,20 @@ class VisualDiagnosticSession:
                 return
             self._closed = True
             self._write(ended_at=self.clock().astimezone(timezone.utc))
+
+    def export(self, destination: Path) -> Path:
+        """Issue添付用に数値JSONだけをZIPへ格納します。"""
+        target = destination.expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(f"{target.suffix}.tmp")
+        with self._lock:
+            self._write()
+            with zipfile.ZipFile(
+                temporary, "w", compression=zipfile.ZIP_DEFLATED
+            ) as archive:
+                archive.write(self.path, arcname=self.path.name)
+        os.replace(temporary, target)
+        return target
 
     def _write(self, *, ended_at: datetime | None = None) -> None:
         document = {

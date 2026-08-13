@@ -2,6 +2,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from master_duel_recorder_lite.detection import DetectionSignal, DuelObservation
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.ffmpeg import FfmpegVersion
 from master_duel_recorder_lite.ffmpeg_setup import FfmpegInstallResult
+from master_duel_recorder_lite.operation_state import OperationState
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
@@ -31,6 +33,46 @@ from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
+    def test_stopping_finished_watch_preserves_failed_state(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        service._operation_state.transition(OperationState.FAILED, "監視に失敗しました")
+        service._watch_thread = SimpleNamespace(is_alive=lambda: False)
+
+        service.stop_watch()
+
+        self.assertIs(service.operation_snapshot().state, OperationState.FAILED)
+        self.assertIsNone(service._watch_thread)
+
+    def test_notification_failure_does_not_escape_service(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        service._notifications.notify = Mock(side_effect=OSError("notification failed"))
+
+        with patch.object(
+            service,
+            "load_config",
+            return_value=SimpleNamespace(config=AppConfig()),
+        ):
+            service._notify("started", "録画開始", "recording:started")
+
+    def test_visual_diagnostic_export_contains_latest_json_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            source = service.paths.logs / "visual-monitor"
+            source.mkdir(parents=True)
+            for index in range(12):
+                (source / f"{index:02d}.json").write_text(
+                    '{"schema_version":1}', encoding="utf-8"
+                )
+            (source / "capture.bmp").write_bytes(b"BM")
+
+            target = service.export_visual_diagnostics(Path(tmp_dir) / "diagnostic.zip")
+            with zipfile.ZipFile(target) as archive:
+                names = archive.namelist()
+
+        self.assertEqual(len(names), 10)
+        self.assertTrue(all(name.endswith(".json") for name in names))
+        self.assertNotIn("capture.bmp", names)
+
     def test_next_duel_boundary_stops_recording_after_one_second(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))
         event = AutoRecordingEvent(

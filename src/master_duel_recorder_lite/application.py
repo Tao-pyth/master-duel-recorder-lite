@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
+import shutil
 import threading
 import time
 
@@ -69,6 +70,12 @@ from .ffmpeg_setup import (
 from .frame_capture import FrameCaptureResult, PersistentFfmpegRegionFrameCapture
 from .game_window import GameWindowMonitor, GameWindowStatus, WindowSnapshot
 from .master_duel_detector import MasterDuelWindowDetector
+from .operation_state import (
+    OperationAction,
+    OperationSnapshot,
+    OperationState,
+    OperationStateMachine,
+)
 from .preflight import PreflightReport, run_preflight
 from .recorder import PreparedRecording, prepare_recording
 from .recording_history import (
@@ -91,6 +98,7 @@ from .upload_queue import UploadQueueItem, UploadQueueStore
 from .visual_detection import DetectionCandidate, FrameAnalysis
 from .visual_diagnostics import VisualDiagnosticSession
 from .visual_worker import VisualDetectionStatus
+from .windows_notification import NotificationMessage, WindowsNotificationService
 
 
 class ApplicationOperationError(RuntimeError):
@@ -266,6 +274,26 @@ class RecorderApplicationService:
         self._visual_status = VisualDetectionStatus(
             "disabled", "録画開始後に自動判定状態を表示します", 0, 0, 0
         )
+        self._operation_state = OperationStateMachine()
+        self._notifications = WindowsNotificationService()
+
+    def operation_snapshot(self) -> OperationSnapshot:
+        return self._operation_state.snapshot
+
+    def _transition_operation(self, state: OperationState, message: str) -> None:
+        self._operation_state.transition(state, message)
+
+    def _notify(self, event: str, message: str, key: str) -> None:
+        try:
+            self._notifications.enabled = (
+                self.load_config().config.windows_notifications_enabled
+            )
+            self._notifications.notify(
+                NotificationMessage(event, "Master Duel Recorder Lite", message, key)
+            )
+        except Exception:
+            # OS notifications are supplementary and must never interrupt recording.
+            return
 
     def load_config(self) -> LoadedAppConfig:
         return load_app_config(
@@ -369,7 +397,12 @@ class RecorderApplicationService:
                 raise ApplicationOperationError("録画はすでに実行中です")
             if self.watch_active:
                 raise ApplicationOperationError("自動監視中は手動録画を開始できません")
+            try:
+                self._operation_state.require(OperationAction.START_MANUAL)
+            except RuntimeError as exc:
+                raise ApplicationOperationError(str(exc)) from exc
             self._manual_starting = True
+            self._transition_operation(OperationState.MANUAL_STARTING, "手動録画を開始しています")
 
         prepared: PreparedRecording | None = None
         try:
@@ -417,6 +450,12 @@ class RecorderApplicationService:
                 self._current = prepared
                 self._visual_status = prepared.visual_detection_status
                 self._manual_starting = False
+                self._transition_operation(OperationState.MANUAL_RECORDING, "手動録画中")
+                self._notify(
+                    "recording_started",
+                    "手動録画を開始しました",
+                    f"{prepared.target.recording_id}:started",
+                )
                 return self._manual_snapshot_locked()
         except BaseException:
             try:
@@ -425,6 +464,7 @@ class RecorderApplicationService:
             finally:
                 with self._lock:
                     self._manual_starting = False
+                    self._transition_operation(OperationState.FAILED, "手動録画を開始できませんでした")
             raise
 
     def recording_snapshot(self) -> RecordingSnapshot:
@@ -440,19 +480,59 @@ class RecorderApplicationService:
                 self._visual_status = self._current.visual_detection_status
             return self._visual_status
 
+    def export_visual_diagnostics(self, destination: Path) -> Path:
+        source = self.paths.logs / "visual-monitor"
+        files = sorted(source.glob("*.json"), key=lambda item: item.stat().st_mtime_ns)
+        if not files:
+            raise ApplicationOperationError("出力できる自動監視診断がありません")
+        target = destination.expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(f"{target.suffix}.tmp")
+        import zipfile
+
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in files[-10:]:
+                archive.write(path, arcname=path.name)
+        shutil.move(str(temporary), str(target))
+        return target
+
     def stop_recording(self) -> RecordingSnapshot:
         with self._lock:
+            try:
+                self._operation_state.require(OperationAction.STOP_RECORDING)
+            except RuntimeError as exc:
+                raise ApplicationOperationError(str(exc)) from exc
             if self._manual_starting:
                 raise ApplicationOperationError("録画の開始処理中は停止できません")
             if self._current is None:
                 raise ApplicationOperationError("実行中の手動録画はありません")
             prepared = self._current
+            self._transition_operation(OperationState.STOPPING, "手動録画を停止しています")
+            result: RecordingResult | None = None
             try:
                 result = prepared.stop()
             finally:
                 self._visual_status = prepared.visual_detection_status
                 prepared.release()
                 self._current = None
+                self._transition_operation(
+                    OperationState.IDLE
+                    if result is not None and result.state is not RecordingState.FAILED
+                    else OperationState.FAILED,
+                    "待機中"
+                    if result is not None and result.state is not RecordingState.FAILED
+                    else "録画停止に失敗しました",
+                )
+            assert result is not None
+            self._notify(
+                "recording_stopped"
+                if result.state is not RecordingState.FAILED
+                else "recording_failed",
+                "録画を停止しました"
+                if result.state is not RecordingState.FAILED
+                else "録画に失敗しました",
+                f"{prepared.target.recording_id}:{result.state.value}",
+            )
             return RecordingSnapshot(
                 False,
                 result.state,
@@ -478,7 +558,12 @@ class RecorderApplicationService:
                 raise ApplicationOperationError("手動録画中は自動監視を開始できません")
             if self.watch_active:
                 raise ApplicationOperationError("自動監視はすでに実行中です")
+            try:
+                self._operation_state.require(OperationAction.START_WATCH)
+            except RuntimeError as exc:
+                raise ApplicationOperationError(str(exc)) from exc
             self._watch_stop.clear()
+            self._transition_operation(OperationState.WATCH_STARTING, "自動監視を開始しています")
             thread = threading.Thread(
                 target=self._watch_loop,
                 args=(callback,),
@@ -493,12 +578,27 @@ class RecorderApplicationService:
             thread = self._watch_thread
             if thread is None:
                 return
+            if not thread.is_alive():
+                self._watch_thread = None
+                return
+            snapshot = self._operation_state.snapshot
+            if snapshot.state not in {
+                OperationState.STOPPING,
+                OperationState.CLOSING,
+                OperationState.FAILED,
+            }:
+                self._transition_operation(OperationState.STOPPING, "自動監視を停止しています")
             self._watch_stop.set()
         thread.join(timeout_seconds)
         if thread.is_alive():
             raise ApplicationOperationError("自動監視を正常停止できません")
         with self._lock:
             self._watch_thread = None
+            if self._operation_state.snapshot.state not in {
+                OperationState.IDLE,
+                OperationState.FAILED,
+            }:
+                self._transition_operation(OperationState.IDLE, "待機中")
 
     def list_history(
         self, *, limit: int = 200, query: HistoryQuery | None = None
@@ -606,10 +706,12 @@ class RecorderApplicationService:
     def _require_data_management_idle(self) -> None:
         with self._lock:
             self._collect_manual_terminal_locked()
-            if self._manual_starting or self._current is not None or self.watch_active:
+            try:
+                self._operation_state.require(OperationAction.MANAGE_DATA)
+            except RuntimeError as exc:
                 raise ApplicationOperationError(
                     "録画または自動監視の実行中は管理データを変更できません"
-                )
+                ) from exc
 
     def get_history_dashboard(
         self, *, limit: int = 200, query: DuelManagementQuery | None = None
@@ -755,11 +857,21 @@ class RecorderApplicationService:
     def duel_write_block_reason(self) -> str | None:
         with self._lock:
             self._collect_manual_terminal_locked()
+            snapshot = self._operation_state.snapshot
             if self.watch_active:
                 return "自動監視中のため更新できません"
             if self._manual_starting or self._current is not None:
                 return "録画中のため更新できません"
-            return None
+            if snapshot.allows(OperationAction.WRITE_DUEL):
+                return None
+            if snapshot.state in {
+                OperationState.WATCH_STARTING,
+                OperationState.WATCH_WAITING,
+                OperationState.CANDIDATE_RECORDING,
+                OperationState.AUTOMATIC_RECORDING,
+            }:
+                return "自動監視中のため更新できません"
+            return "録画中のため更新できません"
 
     def _require_duel_write_idle(self) -> None:
         reason = self.duel_write_block_reason()
@@ -1005,6 +1117,11 @@ class RecorderApplicationService:
         with self._lock:
             if self._manual_starting:
                 raise ApplicationOperationError("録画の開始処理中は終了できません")
+            try:
+                self._operation_state.require(OperationAction.CLOSE)
+            except RuntimeError as exc:
+                raise ApplicationOperationError(str(exc)) from exc
+            self._transition_operation(OperationState.CLOSING, "終了処理中")
         if self.watch_active:
             self.stop_watch()
         with self._lock:
@@ -1015,6 +1132,9 @@ class RecorderApplicationService:
                 finally:
                     prepared.release()
                     self._current = None
+            if self._operation_state.snapshot.state is not OperationState.IDLE:
+                self._transition_operation(OperationState.IDLE, "終了しました")
+            self._notifications.close()
 
     def _watch_loop(self, callback: EventCallback | None) -> None:
         controller: AutoRecordingController | None = None
@@ -1109,6 +1229,7 @@ class RecorderApplicationService:
                 callback,
                 ApplicationEvent("watch", "自動監視を開始しました", state="watching"),
             )
+            self._transition_operation(OperationState.WATCH_WAITING, "対戦を待機しています")
             while not self._watch_stop.is_set():
                 observation = (
                     start_monitor.observe()
@@ -1119,11 +1240,19 @@ class RecorderApplicationService:
                     break
                 event = controller.process(observation)
                 if event.action is AutoRecordingEventAction.STARTED:
+                    self._transition_operation(
+                        OperationState.CANDIDATE_RECORDING, "対戦候補を録画しています"
+                    )
                     diagnostics.transition("candidate_started", elapsed_ms=0)
                     self._save_automatic_start_candidate(
                         event.recording_id,
                         start_monitor.start_candidate,
                         callback,
+                    )
+                    self._notify(
+                        "candidate_started",
+                        "対戦候補の録画を開始しました",
+                        f"{event.recording_id}:candidate",
                     )
                 lifecycle_prepared = controller.current
                 lifecycle_event = self._apply_automatic_visual_lifecycle(
@@ -1150,6 +1279,9 @@ class RecorderApplicationService:
                         != confirmed_recording_id
                     ):
                         confirmed_recording_id = controller.current.target.recording_id
+                        self._transition_operation(
+                            OperationState.AUTOMATIC_RECORDING, "対戦を録画しています"
+                        )
                         diagnostics.transition("duel_confirmed")
                         self._emit(
                             callback,
@@ -1160,6 +1292,11 @@ class RecorderApplicationService:
                                 state="confirmed",
                             ),
                         )
+                        self._notify(
+                            "recording_confirmed",
+                            "対戦を検出し録画しています",
+                            f"{confirmed_recording_id}:confirmed",
+                        )
                     self._publish_visual_status(controller.current, callback)
                 else:
                     if event.action is AutoRecordingEventAction.STOPPED:
@@ -1167,6 +1304,14 @@ class RecorderApplicationService:
                             diagnostics.transition("recording_stopped")
                         start_monitor.reset()
                         confirmed_recording_id = None
+                        self._transition_operation(
+                            OperationState.WATCH_WAITING, "次の対戦を待機しています"
+                        )
+                        self._notify(
+                            "recording_stopped",
+                            "対戦録画を停止し、次の対戦を待機します",
+                            f"{event.recording_id}:stopped",
+                        )
                     self._set_visual_status(start_monitor.status, callback)
                 current_status = (
                     controller.current.visual_detection_status
@@ -1193,6 +1338,8 @@ class RecorderApplicationService:
                 )
                 self._watch_stop.wait(interval)
         except Exception as exc:
+            self._transition_operation(OperationState.FAILED, str(exc))
+            self._notify("watch_failed", str(exc), f"watch:failed:{type(exc).__name__}")
             self._emit(callback, ApplicationEvent("error", str(exc), state="failed"))
         finally:
             if controller is not None and controller.current is not None:
@@ -1206,6 +1353,15 @@ class RecorderApplicationService:
                 callback,
                 ApplicationEvent("watch", "自動監視を停止しました", state="stopped"),
             )
+            state = self._operation_state.snapshot.state
+            if state in {
+                OperationState.WATCH_STARTING,
+                OperationState.WATCH_WAITING,
+                OperationState.CANDIDATE_RECORDING,
+                OperationState.AUTOMATIC_RECORDING,
+                OperationState.STOPPING,
+            }:
+                self._transition_operation(OperationState.IDLE, "待機中")
 
     def _apply_automatic_visual_lifecycle(
         self,
@@ -1308,6 +1464,17 @@ class RecorderApplicationService:
         self._visual_status = self._current.visual_detection_status
         self._current.release()
         self._current = None
+        current = self._operation_state.snapshot.state
+        if state is RecordingState.FAILED:
+            if current in {
+                OperationState.MANUAL_STARTING,
+                OperationState.MANUAL_RECORDING,
+                OperationState.STOPPING,
+            }:
+                self._transition_operation(OperationState.FAILED, "録画に失敗しました")
+        elif current is OperationState.MANUAL_RECORDING:
+            self._transition_operation(OperationState.STOPPING, "録画を終了しています")
+            self._transition_operation(OperationState.IDLE, "待機中")
 
     def _publish_visual_status(
         self,

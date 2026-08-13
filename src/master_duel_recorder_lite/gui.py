@@ -49,6 +49,7 @@ from .ffmpeg_setup import (
     FfmpegInstallProgress,
 )
 from .preflight import CheckStatus, PreflightReport
+from .operation_state import OperationAction
 from .recording_browsing import RecordingReference
 from .recording_session import RecordingState
 
@@ -77,6 +78,8 @@ ICON_GLYPHS = {
     "available": "\ue73e",
     "warning": "\ue7ba",
     "unavailable": "\ue783",
+    "expand": "\ue70d",
+    "collapse": "\ue70e",
 }
 HISTORY_ROW_ACTIONS = (
     ("play", "再生", "Enter"),
@@ -835,14 +838,32 @@ class RecorderGui:
             style="Muted.TLabel",
             justify="left",
         ).grid(row=2, column=0, sticky="w")
-        self.visual_status_var = tk.StringVar(value="自動判定: 録画開始後に状態を表示")
+        visual_header = ttk.Frame(controls, style="Surface.TFrame")
+        visual_header.grid(row=3, column=0, sticky="ew", pady=(5, 0))
+        self.visual_status_var = tk.StringVar(value="自動監視: 待機中")
         ttk.Label(
-            controls,
+            visual_header,
             textvariable=self.visual_status_var,
             style="Muted.TLabel",
             justify="left",
+        ).pack(side="left", fill="x", expand=True)
+        self.visual_details_visible = tk.BooleanVar(value=False)
+        self.visual_details_button = self._icon_button(
+            visual_header,
+            "expand",
+            "自動判定の詳細を表示",
+            self.toggle_visual_details,
+        )
+        self.visual_details_button.pack(side="right")
+        self.widgets["visual_details_toggle"] = self.visual_details_button
+        self.visual_details_var = tk.StringVar(value="判定詳細は自動監視中に更新されます")
+        self.visual_details_label = ttk.Label(
+            controls,
+            textvariable=self.visual_details_var,
+            style="Muted.TLabel",
+            justify="left",
             wraplength=500,
-        ).grid(row=3, column=0, sticky="w", pady=(5, 0))
+        )
         self.record_audio_status_var = tk.StringVar(
             value="音声: 設定で入力を選択できます"
         )
@@ -850,9 +871,9 @@ class RecorderGui:
             controls,
             textvariable=self.record_audio_status_var,
             style="Muted.TLabel",
-        ).grid(row=4, column=0, sticky="w", pady=(3, 0))
+        ).grid(row=5, column=0, sticky="w", pady=(3, 0))
         button_row = ttk.Frame(controls, style="Surface.TFrame")
-        button_row.grid(row=0, column=1, rowspan=5, sticky="e")
+        button_row.grid(row=0, column=1, rowspan=6, sticky="e")
         self.start_button = ttk.Button(
             button_row,
             text="録画開始",
@@ -916,6 +937,13 @@ class RecorderGui:
             self.open_visual_diagnostics,
         )
         diagnostic_folder.pack(side="right", padx=(0, 8))
+        diagnostic_export = self._icon_button(
+            header,
+            "save",
+            "自動監視の数値診断をZIPで保存",
+            self.export_visual_diagnostics,
+        )
+        diagnostic_export.pack(side="right", padx=(0, 8))
         self.widgets["visual_diagnostics_folder"] = diagnostic_folder
         self.diagnosis_tree = ttk.Treeview(
             diagnosis, columns=("state", "message"), show="headings", height=8
@@ -1701,6 +1729,7 @@ class RecorderGui:
         self.auto_start_var = tk.BooleanVar(value=True)
         self.auto_stop_var = tk.BooleanVar(value=True)
         self.visual_detection_var = tk.BooleanVar(value=True)
+        self.windows_notifications_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             panel, text="ウィンドウ検出時に自動開始", variable=self.auto_start_var
         ).grid(row=9, column=0, sticky="w", pady=(18, 0))
@@ -1710,6 +1739,11 @@ class RecorderGui:
         ttk.Checkbutton(
             panel, text="対戦イベントを自動判定", variable=self.visual_detection_var
         ).grid(row=9, column=2, sticky="w", pady=(18, 0))
+        ttk.Checkbutton(
+            panel,
+            text="録画イベントをWindows通知",
+            variable=self.windows_notifications_var,
+        ).grid(row=10, column=0, columnspan=3, sticky="w", pady=(10, 0))
         for column, (key, label) in enumerate(
             (
                 ("detection.visual_maximum_fps", "自動判定fps（最大2）"),
@@ -1718,13 +1752,13 @@ class RecorderGui:
             )
         ):
             ttk.Label(panel, text=label, style="Body.TLabel").grid(
-                row=10, column=column, sticky="w", pady=(14, 4)
+                row=11, column=column, sticky="w", pady=(14, 4)
             )
             ttk.Entry(panel, textvariable=self.setting_vars[key]).grid(
-                row=11, column=column, sticky="ew", padx=(0, 12 if column < 2 else 0)
+                row=12, column=column, sticky="ew", padx=(0, 12 if column < 2 else 0)
             )
         ttk.Label(panel, text="データ保存先", style="Body.TLabel").grid(
-            row=12, column=0, sticky="w", pady=(18, 4)
+            row=13, column=0, sticky="w", pady=(18, 4)
         )
         self.runtime_path_var = tk.StringVar(
             value=str(self.service.runtime_data_directory())
@@ -1733,9 +1767,9 @@ class RecorderGui:
             panel,
             textvariable=self.runtime_path_var,
             style="Muted.TLabel",
-        ).grid(row=13, column=0, columnspan=3, sticky="w")
+        ).grid(row=14, column=0, columnspan=3, sticky="w")
         footer = ttk.Frame(panel, style="Surface.TFrame")
-        footer.grid(row=14, column=0, columnspan=3, sticky="ew", pady=(18, 0))
+        footer.grid(row=15, column=0, columnspan=3, sticky="ew", pady=(18, 0))
         self.settings_status_var = tk.StringVar(value="")
         ttk.Label(
             footer, textvariable=self.settings_status_var, style="Muted.TLabel"
@@ -2268,6 +2302,31 @@ class RecorderGui:
             raise OSError("数値診断フォルダはWindows Explorerでのみ開けます")
         os.startfile(str(directory.resolve()))  # type: ignore[attr-defined]
 
+    def export_visual_diagnostics(self) -> None:
+        destination = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="自動監視診断を保存",
+            defaultextension=".zip",
+            filetypes=(("ZIP", "*.zip"),),
+        )
+        if destination:
+            self._run(
+                lambda: self.service.export_visual_diagnostics(Path(destination)),
+                lambda path: self._activity(f"自動監視診断を保存しました: {path}"),
+            )
+
+    def toggle_visual_details(self) -> None:
+        visible = not self.visual_details_visible.get()
+        self.visual_details_visible.set(visible)
+        if visible:
+            self.visual_details_label.grid(row=4, column=0, sticky="w", pady=(3, 0))
+            self.visual_details_button.configure(text=ICON_GLYPHS["collapse"])
+            self.visual_details_button.accessible_name = "自動判定の詳細を閉じる"  # type: ignore[attr-defined]
+        else:
+            self.visual_details_label.grid_remove()
+            self.visual_details_button.configure(text=ICON_GLYPHS["expand"])
+            self.visual_details_button.accessible_name = "自動判定の詳細を表示"  # type: ignore[attr-defined]
+
     def _diagnosis_loaded(self, report: PreflightReport) -> None:
         for item in self.diagnosis_tree.get_children():
             self.diagnosis_tree.delete(item)
@@ -2623,9 +2682,12 @@ class RecorderGui:
         )
 
     def _update_duel_write_controls(self) -> None:
-        state = "disabled" if self.service.duel_write_block_reason() else "normal"
+        snapshot = self.service.operation_snapshot()
+        state = "normal" if snapshot.allows(OperationAction.WRITE_DUEL) else "disabled"
         self.manual_duel_button.configure(state=state)
         self.history_add_button.configure(state=state)
+        self.history_incomplete_button.configure(state=state)
+        self._history_selection_changed()
 
     def clear_history_filter(self) -> None:
         self.history_query = DuelManagementQuery(limit=200)
@@ -4236,6 +4298,7 @@ class RecorderGui:
         self.auto_start_var.set(config.auto_start_recording)
         self.auto_stop_var.set(config.auto_stop_recording)
         self.visual_detection_var.set(config.visual_detection_enabled)
+        self.windows_notifications_var.set(config.windows_notifications_enabled)
         self.settings_status_var.set("設定を読み込みました")
         self.audio_choice_var.set(config.audio_input or "音声なし")
         self.refresh_audio_inputs()
@@ -4307,6 +4370,9 @@ class RecorderGui:
         values["detection.auto_stop_recording"] = str(self.auto_stop_var.get()).lower()
         values["detection.visual_events_enabled"] = str(
             self.visual_detection_var.get()
+        ).lower()
+        values["detection.windows_notifications_enabled"] = str(
+            self.windows_notifications_var.get()
         ).lower()
         self._run(
             lambda: self.service.save_settings(values),
@@ -4385,7 +4451,7 @@ class RecorderGui:
             ):
                 self._watch_stopped()
             elif event.kind == "visual":
-                self.visual_status_var.set(f"自動判定: {event.message}")
+                self.visual_details_var.set(f"判定詳細: {event.message}")
         can_poll_service = self.busy_operations == 0 and not self.closing
         if can_poll_service and not self.service.watch_active:
             try:
@@ -4397,8 +4463,10 @@ class RecorderGui:
         if not self.closing:
             if can_poll_service:
                 status = self.service.visual_detection_status()
-                self.visual_status_var.set(
-                    f"自動判定: {status.message}\n"
+                operation = self.service.operation_snapshot()
+                self.visual_status_var.set(f"自動監視: {operation.message}")
+                self.visual_details_var.set(
+                    f"判定詳細: {status.message}\n"
                     f"取得元 {status.source or '-'} / {status.resolution or '-'} / "
                     f"{status.profile} / {status.effective_fps:.1f}fps / 状態 {status.visual_state}\n"
                     f"coin {status.coin_score:.2f} / board {status.board_score:.2f} / "
@@ -4412,7 +4480,6 @@ class RecorderGui:
             self.root.after(500, self._poll_runtime)
 
     def _render_recording(self, snapshot: RecordingSnapshot) -> None:
-        active = snapshot.active
         statuses = {
             RecordingState.RECORDING: "manual_recording",
             RecordingState.STARTING: "starting",
@@ -4427,10 +4494,20 @@ class RecorderGui:
             f"録画ID: {snapshot.recording_id or '-'}\n保存先: {snapshot.output_path or '-'}"
         )
         self.start_button.configure(
-            state="disabled" if active or self.service.watch_active else "normal"
+            state="normal"
+            if self.service.operation_snapshot().allows(OperationAction.START_MANUAL)
+            else "disabled"
         )
-        self.stop_button.configure(state="normal" if active else "disabled")
-        self.watch_button.configure(state="disabled" if active else "normal")
+        operation = self.service.operation_snapshot()
+        self.stop_button.configure(
+            state="normal" if operation.allows(OperationAction.STOP_RECORDING) else "disabled"
+        )
+        self.watch_button.configure(
+            state="normal"
+            if operation.allows(OperationAction.START_WATCH)
+            or operation.allows(OperationAction.STOP_WATCH)
+            else "disabled"
+        )
         self._update_duel_write_controls()
 
     def _set_record_status(self, status: str) -> None:
@@ -4452,9 +4529,19 @@ class RecorderGui:
         )
 
     def _set_record_controls(self, *, starting: bool) -> None:
-        self.start_button.configure(state="disabled" if starting else "normal")
-        self.stop_button.configure(state="disabled")
-        self.watch_button.configure(state="disabled" if starting else "normal")
+        snapshot = self.service.operation_snapshot()
+        self.start_button.configure(
+            state="normal" if snapshot.allows(OperationAction.START_MANUAL) else "disabled"
+        )
+        self.stop_button.configure(
+            state="normal" if snapshot.allows(OperationAction.STOP_RECORDING) else "disabled"
+        )
+        self.watch_button.configure(
+            state="normal"
+            if snapshot.allows(OperationAction.START_WATCH)
+            or snapshot.allows(OperationAction.STOP_WATCH)
+            else "disabled"
+        )
         if starting:
             self._set_record_status("starting")
 

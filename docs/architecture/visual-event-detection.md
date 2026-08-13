@@ -105,3 +105,22 @@ V0.17.4は盤面確定時刻を保持し、15秒以上経過後にコイント�
 ライブ監視は`user_data/logs/visual-monitor/`へ数値だけのJSONを原子的に保存します。保存頻度は1秒1件、1セッション900件、最新10セッション、合計2MiBまでです。画像、BMP、ウィンドウタイトル、録画・動画パスは保存しません。GUIのフォルダーアイコンから保存場所を開けます。
 
 追跡: [V0.17.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/33)、Issue #192 - #197、[V0.17.4 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/34)、Issue #200 - #202
+
+## V0.23.0 イベント別解析契約
+
+ライブ監視とオフライン評価は、同じ`VisualDetectionPipeline.analyze_frame`から`FrameAnalysis`を生成します。入力アダプターだけを座標ストリームまたは動画デコーダーへ分離し、イベント判定器と時間窓合意は共有します。
+
+| イベント契約 | スコア | 閾値 | 合意 |
+|---|---|---:|---:|
+| `duel_start` | `coin_score` | 0.70 | 2/4 |
+| `duel_confirmed` | `board_score` | 0.70 | 3/5 |
+| `turn_change` | `turn_score` | 0.70 | 2/4 |
+| `duel_result` | `result_score` | 0.70 | 2/4 |
+
+各契約は独立してスコアと閾値到達を返します。データセット評価は表示プロファイル・イベント別にTP、FP、FN、適合率、再現率、平均絶対遅延をJSONへ原子的に保存します。全体平均だけで一部イベントの見逃しを隠しません。
+
+利用者向けには「待機」「候補録画」「録画中」「停止」「失敗」を表示し、ROIスコア、合意数、実効fps、再起動回数は判定詳細として分離します。Windows通知は設定で無効化でき、候補開始、盤面確定、停止、失敗を重複抑止付きで通知します。通知失敗は録画処理へ伝播しません。
+
+数値診断のZIP出力にも画像、BMP、ウィンドウタイトル、録画パスを含めません。
+
+追跡: [V0.23.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/45)、Issue #293 - #300

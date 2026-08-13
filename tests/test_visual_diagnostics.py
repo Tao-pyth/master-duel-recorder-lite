@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,6 +58,19 @@ class VisualDiagnosticSessionTest(unittest.TestCase):
             files = tuple((Path(temporary) / "visual-monitor").glob("*.json"))
 
         self.assertEqual(len(files), 10)
+
+    def test_export_contains_only_numeric_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session = VisualDiagnosticSession(root)
+            destination = session.export(root / "diagnostic.zip")
+            with zipfile.ZipFile(destination) as archive:
+                names = archive.namelist()
+                payload = archive.read(names[0]).decode("utf-8")
+
+        self.assertEqual(len(names), 1)
+        self.assertTrue(names[0].endswith(".json"))
+        self.assertNotIn(".bmp", payload.casefold())
 
 
 if __name__ == "__main__":

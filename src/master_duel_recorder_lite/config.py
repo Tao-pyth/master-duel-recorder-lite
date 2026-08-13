@@ -59,6 +59,7 @@ class AppConfig:
     visual_detection_maximum_fps: float = 2.0
     visual_detection_language: str = "auto"
     visual_detection_minimum_confidence: float = 0.70
+    windows_notifications_enabled: bool = True
     upload_privacy_status: str = "private"
     auto_create_user_data: bool = True
 
@@ -197,6 +198,11 @@ def load_app_config(
                 "visual_minimum_confidence",
                 AppConfig.visual_detection_minimum_confidence,
             ),
+            windows_notifications_enabled=_bool_value(
+                detection_table,
+                "windows_notifications_enabled",
+                AppConfig.windows_notifications_enabled,
+            ),
             upload_privacy_status=_privacy_status(
                 _string_value(upload_table, "privacy_status", AppConfig.upload_privacy_status)
             ),
@@ -229,6 +235,8 @@ def validate_app_config(config: AppConfig) -> None:
     _recording_number_values(config)
     _detection_values(config)
     _privacy_status(config.upload_privacy_status)
+    if not isinstance(config.windows_notifications_enabled, bool):
+        raise ValueError("windows_notifications_enabled はtrueまたはfalseである必要があります")
     if not isinstance(config.auto_create_user_data, bool):
         raise ValueError("auto_create_user_data はtrueまたはfalseである必要があります")
 
@@ -296,6 +304,7 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"visual_maximum_fps = {config.visual_detection_maximum_fps}",
                 f"visual_language = {_toml_string(config.visual_detection_language)}",
                 f"visual_minimum_confidence = {config.visual_detection_minimum_confidence}",
+                f"windows_notifications_enabled = {_toml_bool(config.windows_notifications_enabled)}",
                 "",
                 "[upload]",
                 f"privacy_status = {_toml_string(config.upload_privacy_status)}",

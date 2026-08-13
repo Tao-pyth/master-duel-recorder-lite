@@ -84,6 +84,40 @@ class DatasetEvaluation:
         false_positive = sum(not item.matched for item in items if item.expected_ms is None)
         return true_positive, false_positive, false_negative
 
+    def metrics_by_profile(self, dataset: VisualDataset) -> dict[str, dict[str, dict[str, float]]]:
+        profile_by_video = {item.video_id: item.display_profile for item in dataset.videos}
+        grouped: dict[str, dict[str, list[EventEvaluation]]] = {}
+        for video in self.videos:
+            profile = profile_by_video.get(video.video_id, "unknown")
+            for item in video.evaluations:
+                grouped.setdefault(profile, {}).setdefault(item.event_type, []).append(item)
+        result: dict[str, dict[str, dict[str, float]]] = {}
+        for profile, events in grouped.items():
+            result[profile] = {}
+            for event_type, items in events.items():
+                tp = sum(item.matched for item in items if item.expected_ms is not None)
+                fp = sum(not item.matched for item in items if item.expected_ms is None)
+                fn = sum(not item.matched for item in items if item.expected_ms is not None)
+                errors = [abs(item.error_ms) for item in items if item.matched and item.error_ms is not None]
+                result[profile][event_type] = {
+                    "true_positive": float(tp),
+                    "false_positive": float(fp),
+                    "false_negative": float(fn),
+                    "precision": tp / (tp + fp) if tp + fp else 1.0,
+                    "recall": tp / (tp + fn) if tp + fn else 1.0,
+                    "mean_absolute_latency_ms": sum(errors) / len(errors) if errors else 0.0,
+                }
+        return result
+
+    def write_json(self, destination: Path, dataset: VisualDataset) -> Path:
+        target = destination.expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        document = {**self.to_dict(), "metrics_by_profile": self.metrics_by_profile(dataset)}
+        temporary = target.with_suffix(f"{target.suffix}.tmp")
+        temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(target)
+        return target
+
 
 def load_visual_dataset(manifest_path: Path) -> VisualDataset:
     manifest = manifest_path.resolve()

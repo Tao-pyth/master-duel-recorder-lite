@@ -82,6 +82,9 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
         "detection.visual_minimum_confidence": ConfigField(
             "visual_detection_minimum_confidence", _number
         ),
+        "detection.windows_notifications_enabled": ConfigField(
+            "windows_notifications_enabled", _boolean
+        ),
         "upload.privacy_status": ConfigField("upload_privacy_status", _lower_text),
         "runtime.auto_create_user_data": ConfigField("auto_create_user_data", _boolean),
     }
