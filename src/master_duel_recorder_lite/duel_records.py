@@ -191,12 +191,18 @@ class DuelRecordRepository:
         with closing(connect_history_database(self.database_path)) as connection:
             row = connection.execute(
                 """
-                SELECT COUNT(*) AS count
-                FROM recordings AS recording
-                LEFT JOIN duel_records AS duel
-                    ON duel.recording_id = recording.recording_id
-                WHERE recording.state = 'completed'
-                  AND (duel.recording_id IS NULL OR duel.status <> 'confirmed')
+                SELECT COUNT(*) AS count FROM (
+                    SELECT recording.recording_id AS identifier
+                    FROM recordings AS recording
+                    LEFT JOIN duel_records AS duel
+                        ON duel.recording_id = recording.recording_id
+                    WHERE recording.state = 'completed'
+                      AND (duel.recording_id IS NULL OR duel.status <> 'confirmed')
+                    UNION ALL
+                    SELECT duel_id AS identifier
+                    FROM duel_records
+                    WHERE entry_origin = 'manual' AND status <> 'confirmed'
+                )
                 """
             ).fetchone()
         assert row is not None
@@ -292,6 +298,23 @@ class DuelRecordRepository:
             expected_revision=expected_revision,
             source=source,
         )
+
+    def delete_manual(self, duel_id: str) -> DuelRecord:
+        current = self.get(duel_id)
+        if current is None or current.duel_id != _identifier(duel_id):
+            raise DuelRecordError(f"対戦記録が見つかりません: {duel_id}")
+        if current.recording_id is not None:
+            raise DuelRecordError("録画付き戦績は録画履歴の削除を使用してください")
+        with closing(connect_history_database(self.database_path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "DELETE FROM duel_record_tag_links WHERE duel_id = ?", (current.duel_id,)
+            )
+            connection.execute(
+                "DELETE FROM duel_record_changes WHERE duel_id = ?", (current.duel_id,)
+            )
+            connection.execute("DELETE FROM duel_records WHERE duel_id = ?", (current.duel_id,))
+        return current
 
     def _save_record(
         self,

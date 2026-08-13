@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import calendar
 import json
 import os
@@ -17,7 +17,9 @@ import webbrowser
 
 from . import __version__
 from .application import (
+    ActiveSeasonSummary,
     ApplicationEvent,
+    DuelManagementQuery,
     DuelEditorData,
     RecorderApplicationService,
     RecordingHistoryDashboard,
@@ -47,7 +49,6 @@ from .ffmpeg_setup import (
 )
 from .preflight import CheckStatus, PreflightReport
 from .recording_browsing import RecordingReference
-from .recording_history import HistoryQuery
 from .recording_session import RecordingState
 
 
@@ -392,7 +393,8 @@ class RecorderGui:
         }
         self.catalog_opponent_only_var = tk.BooleanVar(value=False)
         self.catalog_hidden_var = tk.BooleanVar(value=False)
-        self.history_query = HistoryQuery(limit=200)
+        self.history_query = DuelManagementQuery(limit=200)
+        self.active_season_buttons: list[ttk.Button] = []
         self.current_page = "record"
         self.watch_events: queue.Queue[ApplicationEvent] = queue.Queue()
         self.busy_operations = 0
@@ -631,7 +633,7 @@ class RecorderGui:
         ).pack(fill="x", pady=(0, 18))
         for key, label in (
             ("record", "録画"),
-            ("history", "録画履歴"),
+            ("history", "戦績管理"),
             ("statistics", "統計"),
             ("decks", "デッキ名"),
             ("tags", "タグ"),
@@ -875,6 +877,26 @@ class RecorderGui:
         self.widgets["watch_toggle"] = self.watch_button
         self.widgets["visual_status"] = self.visual_status_var
 
+        duel_summary = self._surface(page, padding=(14, 10))
+        duel_summary.pack(fill="x", pady=(0, 12))
+        self.manual_duel_button = ttk.Button(
+            duel_summary,
+            text=f"{ICON_GLYPHS['add']}  戦績を追加",
+            command=self._open_manual_duel_editor,
+        )
+        self.manual_duel_button.pack(side="left", padx=(0, 14))
+        ttk.Separator(duel_summary, orient="vertical").pack(
+            side="left", fill="y", padx=(0, 14)
+        )
+        self.active_season_host = ttk.Frame(duel_summary, style="Surface.TFrame")
+        self.active_season_host.pack(side="left", fill="x", expand=True)
+        ttk.Label(
+            self.active_season_host,
+            text="開催中のシーズンを読み込み中",
+            style="Muted.TLabel",
+        ).pack(side="left")
+        self.widgets["manual_duel_add"] = self.manual_duel_button
+
         lower = ttk.Frame(page, style="App.TFrame")
         lower.pack(fill="both", expand=True)
         diagnosis = self._surface(lower)
@@ -923,11 +945,15 @@ class RecorderGui:
         page = self._new_page("history")
         toolbar = self._surface(page, padding=(14, 10))
         toolbar.pack(fill="x", pady=(0, 10))
-        ttk.Label(toolbar, text="録画履歴", style="Heading.TLabel").pack(side="left")
+        ttk.Label(toolbar, text="戦績管理", style="Heading.TLabel").pack(side="left")
+        self.history_add_button = self._icon_button(
+            toolbar, "add", "録画を伴わない戦績を追加", self._open_manual_duel_editor
+        )
+        self.history_add_button.pack(side="left", padx=(16, 6))
         self.history_filter_button = self._icon_button(
             toolbar, "filter", "録画履歴を絞り込む", self.open_history_filter
         )
-        self.history_filter_button.pack(side="left", padx=(16, 6))
+        self.history_filter_button.pack(side="left", padx=(0, 6))
         self.history_filter_count_var = tk.StringVar(value="")
         ttk.Label(
             toolbar,
@@ -998,6 +1024,7 @@ class RecorderGui:
             "duel_type",
             "duration",
             "size",
+            "origin",
         )
         self.history_tree = ttk.Treeview(panel, columns=columns, show="headings")
         history_scrollbar = ttk.Scrollbar(
@@ -1014,6 +1041,7 @@ class RecorderGui:
             ("duel_type", "対戦種別", 105),
             ("duration", "時間", 85),
             ("size", "サイズ", 100),
+            ("origin", "登録元", 80),
         ):
             self.history_tree.heading(key, text=label)
             self.history_tree.column(key, width=width, stretch=key == "started")
@@ -1046,6 +1074,7 @@ class RecorderGui:
         self.widgets["history_duel"] = self.history_action_buttons["edit"]
         self.widgets["history_timeline"] = self.history_timeline_button
         self.widgets["history_delete"] = self.history_action_buttons["delete"]
+        self.widgets["history_add"] = self.history_add_button
 
     def _build_statistics_page(self) -> None:
         page = self._new_page("statistics")
@@ -1739,7 +1768,7 @@ class RecorderGui:
     def show_page(self, key: str) -> None:
         titles = {
             "record": "録画",
-            "history": "録画履歴",
+            "history": "戦績管理",
             "statistics": "統計",
             "decks": "デッキ名",
             "tags": "タグ",
@@ -1780,6 +1809,7 @@ class RecorderGui:
         self.refresh_targets()
         self.run_diagnosis()
         self.refresh_history()
+        self.refresh_active_seasons()
 
     def refresh_statistics(self) -> None:
         if self.smoke_mode:
@@ -2444,6 +2474,7 @@ class RecorderGui:
 
     def _recording_started(self, snapshot: RecordingSnapshot) -> None:
         self._render_recording(snapshot)
+        self._update_duel_write_controls()
         self._update_record_audio_status(active=True)
         self._activity(f"録画を開始しました: {snapshot.recording_id}")
 
@@ -2459,6 +2490,7 @@ class RecorderGui:
 
     def _recording_stopped(self, snapshot: RecordingSnapshot) -> None:
         self._render_recording(snapshot)
+        self._update_duel_write_controls()
         self._update_record_audio_status(active=False)
         self._activity(f"録画を停止しました: {snapshot.output_path}")
         if snapshot.state is RecordingState.COMPLETED and snapshot.recording_id:
@@ -2487,6 +2519,7 @@ class RecorderGui:
         self.automatic_recording_confirmed = False
         self._set_record_status("watch_waiting")
         self._update_record_audio_status(active=False)
+        self._update_duel_write_controls()
 
     def _update_record_audio_status(self, *, active: bool) -> None:
         try:
@@ -2506,6 +2539,7 @@ class RecorderGui:
         self.start_button.configure(state="normal")
         self.automatic_recording_confirmed = False
         self._set_record_status("idle")
+        self._update_duel_write_controls()
 
     def _watch_failed(self, error: BaseException) -> None:
         self._watch_stopped()
@@ -2519,15 +2553,71 @@ class RecorderGui:
             self._history_loaded,
         )
 
+    def refresh_active_seasons(self) -> None:
+        if self.smoke_mode:
+            return
+        self._run(self.service.active_season_summaries, self._active_seasons_loaded)
+
+    def _active_seasons_loaded(
+        self, summaries: tuple[ActiveSeasonSummary, ...]
+    ) -> None:
+        for child in self.active_season_host.winfo_children():
+            child.destroy()
+        self.active_season_buttons.clear()
+        if not summaries:
+            ttk.Label(
+                self.active_season_host,
+                text="現在開催中のシーズンはありません",
+                style="Muted.TLabel",
+            ).pack(side="left")
+            return
+        for summary in summaries:
+            metric = summary.statistics.filtered
+            button = ttk.Button(
+                self.active_season_host,
+                text=(
+                    f"{summary.season.name}  {_format_win_rate(metric)}  "
+                    f"{_format_statistics_detail(metric)}"
+                ),
+                command=lambda season=summary.season: self._open_season_report(season),
+            )
+            button.pack(side="left", padx=(0, 8))
+            self.active_season_buttons.append(button)
+
+    def _open_season_report(self, season: object) -> None:
+        season_id = season.season_id
+        self._run(
+            lambda: (
+                season,
+                (
+                    self.service.get_statistics_dashboard(
+                        StatisticsFilter(season_id=season_id), granularity="day"
+                    ),
+                    self.service.get_statistics_dashboard(
+                        StatisticsFilter(season_id=season_id), granularity="week"
+                    ),
+                    self.service.get_statistics_dashboard(
+                        StatisticsFilter(season_id=season_id), granularity="month"
+                    ),
+                ),
+            ),
+            self._show_season_report_dialog,
+        )
+
+    def _update_duel_write_controls(self) -> None:
+        state = "disabled" if self.service.duel_write_block_reason() else "normal"
+        self.manual_duel_button.configure(state=state)
+        self.history_add_button.configure(state=state)
+
     def clear_history_filter(self) -> None:
-        self.history_query = HistoryQuery(limit=200)
+        self.history_query = DuelManagementQuery(limit=200)
         self.history_filter_count_var.set("")
         self.refresh_history()
 
     def open_history_filter(self) -> None:
         dialog = tk.Toplevel(self.root)
-        dialog.title("録画履歴フィルター")
-        dialog.geometry("540x600")
+        dialog.title("戦績管理フィルター")
+        dialog.geometry("540x640")
         dialog.transient(self.root)
         frame = ttk.Frame(dialog, padding=18)
         frame.pack(fill="both", expand=True)
@@ -2547,6 +2637,7 @@ class RecorderGui:
         opponent_var = tk.StringVar(value="すべて")
         coin_face_var = tk.StringVar(value="すべて")
         coin_outcome_var = tk.StringVar(value="すべて")
+        origin_var = tk.StringVar(value="すべて")
         for row, (label, variable, values) in enumerate(
             (
                 ("シーズン", season_var, tuple(season_map)),
@@ -2554,6 +2645,7 @@ class RecorderGui:
                 ("相手デッキ", opponent_var, tuple(deck_map)),
                 ("コインの面", coin_face_var, ("すべて", "表", "裏", "未設定")),
                 ("コイントス勝敗", coin_outcome_var, ("すべて", "勝ち", "負け", "未設定")),
+                ("登録元", origin_var, ("すべて", "録画", "手動")),
             )
         ):
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=6)
@@ -2561,10 +2653,10 @@ class RecorderGui:
                 frame, textvariable=variable, values=values, state="readonly"
             ).grid(row=row, column=1, sticky="ew", pady=6)
         ttk.Label(frame, text="タグ（複数可）").grid(
-            row=5, column=0, sticky="nw", pady=6
+            row=6, column=0, sticky="nw", pady=6
         )
         tag_list = tk.Listbox(frame, selectmode="multiple", exportselection=False)
-        tag_list.grid(row=5, column=1, sticky="nsew", pady=6)
+        tag_list.grid(row=6, column=1, sticky="nsew", pady=6)
         for item in tags:
             tag_list.insert("end", item.name)
 
@@ -2572,7 +2664,7 @@ class RecorderGui:
             selected_tag_ids = tuple(
                 tags[index].entry_id for index in tag_list.curselection()
             )
-            self.history_query = HistoryQuery(
+            self.history_query = DuelManagementQuery(
                 limit=200,
                 season_id=season_map[season_var.get()],
                 own_deck_id=deck_map[own_var.get()],
@@ -2584,6 +2676,9 @@ class RecorderGui:
                 coin_toss_outcome={"すべて": None, "勝ち": "win", "負け": "loss", "未設定": "unknown"}[
                     coin_outcome_var.get()
                 ],
+                entry_origin={"すべて": None, "録画": "recording", "手動": "manual"}[
+                    origin_var.get()
+                ],
             )
             count = sum(
                 value is not None
@@ -2593,6 +2688,7 @@ class RecorderGui:
                     self.history_query.opponent_deck_id,
                     self.history_query.coin_face,
                     self.history_query.coin_toss_outcome,
+                    self.history_query.entry_origin,
                 )
             ) + len(selected_tag_ids)
             self.history_filter_count_var.set(str(count) if count else "")
@@ -2600,10 +2696,10 @@ class RecorderGui:
             self.refresh_history()
 
         ttk.Button(frame, text="適用", style="Primary.TButton", command=apply).grid(
-            row=6, column=1, sticky="e", pady=(12, 0)
+            row=7, column=1, sticky="e", pady=(12, 0)
         )
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(5, weight=1)
+        frame.rowconfigure(6, weight=1)
         dialog.grab_set()
 
     def _history_loaded(self, dashboard: RecordingHistoryDashboard) -> None:
@@ -2612,19 +2708,19 @@ class RecorderGui:
         previous = self.history_tree.selection()
         previous_id = str(previous[0]) if previous else None
         self._clear_tree(self.history_tree)
-        self.history_views_by_id = {view.recording_id: view for view in views}
+        self.history_views_by_id = {view.row_id: view for view in views}
         for view in views:
             entry = view.entry
-            started = entry.started_at or entry.created_at
+            started = view.occurred_at
             duration = (
                 f"{entry.duration_seconds:.1f}秒"
-                if entry.duration_seconds is not None
+                if entry is not None and entry.duration_seconds is not None
                 else "-"
             )
-            size = _format_bytes(entry.size_bytes)
-            if entry.state == "failed":
+            size = _format_bytes(entry.size_bytes) if entry is not None else "-"
+            if entry is not None and entry.state == "failed":
                 result, play_order, coin_face, coin_outcome, duel_type = "録画失敗", "-", "-", "-", "-"
-            elif entry.state in {"starting", "recording"}:
+            elif entry is not None and entry.state in {"starting", "recording"}:
                 result = "開始中" if entry.state == "starting" else "録画中"
                 play_order, coin_face, coin_outcome, duel_type = "-", "-", "-", "-"
             elif view.duel_record is None:
@@ -2639,7 +2735,7 @@ class RecorderGui:
             self.history_tree.insert(
                 "",
                 "end",
-                iid=entry.recording_id,
+                iid=view.row_id,
                 values=(
                     started.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
                     own_deck,
@@ -2650,6 +2746,7 @@ class RecorderGui:
                     duel_type,
                     duration,
                     size,
+                    "手動" if view.entry_origin == "manual" else "録画",
                 ),
             )
         if previous_id is not None and self.history_tree.exists(previous_id):
@@ -2665,11 +2762,11 @@ class RecorderGui:
         self.history_color_lines.clear()
         if not self.history_tree.winfo_exists():
             return
-        for recording_id, view in self.history_views_by_id.items():
+        for row_id, view in self.history_views_by_id.items():
             color = getattr(view, "own_deck_color", None)
             if not color:
                 continue
-            bounds = self.history_tree.bbox(recording_id, "started")
+            bounds = self.history_tree.bbox(row_id, "started")
             if not bounds:
                 continue
             x, y, width, height = bounds
@@ -2678,17 +2775,33 @@ class RecorderGui:
             self.history_color_lines.append(line)
 
     def _history_selection_changed(self, _event: object | None = None) -> None:
-        state = "normal" if self.history_tree.selection() else "disabled"
-        self.history_diagnostic_button.configure(state=state)
-        self.history_timeline_button.configure(state=state)
-        for button in self.history_action_buttons.values():
-            button.configure(state=state)
+        selection = self.history_tree.selection()
+        view = self.history_views_by_id.get(str(selection[0])) if selection else None
+        has_recording = view is not None and view.recording_id is not None
+        editable = view is not None and (
+            view.duel_record is not None
+            or (view.entry is not None and view.entry.state == "completed")
+        )
+        media_state = "normal" if has_recording else "disabled"
+        self.history_diagnostic_button.configure(state=media_state)
+        self.history_timeline_button.configure(state=media_state)
+        self.history_action_buttons["play"].configure(state=media_state)
+        self.history_action_buttons["folder"].configure(state=media_state)
+        self.history_action_buttons["edit"].configure(
+            state="normal" if editable else "disabled"
+        )
+        self.history_action_buttons["delete"].configure(
+            state="normal" if view is not None else "disabled"
+        )
 
     def play_selected_history(self) -> None:
         selection = self.history_tree.selection()
         if not selection:
             return
-        recording_id = str(selection[0])
+        view = self.history_views_by_id[str(selection[0])]
+        if view.recording_id is None:
+            return
+        recording_id = view.recording_id
         self._run(
             lambda: self.service.play_recording(recording_id),
             lambda reference: self._recording_opened("再生を開始しました", reference),
@@ -2698,7 +2811,10 @@ class RecorderGui:
         selection = self.history_tree.selection()
         if not selection:
             return
-        recording_id = str(selection[0])
+        view = self.history_views_by_id[str(selection[0])]
+        if view.recording_id is None:
+            return
+        recording_id = view.recording_id
         self._run(
             lambda: self.service.reveal_recording(recording_id),
             lambda reference: self._recording_opened("保存場所を開きました", reference),
@@ -2708,26 +2824,41 @@ class RecorderGui:
         selection = self.history_tree.selection()
         if not selection:
             return
-        recording_id = str(selection[0])
-        row = self.history_tree.item(recording_id, "values")
-        display_name = row[0] if row else recording_id
-        if not messagebox.askyesno(
-            "録画履歴を削除",
-            "次の録画を完全に削除します。\n\n"
+        row_id = str(selection[0])
+        view = self.history_views_by_id[row_id]
+        row = self.history_tree.item(row_id, "values")
+        display_name = row[0] if row else row_id
+        manual = view.recording_id is None and view.duel_record is not None
+        confirmation = (
+            "次の戦績を完全に削除します。\n\n"
+            f"開始日時: {display_name}\n\n"
+            "対戦記録とタグ関連が削除されます。この操作は元に戻せません。"
+            if manual
+            else "次の録画と戦績を完全に削除します。\n\n"
             f"開始日時: {display_name}\n\n"
             "録画ファイル、対戦記録、タグ関連、タイムラインも削除されます。"
-            "この操作は元に戻せません。",
+            "この操作は元に戻せません。"
+        )
+        if not messagebox.askyesno(
+            "戦績を削除",
+            confirmation,
             parent=self.root,
         ):
             return
+        def operation() -> object:
+            if manual:
+                return self.service.delete_duel_record(view.duel_record.duel_id)
+            return self.service.delete_history(view.recording_id)
         self._run(
-            lambda: self.service.delete_history(recording_id),
+            operation,
             lambda result: (
                 self._activity(
-                    f"録画履歴を削除しました: {result.recording_id} "
-                    f"/ ファイル {len(result.deleted_files)}件"
+                    "戦績を削除しました"
+                    if manual
+                    else f"録画と戦績を削除しました: {result.recording_id} / ファイル {len(result.deleted_files)}件"
                 ),
                 self.refresh_history(),
+                self.refresh_active_seasons(),
             ),
         )
 
@@ -2735,7 +2866,10 @@ class RecorderGui:
         selection = self.history_tree.selection()
         if not selection:
             return
-        recording_id = str(selection[0])
+        view = self.history_views_by_id[str(selection[0])]
+        if view.recording_id is None:
+            return
+        recording_id = view.recording_id
         self._run(
             lambda: self.service.get_history(recording_id),
             self._show_history_diagnostic,
@@ -2744,12 +2878,21 @@ class RecorderGui:
     def edit_selected_duel_record(self) -> None:
         selection = self.history_tree.selection()
         if selection:
-            self._open_duel_editor(str(selection[0]))
+            view = self.history_views_by_id[str(selection[0])]
+            identifier = (
+                view.duel_record.duel_id
+                if view.duel_record is not None
+                else view.recording_id
+            )
+            if identifier is not None:
+                self._open_duel_editor(identifier)
 
     def show_selected_timeline(self) -> None:
         selection = self.history_tree.selection()
         if selection:
-            self._show_timeline(str(selection[0]))
+            view = self.history_views_by_id[str(selection[0])]
+            if view.recording_id is not None:
+                self._show_timeline(view.recording_id)
 
     def _show_timeline(self, recording_id: str) -> None:
         dialog = tk.Toplevel(self.root)
@@ -2915,18 +3058,46 @@ class RecorderGui:
         frame.rowconfigure(2, weight=1)
         refresh()
 
-    def _open_duel_editor(self, recording_id: str) -> None:
+    def _open_manual_duel_editor(self) -> None:
+        reason = self.service.duel_write_block_reason()
+        if reason is not None:
+            messagebox.showinfo("戦績を追加できません", reason, parent=self.root)
+            return
         self._run(
-            lambda: self.service.get_duel_editor_data(recording_id),
-            lambda data: self._show_duel_editor(recording_id, data),
+            lambda: self.service.get_duel_editor_data(),
+            lambda data: self._show_duel_editor(None, data, read_only_reason=None),
         )
 
-    def _show_duel_editor(self, recording_id: str, data: DuelEditorData) -> None:
+    def _open_duel_editor(self, identifier: str) -> None:
+        read_only_reason = self.service.duel_write_block_reason()
+        self._run(
+            lambda: self.service.get_duel_editor_data(identifier),
+            lambda data: self._show_duel_editor(
+                identifier, data, read_only_reason=read_only_reason
+            ),
+        )
+
+    def _show_duel_editor(
+        self,
+        identifier: str | None,
+        data: DuelEditorData,
+        *,
+        read_only_reason: str | None,
+    ) -> None:
         values = data.values
         revision = data.record.revision if data.record is not None else 0
+        is_new_manual = identifier is None
+        is_manual = is_new_manual or (
+            data.record is not None and data.record.entry_origin == "manual"
+        )
+        recording_id = (
+            data.record.recording_id
+            if data.record is not None
+            else identifier
+        )
         dialog = tk.Toplevel(self.root)
-        dialog.title("対戦記録")
-        dialog.geometry("720x700")
+        dialog.title("戦績を追加" if is_new_manual else "対戦記録")
+        dialog.geometry("720x740" if is_manual else "720x700")
         dialog.minsize(620, 620)
         dialog.transient(self.root)
         form = ttk.Frame(dialog, padding=18)
@@ -2935,7 +3106,7 @@ class RecorderGui:
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
         )
         fields = (
-            ("状態", "status", values.status),
+            ("状態", "status", "confirmed" if is_new_manual else values.status),
             ("勝敗", "result", values.result),
             ("先後", "play_order", values.play_order),
             ("コインの面", "coin_face", values.coin_face),
@@ -2943,17 +3114,33 @@ class RecorderGui:
             ("対戦種別", "duel_type", values.duel_type),
         )
         variables: dict[str, tk.StringVar] = {}
+        editable_widgets: list[tk.Widget] = []
         row = 1
+        occurred_at_var = tk.StringVar(
+            value=(
+                data.record.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                if data.record is not None
+                else datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            )
+        )
+        if is_manual:
+            ttk.Label(form, text="対戦日時").grid(row=row, column=0, sticky="w", pady=5)
+            occurred_entry = ttk.Entry(form, textvariable=occurred_at_var)
+            occurred_entry.grid(row=row, column=1, sticky="ew", pady=5)
+            editable_widgets.append(occurred_entry)
+            row += 1
         for label, key, current in fields:
             ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=5)
             variable = tk.StringVar(value=duel_choice_label(key, current))
             variables[key] = variable
-            ttk.Combobox(
+            combo = ttk.Combobox(
                 form,
                 textvariable=variable,
                 values=duel_choice_labels(key),
                 state="readonly",
-            ).grid(row=row, column=1, sticky="ew", pady=5)
+            )
+            combo.grid(row=row, column=1, sticky="ew", pady=5)
+            editable_widgets.append(combo)
             row += 1
         visible_decks = tuple(
             entry for entry in data.decks if not entry.hidden_from_history_statistics
@@ -2969,14 +3156,16 @@ class RecorderGui:
             ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=5)
             variable = tk.StringVar(value=current)
             variables[key] = variable
-            ttk.Combobox(
+            combo = ttk.Combobox(
                 form,
                 textvariable=variable,
                 values=tuple(dict.fromkeys((*choices, current)))
                 if current
                 else choices,
                 state="normal",
-            ).grid(row=row, column=1, sticky="ew", pady=5)
+            )
+            combo.grid(row=row, column=1, sticky="ew", pady=5)
+            editable_widgets.append(combo)
             row += 1
         season_by_label = {
             "未設定": None,
@@ -2988,12 +3177,14 @@ class RecorderGui:
         )
         ttk.Label(form, text="シーズン").grid(row=row, column=0, sticky="w", pady=5)
         season_var = tk.StringVar(value=current_season)
-        ttk.Combobox(
+        season_combo = ttk.Combobox(
             form,
             textvariable=season_var,
             values=tuple(season_by_label),
             state="readonly",
-        ).grid(row=row, column=1, sticky="ew", pady=5)
+        )
+        season_combo.grid(row=row, column=1, sticky="ew", pady=5)
+        editable_widgets.append(season_combo)
         row += 1
         ttk.Label(form, text="タグ").grid(row=row, column=0, sticky="nw", pady=5)
         tag_panel = ttk.Frame(form)
@@ -3045,12 +3236,15 @@ class RecorderGui:
             if selection:
                 tag_list.delete(selection[0])
 
-        ttk.Button(tag_panel, text="追加", command=add_tag).grid(
+        add_tag_button = ttk.Button(tag_panel, text="追加", command=add_tag)
+        add_tag_button.grid(
             row=0, column=1, padx=(0, 8)
         )
-        ttk.Button(tag_panel, text="選択を外す", command=remove_tag).grid(
+        remove_tag_button = ttk.Button(tag_panel, text="選択を外す", command=remove_tag)
+        remove_tag_button.grid(
             row=0, column=2
         )
+        editable_widgets.extend((tag_combo, tag_list, add_tag_button, remove_tag_button))
 
         def show_tag_description(_event: object | None = None) -> None:
             entry = tag_entries.get(tag_var.get().strip().casefold())
@@ -3064,6 +3258,7 @@ class RecorderGui:
         notes = tk.Text(form, height=10, wrap="word")
         notes.insert("1.0", values.notes)
         notes.grid(row=row, column=1, sticky="nsew", pady=5)
+        editable_widgets.append(notes)
         form.columnconfigure(1, weight=1)
         form.rowconfigure(row, weight=1)
 
@@ -3091,10 +3286,28 @@ class RecorderGui:
                 (item for item in data.seasons if item.season_id == updated.season_id),
                 None,
             )
-            view = self.history_views_by_id.get(recording_id)
+            try:
+                occurred_at = datetime.strptime(
+                    occurred_at_var.get().strip(), "%Y-%m-%d %H:%M:%S"
+                ).astimezone()
+            except ValueError:
+                self._show_error(ValueError("対戦日時はYYYY-MM-DD HH:MM:SSで入力してください"))
+                return
+            matching_view = next(
+                (
+                    view
+                    for view in self.history_views_by_id.values()
+                    if view.recording_id == recording_id
+                ),
+                None,
+            )
             occurred = (
-                (view.entry.started_at or view.entry.created_at).astimezone().date()
-                if view is not None
+                occurred_at.date()
+                if is_manual
+                else data.record.occurred_at.astimezone().date()
+                if data.record is not None
+                else matching_view.occurred_at.astimezone().date()
+                if matching_view is not None
                 else date.today()
             )
             if selected_season is not None and not selected_season.contains(occurred):
@@ -3104,34 +3317,62 @@ class RecorderGui:
                     parent=dialog,
                 ):
                     return
+            def operation() -> object:
+                if is_new_manual:
+                    return self.service.create_manual_duel_record(
+                        updated, occurred_at=occurred_at
+                    )
+                if is_manual:
+                    assert data.record is not None
+                    return self.service.update_duel_record(
+                        data.record.duel_id,
+                        updated,
+                        expected_revision=revision,
+                        occurred_at=occurred_at,
+                    )
+                assert recording_id is not None
+                return self.service.save_duel_record(
+                    recording_id, updated, expected_revision=revision
+                )
             self._run(
-                lambda: self.service.save_duel_record(
-                    recording_id,
-                    updated,
-                    expected_revision=revision,
-                ),
+                operation,
                 lambda saved: (
                     self._activity(
                         f"対戦記録を保存しました: revision {saved.revision}"
                     ),
                     dialog.destroy(),
                     self.refresh_history(),
+                    self.refresh_active_seasons(),
                 ),
             )
 
         buttons = ttk.Frame(form)
         buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
-        ttk.Button(
-            buttons,
-            text="タイムライン",
-            command=lambda: self._show_timeline(recording_id),
-        ).pack(side="left", padx=(0, 8))
+        if recording_id is not None:
+            ttk.Button(
+                buttons,
+                text="タイムライン",
+                command=lambda: self._show_timeline(recording_id),
+            ).pack(side="left", padx=(0, 8))
         ttk.Button(buttons, text="キャンセル", command=dialog.destroy).pack(
             side="left", padx=(0, 8)
         )
-        self._icon_button(
+        save_button = self._icon_button(
             buttons, "save", "対戦記録を保存", save, style="Primary.TButton"
-        ).pack(side="left")
+        )
+        save_button.pack(side="left")
+        if read_only_reason is not None:
+            for widget in editable_widgets:
+                try:
+                    widget.configure(state="disabled")
+                except tk.TclError:
+                    pass
+            save_button.configure(state="disabled")
+            ttk.Label(
+                form,
+                text=read_only_reason,
+                style="Muted.TLabel",
+            ).grid(row=row + 2, column=0, columnspan=2, sticky="e", pady=(8, 0))
         dialog.grab_set()
 
     def _show_history_diagnostic(self, entry: object) -> None:
@@ -3738,6 +3979,7 @@ class RecorderGui:
         )
         self.stop_button.configure(state="normal" if active else "disabled")
         self.watch_button.configure(state="disabled" if active else "normal")
+        self._update_duel_write_controls()
 
     def _set_record_status(self, status: str) -> None:
         presentation = record_status_presentation(status)

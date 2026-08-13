@@ -2,13 +2,14 @@ import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from master_duel_recorder_lite.application import (
     ApplicationOperationError,
+    DuelManagementQuery,
     RecorderApplicationService,
     _automatic_capture_input,
 )
@@ -118,6 +119,72 @@ class RecorderApplicationServiceTest(unittest.TestCase):
 
         self.assertEqual(view.recording_id, "internal-id")
         self.assertEqual((view.result, view.play_order, view.duel_type), ("win", "second", "ranked"))
+
+    def test_manual_duel_is_listed_with_recording_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            manual = service.create_manual_duel_record(
+                DuelRecordValues(status="confirmed", result="win", own_deck="青眼"),
+                occurred_at=datetime(2026, 8, 13, 12, tzinfo=timezone.utc),
+            )
+
+            views = service.list_history_views(
+                query=DuelManagementQuery(entry_origin="manual")
+            )
+
+        self.assertEqual(len(views), 1)
+        self.assertEqual(views[0].row_id, manual.duel_id)
+        self.assertIsNone(views[0].entry)
+        self.assertIsNone(views[0].recording_id)
+        self.assertEqual(views[0].own_deck, "青眼")
+
+    def test_manual_duel_write_is_rejected_during_watch(self) -> None:
+        service = RecorderApplicationService()
+        service._watch_thread = SimpleNamespace(is_alive=lambda: True)
+
+        self.assertEqual(
+            service.duel_write_block_reason(), "自動監視中のため更新できません"
+        )
+        with self.assertRaisesRegex(ApplicationOperationError, "自動監視中"):
+            service.create_manual_duel_record(
+                DuelRecordValues(status="confirmed"),
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+    def test_active_seasons_prioritize_rank_then_nearest_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            common = {"duel_type": "other", "start_date": date(2026, 8, 1)}
+            service.add_season(
+                name="イベントA", season_type="event", end_date=date(2026, 8, 14), **common
+            )
+            service.add_season(
+                name="ランク", season_type="ranked", end_date=date(2026, 8, 31), **common
+            )
+            service.add_season(
+                name="カスタム", season_type="custom", end_date=date(2026, 8, 15), **common
+            )
+
+            summaries = service.active_season_summaries(
+                today=date(2026, 8, 13), limit=2
+            )
+
+        self.assertEqual(
+            [item.season.name for item in summaries], ["ランク", "イベントA"]
+        )
+
+    def test_manual_duel_can_be_deleted_without_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            created = service.create_manual_duel_record(
+                DuelRecordValues(status="confirmed"),
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+            deleted = service.delete_duel_record(created.duel_id)
+
+        self.assertEqual(deleted.duel_id, created.duel_id)
+        self.assertEqual(service.list_history_views(), ())
 
     def test_new_duel_editor_inherits_last_values_but_existing_record_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

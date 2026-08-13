@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 import threading
 import time
@@ -118,14 +118,58 @@ class DuelEditorData:
 
 
 @dataclass(frozen=True)
+class DuelManagementQuery:
+    limit: int = 200
+    season_id: int | None = None
+    own_deck_id: int | None = None
+    opponent_deck_id: int | None = None
+    tag_entry_ids: tuple[int, ...] = ()
+    coin_face: str | None = None
+    coin_toss_outcome: str | None = None
+    entry_origin: str | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.limit, bool) or not isinstance(self.limit, int):
+            raise ValueError("limitは整数である必要があります")
+        if not 1 <= self.limit <= 1000:
+            raise ValueError("limitは1から1000である必要があります")
+        if self.entry_origin not in {None, "recording", "manual"}:
+            raise ValueError(f"未対応の登録元です: {self.entry_origin}")
+
+
+@dataclass(frozen=True)
 class RecordingHistoryView:
-    entry: RecordingHistoryEntry
+    entry: RecordingHistoryEntry | None
     duel_record: DuelRecord | None
     own_deck_color: str | None = None
 
     @property
-    def recording_id(self) -> str:
-        return self.entry.recording_id
+    def row_id(self) -> str:
+        if self.duel_record is not None:
+            return self.duel_record.duel_id
+        assert self.entry is not None
+        return f"recording:{self.entry.recording_id}"
+
+    @property
+    def recording_id(self) -> str | None:
+        if self.duel_record is not None:
+            return self.duel_record.recording_id
+        return self.entry.recording_id if self.entry is not None else None
+
+    @property
+    def occurred_at(self) -> datetime:
+        if self.duel_record is not None:
+            return self.duel_record.occurred_at
+        assert self.entry is not None
+        return self.entry.started_at or self.entry.created_at
+
+    @property
+    def entry_origin(self) -> str:
+        return (
+            self.duel_record.entry_origin
+            if self.duel_record is not None
+            else "recording"
+        )
 
     @property
     def result(self) -> str:
@@ -176,6 +220,12 @@ class RecordingHistoryView:
 class RecordingHistoryDashboard:
     views: tuple[RecordingHistoryView, ...]
     incomplete_duel_record_count: int
+
+
+@dataclass(frozen=True)
+class ActiveSeasonSummary:
+    season: Season
+    statistics: StatisticsDashboard
 
 
 EventCallback = Callable[[ApplicationEvent], None]
@@ -448,31 +498,89 @@ class RecorderApplicationService:
         return RecordingHistoryRepository.from_runtime_paths(self.paths).query(selected)
 
     def list_history_views(
-        self, *, limit: int = 200, query: HistoryQuery | None = None
+        self, *, limit: int = 200, query: DuelManagementQuery | None = None
     ) -> tuple[RecordingHistoryView, ...]:
-        entries = self.list_history(limit=limit, query=query)
-        records = {
-            item.recording_id: item
-            for item in DuelRecordRepository.from_runtime_paths(self.paths).list(
-                limit=1000
+        selected = query or DuelManagementQuery(limit=limit)
+        entries = self.list_history(limit=1000)
+        records = DuelRecordRepository.from_runtime_paths(self.paths).list(limit=1000)
+        catalog = DuelCatalogRepository.from_runtime_paths(self.paths)
+        decks = catalog.list_decks(include_archived=True)
+        tags = catalog.list_tags(include_archived=True)
+        deck_colors = {item.name.casefold(): item.color for item in decks}
+        entries_by_id = {item.recording_id: item for item in entries}
+        consumed: set[str] = set()
+        views: list[RecordingHistoryView] = []
+        for record in records:
+            entry = entries_by_id.get(record.recording_id or "")
+            if entry is not None:
+                consumed.add(entry.recording_id)
+            views.append(
+                RecordingHistoryView(
+                    entry,
+                    record,
+                    deck_colors.get(record.values.own_deck.casefold()),
+                )
             )
-        }
-        deck_colors = {
-            item.name.casefold(): item.color
-            for item in DuelCatalogRepository.from_runtime_paths(self.paths).list_decks(
-                include_archived=True
-            )
-        }
-        return tuple(
-            RecordingHistoryView(
-                entry,
-                records.get(entry.recording_id),
-                deck_colors.get(records[entry.recording_id].values.own_deck.casefold())
-                if entry.recording_id in records
-                else None,
-            )
+        views.extend(
+            RecordingHistoryView(entry, None)
             for entry in entries
+            if entry.recording_id not in consumed
         )
+        deck_names = {item.entry_id: item.name.casefold() for item in decks}
+        tag_names = {item.entry_id: item.name.casefold() for item in tags}
+
+        def matches(view: RecordingHistoryView) -> bool:
+            record = view.duel_record
+            if (
+                selected.entry_origin is not None
+                and view.entry_origin != selected.entry_origin
+            ):
+                return False
+            if any(
+                value is not None
+                for value in (
+                    selected.season_id,
+                    selected.own_deck_id,
+                    selected.opponent_deck_id,
+                    selected.coin_face,
+                    selected.coin_toss_outcome,
+                )
+            ) or selected.tag_entry_ids:
+                if record is None:
+                    return False
+            if record is None:
+                return True
+            values = record.values
+            if (
+                selected.season_id is not None
+                and values.season_id != selected.season_id
+            ):
+                return False
+            if selected.own_deck_id is not None and (
+                values.own_deck.casefold() != deck_names.get(selected.own_deck_id)
+            ):
+                return False
+            if selected.opponent_deck_id is not None and (
+                values.opponent_deck.casefold()
+                != deck_names.get(selected.opponent_deck_id)
+            ):
+                return False
+            if selected.coin_face is not None and values.coin_face != selected.coin_face:
+                return False
+            if selected.coin_toss_outcome is not None and values.coin_toss_outcome != selected.coin_toss_outcome:
+                return False
+            if selected.tag_entry_ids:
+                wanted = {tag_names[item] for item in selected.tag_entry_ids if item in tag_names}
+                if not wanted.intersection(tag.casefold() for tag in values.tags):
+                    return False
+            return True
+
+        filtered = sorted(
+            (view for view in views if matches(view)),
+            key=lambda view: (view.occurred_at, view.row_id),
+            reverse=True,
+        )
+        return tuple(filtered[: selected.limit])
 
     def export_managed_data(self, path: Path) -> ManagedDataResult:
         self._require_data_management_idle()
@@ -495,7 +603,7 @@ class RecorderApplicationService:
                 )
 
     def get_history_dashboard(
-        self, *, limit: int = 200, query: HistoryQuery | None = None
+        self, *, limit: int = 200, query: DuelManagementQuery | None = None
     ) -> RecordingHistoryDashboard:
         return RecordingHistoryDashboard(
             views=self.list_history_views(limit=limit, query=query),
@@ -515,8 +623,8 @@ class RecorderApplicationService:
     def get_duel_record(self, recording_id: str) -> DuelRecord | None:
         return DuelRecordRepository.from_runtime_paths(self.paths).get(recording_id)
 
-    def get_duel_editor_data(self, recording_id: str) -> DuelEditorData:
-        record = self.get_duel_record(recording_id)
+    def get_duel_editor_data(self, identifier: str | None = None) -> DuelEditorData:
+        record = self.get_duel_record(identifier) if identifier is not None else None
         catalog = DuelCatalogRepository.from_runtime_paths(self.paths)
         values = (
             record.values
@@ -540,6 +648,7 @@ class RecorderApplicationService:
         *,
         expected_revision: int,
     ) -> DuelRecord:
+        self._require_duel_write_idle()
         saved = DuelRecordRepository.from_runtime_paths(self.paths).save(
             recording_id,
             values,
@@ -557,6 +666,7 @@ class RecorderApplicationService:
         *,
         occurred_at: datetime,
     ) -> DuelRecord:
+        self._require_duel_write_idle()
         saved = DuelRecordRepository.from_runtime_paths(self.paths).create_manual(
             values,
             occurred_at=occurred_at,
@@ -575,6 +685,7 @@ class RecorderApplicationService:
         expected_revision: int,
         occurred_at: datetime | None = None,
     ) -> DuelRecord:
+        self._require_duel_write_idle()
         saved = DuelRecordRepository.from_runtime_paths(self.paths).update(
             duel_id,
             values,
@@ -586,6 +697,44 @@ class RecorderApplicationService:
             saved.values
         )
         return saved
+
+    def delete_duel_record(self, duel_id: str) -> DuelRecord:
+        self._require_duel_write_idle()
+        return DuelRecordRepository.from_runtime_paths(self.paths).delete_manual(duel_id)
+
+    def duel_write_block_reason(self) -> str | None:
+        with self._lock:
+            self._collect_manual_terminal_locked()
+            if self.watch_active:
+                return "自動監視中のため更新できません"
+            if self._manual_starting or self._current is not None:
+                return "録画中のため更新できません"
+            return None
+
+    def _require_duel_write_idle(self) -> None:
+        reason = self.duel_write_block_reason()
+        if reason is not None:
+            raise ApplicationOperationError(reason)
+
+    def active_season_summaries(
+        self, *, today: date | None = None, limit: int = 2
+    ) -> tuple[ActiveSeasonSummary, ...]:
+        target = today or datetime.now().astimezone().date()
+        active = [season for season in self.list_seasons() if season.contains(target)]
+        active.sort(
+            key=lambda season: (
+                0 if season.season_type == "ranked" else 1,
+                season.end_date,
+                season.name.casefold(),
+            )
+        )
+        return tuple(
+            ActiveSeasonSummary(
+                season,
+                self.get_statistics_dashboard(StatisticsFilter(season_id=season.season_id)),
+            )
+            for season in active[:limit]
+        )
 
     def list_duel_catalog(self) -> tuple[DuelCatalogEntry, ...]:
         return DuelCatalogRepository.from_runtime_paths(self.paths).list()
