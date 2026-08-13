@@ -144,6 +144,22 @@ class RecordingHistoryView:
         )
 
     @property
+    def coin_face(self) -> str:
+        return (
+            self.duel_record.values.coin_face
+            if self.duel_record is not None
+            else "unknown"
+        )
+
+    @property
+    def coin_toss_outcome(self) -> str:
+        return (
+            self.duel_record.values.coin_toss_outcome
+            if self.duel_record is not None
+            else "unknown"
+        )
+
+    @property
     def duel_type(self) -> str:
         return (
             self.duel_record.values.duel_type
@@ -528,6 +544,42 @@ class RecorderApplicationService:
             recording_id,
             values,
             expected_revision=expected_revision,
+            source="user",
+        )
+        DuelCatalogRepository.from_runtime_paths(self.paths).remember_record_values(
+            saved.values
+        )
+        return saved
+
+    def create_manual_duel_record(
+        self,
+        values: DuelRecordValues,
+        *,
+        occurred_at: datetime,
+    ) -> DuelRecord:
+        saved = DuelRecordRepository.from_runtime_paths(self.paths).create_manual(
+            values,
+            occurred_at=occurred_at,
+            source="user",
+        )
+        DuelCatalogRepository.from_runtime_paths(self.paths).remember_record_values(
+            saved.values
+        )
+        return saved
+
+    def update_duel_record(
+        self,
+        duel_id: str,
+        values: DuelRecordValues,
+        *,
+        expected_revision: int,
+        occurred_at: datetime | None = None,
+    ) -> DuelRecord:
+        saved = DuelRecordRepository.from_runtime_paths(self.paths).update(
+            duel_id,
+            values,
+            expected_revision=expected_revision,
+            occurred_at=occurred_at,
             source="user",
         )
         DuelCatalogRepository.from_runtime_paths(self.paths).remember_record_values(

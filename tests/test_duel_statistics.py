@@ -42,6 +42,8 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         status: str = "confirmed",
         state: str = "completed",
         season_id: int | None = None,
+        coin_face: str = "unknown",
+        coin_toss_outcome: str = "unknown",
     ) -> None:
         self.history.register_starting(
             recording_id=recording_id,
@@ -61,6 +63,8 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
                 status=status,
                 result=result,
                 play_order=play_order,
+                coin_face=coin_face,
+                coin_toss_outcome=coin_toss_outcome,
                 own_deck=deck,
                 opponent_deck=opponent_deck,
                 tags=tags,
@@ -94,6 +98,25 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual(dashboard.overall.losses, 1)
         self.assertEqual(dashboard.overall.draws, 1)
         self.assertAlmostEqual(dashboard.overall.win_rate or 0, 1 / 3)
+
+    def test_manual_record_is_included_without_recording_row(self) -> None:
+        occurred_at = datetime(2026, 8, 3, 12, tzinfo=timezone.utc)
+        record = self.records.create_manual(
+            DuelRecordValues(
+                status="confirmed",
+                result="win",
+                play_order="first",
+                own_deck="手入力デッキ",
+            ),
+            occurred_at=occurred_at,
+        )
+
+        dashboard = self.statistics.dashboard()
+
+        self.assertIsNone(record.recording_id)
+        self.assertEqual(dashboard.overall.matches, 1)
+        self.assertEqual(dashboard.overall.wins, 1)
+        self.assertEqual(dashboard.trend[0].period_start, date(2026, 8, 1))
 
     def test_combines_date_deck_tag_and_play_order_filters(self) -> None:
         self._record(
@@ -202,6 +225,28 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
             [item.label for item in dashboard.by_deck_play_order], ["青眼 後攻時"]
         )
 
+    def test_coin_filters_and_breakdowns_are_independent(self) -> None:
+        base = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+        self._record(
+            "heads-loss-second", occurred_at=base, result="win", play_order="second",
+            deck="青眼", coin_face="heads", coin_toss_outcome="loss",
+        )
+        self._record(
+            "tails-win-first", occurred_at=base, result="loss", play_order="first",
+            deck="青眼", coin_face="tails", coin_toss_outcome="win",
+        )
+
+        dashboard = self.statistics.dashboard(
+            StatisticsFilter(coin_face="heads", coin_toss_outcome="loss")
+        )
+
+        self.assertEqual(dashboard.filtered.matches, 1)
+        self.assertEqual(dashboard.filtered.wins, 1)
+        self.assertEqual([item.label for item in dashboard.by_coin_face], ["表"])
+        self.assertEqual(
+            [item.label for item in dashboard.by_coin_toss_outcome], ["コイントス負け"]
+        )
+
     def test_filter_validation_rejects_invalid_ranges_and_choices(self) -> None:
         with self.assertRaises(ValueError):
             StatisticsFilter(date_from=date(2026, 8, 2), date_to=date(2026, 8, 1))
@@ -209,6 +254,8 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
             StatisticsFilter(tag_entry_id=0)
         with self.assertRaises(ValueError):
             StatisticsFilter(play_order="unknown")
+        with self.assertRaises(ValueError):
+            StatisticsFilter(coin_face="edge")
         with self.assertRaises(ValueError):
             self.statistics.dashboard(granularity="year")
 

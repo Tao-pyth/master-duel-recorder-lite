@@ -2,18 +2,23 @@
 
 ## 目的と範囲
 
-V0.14.0では録画履歴1件に対して対戦記録を0件または1件関連付け、勝敗、先攻・後攻、デッキ、対戦種別、タグ、メモを後から何度でも編集できるようにします。動画ファイルと録画履歴のライフサイクル情報は変更せず、利用者が入力する対戦情報を別テーブルへ保存します。
+録画の有無とは独立した対戦記録を作成し、勝敗、先攻・後攻、コイントス、デッキ、対戦種別、タグ、メモを後から何度でも編集できるようにします。録画付き対戦は録画履歴を任意に関連付け、録画なし対戦も同じ戦績・統計基盤で扱います。
 
 ## データモデル
 
-履歴DBの現在版は6です。版3で対戦記録を、版5でデッキ名・タグ辞書と前回入力を、版6で説明、タグカラー、安定ID関連、音声状態を追加します。
+履歴DBの現在版は10です。版3で対戦記録を、版8でシーズンとデッキ安定IDを、版9でコイントス情報を、版10で録画から独立した対戦IDと対戦日時を追加します。
 
 ```text
 duel_records
-- recording_id: recordingsへの主キー兼外部キー
+- duel_id: 対戦固有の主キー
+- recording_id: recordingsへの任意・一意な外部キー
+- entry_origin: recording / manual
+- occurred_at: 統計に使用する対戦日時
 - status: draft / confirmed
 - result: win / loss / draw / unknown
 - play_order: first / second / unknown
+- coin_face: heads / tails / unknown
+- coin_toss_outcome: win / loss / unknown
 - own_deck
 - opponent_deck
 - duel_type: ranked / event / room / solo / other
@@ -23,13 +28,13 @@ duel_records
 - updated_at
 
 duel_record_tags
-- recording_id
+- duel_id
 - tag
 - normalized_tag
 
 duel_record_changes
 - change_id
-- recording_id
+- duel_id
 - revision
 - source: user / system / detected
 - before_json
@@ -61,7 +66,9 @@ duel_editor_preferences
 - updated_at
 ```
 
-`recording_id`の削除連鎖は使用せず、既存録画履歴の削除を前提にしません。タグはUnicode NFCと大文字小文字を無視した値で重複を拒否します。入力長、制御文字、タグ件数には上限を設けます。監査JSONは対戦記録で許可した項目だけを含み、絶対パスや秘密情報を保存しません。
+`coin_face`は実際のコインの面、`coin_toss_outcome`はプレイヤー視点のコイントス勝敗です。どちらも`play_order`とは独立して保存し、一方から他方を推測しません。既存記録は両方とも`unknown`へ移行します。未設定は有効な任意値であり、戦績管理未完了件数には影響しません。
+
+`duel_id`は録画の有無にかかわらず発行します。`recording_id`は録画付き対戦だけが保持し、手入力対戦ではNULLです。録画付き対戦の`occurred_at`は録画開始日時、手入力対戦では利用者が指定した日時とし、後者だけを変更可能にします。タグはUnicode NFCと大文字小文字を無視した値で重複を拒否します。監査JSONは対戦記録で許可した項目だけを含み、絶対パスや秘密情報を保存しません。
 
 ## 状態と後編集
 
@@ -79,7 +86,7 @@ GUI共通ヘッダーの戦績管理未完了件数は、`recordings.state = com
 
 ## GUIとCLI
 
-GUIの録画履歴詳細に対戦記録の表示・編集画面を常設します。勝敗、先後、自分・相手デッキ、対戦種別、タグ、メモ、状態、最終更新を表示します。状態、勝敗、先後、対戦種別は日本語表示名と既存の英語内部値を双方向変換します。
+GUIの録画履歴詳細に対戦記録の表示・編集画面を常設します。勝敗、先後、コインの面、コイントス勝敗、自分・相手デッキ、対戦種別、タグ、メモ、状態、最終更新を表示します。選択項目は日本語表示名と英語内部値を双方向変換します。履歴と統計ではコインの面・コイントス勝敗を他条件と組み合わせて絞り込めます。
 
 自分デッキと相手デッキは同じ`deck`辞書を入力可能な選択欄として利用します。タグは`tag`辞書から複数追加でき、候補にない日本語名も入力できます。対戦記録の保存後、新しいデッキ名とタグを辞書へ追加し、対戦種別、自分デッキ、相手デッキ、タグを`duel_editor_preferences`へ保存します。未作成の記録だけがこの前回値を初期値に使い、既存記録は自身の値を優先します。
 
@@ -87,7 +94,7 @@ GUIの録画履歴詳細に対戦記録の表示・編集画面を常設しま�
 
 対戦記録は表示用文字列に加えて`duel_record_catalog_links`でカタログの安定IDへ関連付けます。名前変更は同じIDの表示名を更新するため、将来のタグ別集計で同一項目として扱えます。参照中の項目を削除した場合はアーカイブして過去記録の関連を残し、未使用項目だけを恒久削除します。版5から6への移行では既存名称をカタログへ取り込み、対戦記録との関連を補完します。
 
-CLIは`duel show`、`duel set`、`duel confirm`、`duel history`を提供し、JSON出力では絶対パスと秘密情報を除外します。
+CLIは`duel create`、`duel show`、`duel set`、`duel confirm`、`duel history`を提供し、JSON出力では絶対パスと秘密情報を除外します。`duel create`は録画履歴を作成せず、手入力由来の確定済み対戦を登録します。
 
 ## 完了条件
 
@@ -97,7 +104,11 @@ CLIは`duel show`、`duel set`、`duel confirm`、`duel history`を提供し、J
 - 手動録画後は入力画面、自動録画後は非モーダル通知を提供する
 - 全画面の共通ヘッダーで戦績管理未完了件数を確認し、録画履歴へ移動できる
 - 日本語表示と英語内部値を往復して既存データを再保存できる
+- コインの面、コイントス勝敗、先後を独立保存し、後から編集できる
+- 表裏別・コイントス勝敗別の戦績を集計できる
 - デッキ名・タグ辞書と前回入力がアプリ再起動後も維持される
-- スキーマ版2から6までの移行前バックアップと失敗時ロールバックを検証する
+- スキーマ版8から9への移行前バックアップと失敗時ロールバックを検証する
+- スキーマ版9から10への移行で既存録画戦績を保持する
+- 録画なし戦績が録画付き戦績と同じ統計・変更監査へ反映される
 
-追跡: [V0.14.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/15)、Issue #86 - #95、[V0.17.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/30)、Issue #140 - #152、[V0.17.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/33)、Issue #198、および[V0.17.4 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/34)、Issue #203、#205
+追跡: [V0.14.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/15)、Issue #86 - #95、[V0.17.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/30)、Issue #140 - #152、[V0.20.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/40)、Issue #250 - #258、[V0.21.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/41)、Issue #259 - #269

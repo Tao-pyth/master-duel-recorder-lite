@@ -14,6 +14,7 @@ from master_duel_recorder_lite.history_database import (
     _migrate_to_v5,
     _migrate_to_v6,
     _migrate_to_v7,
+    _migrate_to_v8,
     initialize_history_database,
 )
 
@@ -194,6 +195,8 @@ class HistoryDatabaseTest(unittest.TestCase):
                         6: lambda _connection: None,
                         7: lambda _connection: None,
                         8: lambda _connection: None,
+                        9: lambda _connection: None,
+                        10: lambda _connection: None,
                     },
                 )
 
@@ -409,6 +412,58 @@ class HistoryDatabaseTest(unittest.TestCase):
         self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(entries, [("deck", "烙印"), ("deck", "青眼"), ("tag", "大会")])
 
+    def test_version_eight_adds_unknown_coin_fields_without_changing_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE schema_version "
+                    "(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)"
+                )
+                connection.execute("INSERT INTO schema_version VALUES (1, 8)")
+                for migration in (
+                    _migrate_to_v1,
+                    _migrate_to_v2,
+                    _migrate_to_v3,
+                    _migrate_to_v4,
+                    _migrate_to_v5,
+                    _migrate_to_v6,
+                    _migrate_to_v7,
+                    _migrate_to_v8,
+                ):
+                    migration(connection)
+                connection.execute("PRAGMA user_version = 8")
+                connection.execute(
+                    "INSERT INTO recordings (recording_id, state, source, output_path, container, "
+                    "created_at, diagnostics_json, updated_at) VALUES "
+                    "('legacy', 'completed', 'manual', 'legacy.mkv', 'mkv', ?, '[]', ?)",
+                    ("2026-08-13T00:00:00+00:00", "2026-08-13T00:00:00+00:00"),
+                )
+                connection.execute(
+                    "INSERT INTO duel_records (recording_id, status, result, play_order, own_deck, "
+                    "opponent_deck, duel_type, notes, revision, created_at, updated_at) VALUES "
+                    "('legacy', 'confirmed', 'win', 'first', '', '', 'ranked', '', 1, ?, ?)",
+                    ("2026-08-13T00:00:00+00:00", "2026-08-13T00:00:00+00:00"),
+                )
+
+            info = initialize_history_database(path)
+            with closing(sqlite3.connect(path)) as connection:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_records)")}
+                migrated = connection.execute(
+                    "SELECT result, play_order, coin_face, coin_toss_outcome "
+                    "FROM duel_records WHERE recording_id = 'legacy'"
+                ).fetchone()
+            assert info.backup_path is not None
+            with closing(sqlite3.connect(info.backup_path)) as backup:
+                backup_version = backup.execute(
+                    "SELECT version FROM schema_version WHERE singleton = 1"
+                ).fetchone()[0]
+
+        self.assertEqual(info.version, 10)
+        self.assertTrue({"duel_id", "coin_face", "coin_toss_outcome"}.issubset(columns))
+        self.assertEqual(migrated, ("win", "first", "unknown", "unknown"))
+        self.assertEqual(backup_version, 8)
+
     def test_version_five_adds_catalog_attributes_and_stable_tag_links(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "history.sqlite3"
@@ -451,7 +506,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                     "SELECT description, color, is_archived FROM duel_catalog_entries"
                 ).fetchone()
                 links = connection.execute(
-                    "SELECT recording_id FROM duel_record_tag_links"
+                    "SELECT duel_id FROM duel_record_tag_links"
                 ).fetchall()
 
         self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)

@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 10
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -394,6 +394,144 @@ def _migrate_to_v8(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v9(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "ALTER TABLE duel_records ADD COLUMN coin_face TEXT NOT NULL DEFAULT 'unknown' "
+        "CHECK (coin_face IN ('heads', 'tails', 'unknown'))"
+    )
+    connection.execute(
+        "ALTER TABLE duel_records ADD COLUMN coin_toss_outcome TEXT NOT NULL DEFAULT 'unknown' "
+        "CHECK (coin_toss_outcome IN ('win', 'loss', 'unknown'))"
+    )
+    connection.execute(
+        "CREATE INDEX duel_records_coin_face_idx ON duel_records(coin_face)"
+    )
+    connection.execute(
+        "CREATE INDEX duel_records_coin_toss_outcome_idx ON duel_records(coin_toss_outcome)"
+    )
+
+
+def _migrate_to_v10(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE duel_records_v10 (
+            duel_id TEXT PRIMARY KEY CHECK (length(trim(duel_id)) > 0),
+            recording_id TEXT UNIQUE REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            entry_origin TEXT NOT NULL CHECK (entry_origin IN ('recording', 'manual')),
+            occurred_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('draft', 'confirmed')),
+            result TEXT NOT NULL CHECK (result IN ('win', 'loss', 'draw', 'unknown')),
+            play_order TEXT NOT NULL CHECK (play_order IN ('first', 'second', 'unknown')),
+            coin_face TEXT NOT NULL CHECK (coin_face IN ('heads', 'tails', 'unknown')),
+            coin_toss_outcome TEXT NOT NULL CHECK (coin_toss_outcome IN ('win', 'loss', 'unknown')),
+            own_deck TEXT NOT NULL DEFAULT '',
+            opponent_deck TEXT NOT NULL DEFAULT '',
+            duel_type TEXT NOT NULL CHECK (duel_type IN ('ranked', 'event', 'room', 'solo', 'other')),
+            notes TEXT NOT NULL DEFAULT '',
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            season_id INTEGER REFERENCES seasons(season_id),
+            own_deck_id INTEGER REFERENCES duel_catalog_entries(entry_id),
+            opponent_deck_id INTEGER REFERENCES duel_catalog_entries(entry_id),
+            CHECK (
+                (entry_origin = 'recording' AND recording_id IS NOT NULL)
+                OR (entry_origin = 'manual' AND recording_id IS NULL)
+            )
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO duel_records_v10 (
+            duel_id, recording_id, entry_origin, occurred_at, status, result,
+            play_order, coin_face, coin_toss_outcome, own_deck, opponent_deck,
+            duel_type, notes, revision, created_at, updated_at, season_id,
+            own_deck_id, opponent_deck_id
+        )
+        SELECT
+            duel.recording_id, duel.recording_id, 'recording',
+            COALESCE(recording.started_at, recording.created_at), duel.status,
+            duel.result, duel.play_order, duel.coin_face, duel.coin_toss_outcome,
+            duel.own_deck, duel.opponent_deck, duel.duel_type, duel.notes,
+            duel.revision, duel.created_at, duel.updated_at, duel.season_id,
+            duel.own_deck_id, duel.opponent_deck_id
+        FROM duel_records AS duel
+        JOIN recordings AS recording ON recording.recording_id = duel.recording_id
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_tags_v10 (
+            duel_id TEXT NOT NULL REFERENCES duel_records_v10(duel_id) ON DELETE RESTRICT,
+            tag TEXT NOT NULL,
+            normalized_tag TEXT NOT NULL,
+            PRIMARY KEY (duel_id, normalized_tag)
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO duel_record_tags_v10(duel_id, tag, normalized_tag) "
+        "SELECT recording_id, tag, normalized_tag FROM duel_record_tags"
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_changes_v10 (
+            change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            duel_id TEXT NOT NULL REFERENCES duel_records_v10(duel_id) ON DELETE RESTRICT,
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            source TEXT NOT NULL CHECK (source IN ('user', 'system', 'detected')),
+            before_json TEXT NOT NULL,
+            after_json TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            UNIQUE (duel_id, revision)
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO duel_record_changes_v10(change_id, duel_id, revision, source, before_json, after_json, changed_at) "
+        "SELECT change_id, recording_id, revision, source, before_json, after_json, changed_at "
+        "FROM duel_record_changes"
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_tag_links_v10 (
+            duel_id TEXT NOT NULL REFERENCES duel_records_v10(duel_id) ON DELETE RESTRICT,
+            tag_entry_id INTEGER NOT NULL REFERENCES duel_catalog_entries(entry_id) ON DELETE RESTRICT,
+            PRIMARY KEY (duel_id, tag_entry_id)
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO duel_record_tag_links_v10(duel_id, tag_entry_id) "
+        "SELECT recording_id, tag_entry_id FROM duel_record_tag_links"
+    )
+    connection.execute("DROP TABLE duel_record_tag_links")
+    connection.execute("DROP TABLE duel_record_tags")
+    connection.execute("DROP TABLE duel_record_changes")
+    connection.execute("DROP TABLE duel_records")
+    connection.execute("ALTER TABLE duel_records_v10 RENAME TO duel_records")
+    connection.execute("ALTER TABLE duel_record_tags_v10 RENAME TO duel_record_tags")
+    connection.execute("ALTER TABLE duel_record_changes_v10 RENAME TO duel_record_changes")
+    connection.execute("ALTER TABLE duel_record_tag_links_v10 RENAME TO duel_record_tag_links")
+    connection.execute(
+        "CREATE INDEX duel_records_updated_at_idx ON duel_records(updated_at DESC, duel_id DESC)"
+    )
+    connection.execute("CREATE INDEX duel_records_recording_idx ON duel_records(recording_id)")
+    connection.execute("CREATE INDEX duel_records_occurred_idx ON duel_records(occurred_at DESC, duel_id DESC)")
+    connection.execute("CREATE INDEX duel_records_season_idx ON duel_records(season_id)")
+    connection.execute("CREATE INDEX duel_records_own_deck_idx ON duel_records(own_deck_id)")
+    connection.execute("CREATE INDEX duel_records_opponent_deck_idx ON duel_records(opponent_deck_id)")
+    connection.execute("CREATE INDEX duel_records_coin_face_idx ON duel_records(coin_face)")
+    connection.execute("CREATE INDEX duel_records_coin_toss_outcome_idx ON duel_records(coin_toss_outcome)")
+    connection.execute(
+        "CREATE INDEX duel_record_changes_duel_idx ON duel_record_changes(duel_id, revision DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX duel_record_tag_links_tag_idx ON duel_record_tag_links(tag_entry_id, duel_id)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -403,6 +541,8 @@ _MIGRATIONS: dict[int, Migration] = {
     6: _migrate_to_v6,
     7: _migrate_to_v7,
     8: _migrate_to_v8,
+    9: _migrate_to_v9,
+    10: _migrate_to_v10,
 }
 
 
@@ -621,7 +761,10 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         row[1] for row in connection.execute("PRAGMA table_info(duel_records)")
     }
     if not {
+        "duel_id",
         "recording_id",
+        "entry_origin",
+        "occurred_at",
         "status",
         "result",
         "revision",
@@ -629,19 +772,21 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "season_id",
         "own_deck_id",
         "opponent_deck_id",
+        "coin_face",
+        "coin_toss_outcome",
     }.issubset(duel_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のduel_recordsスキーマがありません")
     tag_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_record_tags)")
     }
-    if not {"recording_id", "tag", "normalized_tag"}.issubset(tag_columns):
+    if not {"duel_id", "tag", "normalized_tag"}.issubset(tag_columns):
         raise HistoryDatabaseError(
             "録画履歴DBに必須のduel_record_tagsスキーマがありません"
         )
     change_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_record_changes)")
     }
-    if not {"change_id", "recording_id", "revision", "after_json"}.issubset(
+    if not {"change_id", "duel_id", "revision", "after_json"}.issubset(
         change_columns
     ):
         raise HistoryDatabaseError(
@@ -674,7 +819,7 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
     tag_link_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_record_tag_links)")
     }
-    if not {"recording_id", "tag_entry_id"}.issubset(tag_link_columns):
+    if not {"duel_id", "tag_entry_id"}.issubset(tag_link_columns):
         raise HistoryDatabaseError(
             "録画履歴DBに必須のduel_record_tag_linksスキーマがありません"
         )

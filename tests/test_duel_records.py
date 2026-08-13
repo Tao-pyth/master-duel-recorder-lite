@@ -1,4 +1,5 @@
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 import sqlite3
 import tempfile
 import unittest
@@ -25,6 +26,8 @@ class DuelRecordRepositoryTest(unittest.TestCase):
         self.assertEqual(duel_choice_label("status", "draft"), "編集中")
         self.assertEqual(duel_choice_label("result", "win"), "勝ち")
         self.assertEqual(duel_choice_label("play_order", "first"), "先攻")
+        self.assertEqual(duel_choice_label("coin_face", "heads"), "表")
+        self.assertEqual(duel_choice_label("coin_toss_outcome", "loss"), "負け")
         self.assertEqual(duel_choice_label("duel_type", "ranked"), "ランク戦")
         self.assertEqual(duel_choice_value("result", "負け"), "loss")
         self.assertEqual(
@@ -132,6 +135,49 @@ class DuelRecordRepositoryTest(unittest.TestCase):
         self.assertEqual(edited.values.status, "confirmed")
         self.assertEqual(edited.values.notes, "修正済み")
         self.assertEqual(edited.revision, 3)
+
+    def test_coin_face_outcome_and_play_order_are_independent_and_audited(self) -> None:
+        saved = self.repository.save(
+            "recording-1",
+            DuelRecordValues(
+                status="confirmed",
+                play_order="second",
+                coin_face="heads",
+                coin_toss_outcome="loss",
+            ),
+            expected_revision=0,
+        )
+
+        self.assertEqual(saved.values.play_order, "second")
+        self.assertEqual(saved.values.coin_face, "heads")
+        self.assertEqual(saved.values.coin_toss_outcome, "loss")
+        self.assertEqual(self.repository.changes("recording-1")[0].after["coin_face"], "heads")
+
+    def test_manual_record_has_duel_id_without_recording_row_and_can_change_date(self) -> None:
+        occurred_at = datetime(2026, 8, 13, 12, tzinfo=timezone.utc)
+        saved = self.repository.create_manual(
+            DuelRecordValues(status="confirmed", result="win", own_deck="青眼"),
+            occurred_at=occurred_at,
+        )
+
+        self.assertEqual(saved.entry_origin, "manual")
+        self.assertIsNone(saved.recording_id)
+        self.assertEqual(saved.occurred_at, occurred_at)
+        self.assertEqual(len(saved.duel_id), 32)
+        with closing(sqlite3.connect(self.database)) as connection:
+            recording_count = connection.execute("SELECT COUNT(*) FROM recordings").fetchone()[0]
+        self.assertEqual(recording_count, 1)
+
+        changed_at = occurred_at + timedelta(days=1)
+        updated = self.repository.update(
+            saved.duel_id,
+            DuelRecordValues(**{**saved.values.__dict__, "result": "loss"}),
+            expected_revision=saved.revision,
+            occurred_at=changed_at,
+        )
+        self.assertEqual(updated.occurred_at, changed_at)
+        self.assertEqual(updated.values.result, "loss")
+        self.assertEqual(self.repository.get(saved.duel_id), updated)
 
     def test_stale_revision_is_rejected_without_overwrite(self) -> None:
         draft = self.repository.create_draft("recording-1")

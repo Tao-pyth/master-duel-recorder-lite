@@ -25,6 +25,8 @@ from .config_management import (
     updated_config,
 )
 from .duel_records import (
+    COIN_FACES,
+    COIN_TOSS_OUTCOMES,
     DUEL_TYPES,
     PLAY_ORDERS,
     RESULTS,
@@ -292,9 +294,29 @@ def build_parser() -> argparse.ArgumentParser:
     duel_parser = subparsers.add_parser(
         "duel",
         help="録画に関連付けた対戦記録を管理します。",
-        description="勝敗、先後、デッキ、対戦種別、タグ、メモを後から編集します。",
+        description="勝敗、先後、コイントス、デッキ、対戦種別、タグ、メモを後から編集します。",
     )
     duel_subparsers = duel_parser.add_subparsers(dest="duel_command", required=True)
+    duel_create = duel_subparsers.add_parser(
+        "create", help="録画を伴わない対戦記録を作成します。"
+    )
+    duel_create.add_argument("--occurred-at", type=_iso_datetime, default=None)
+    duel_create.add_argument("--result", choices=sorted(RESULTS), default="unknown")
+    duel_create.add_argument(
+        "--play-order", choices=sorted(PLAY_ORDERS), default="unknown"
+    )
+    duel_create.add_argument("--coin-face", choices=sorted(COIN_FACES), default="unknown")
+    duel_create.add_argument(
+        "--coin-toss-outcome",
+        choices=sorted(COIN_TOSS_OUTCOMES),
+        default="unknown",
+    )
+    duel_create.add_argument("--own-deck", default="")
+    duel_create.add_argument("--opponent-deck", default="")
+    duel_create.add_argument("--duel-type", choices=sorted(DUEL_TYPES), default="other")
+    duel_create.add_argument("--tag", action="append", default=[])
+    duel_create.add_argument("--notes", default="")
+    duel_create.add_argument("--json", action="store_true")
     duel_show = duel_subparsers.add_parser("show", help="対戦記録1件を表示します。")
     duel_show.add_argument("recording_id")
     duel_show.add_argument("--json", action="store_true")
@@ -305,6 +327,10 @@ def build_parser() -> argparse.ArgumentParser:
     duel_set.add_argument("--revision", type=_nonnegative_integer, required=True)
     duel_set.add_argument("--result", choices=sorted(RESULTS), default=None)
     duel_set.add_argument("--play-order", choices=sorted(PLAY_ORDERS), default=None)
+    duel_set.add_argument("--coin-face", choices=sorted(COIN_FACES), default=None)
+    duel_set.add_argument(
+        "--coin-toss-outcome", choices=sorted(COIN_TOSS_OUTCOMES), default=None
+    )
     duel_set.add_argument("--own-deck", default=None)
     duel_set.add_argument("--opponent-deck", default=None)
     duel_set.add_argument("--duel-type", choices=sorted(DUEL_TYPES), default=None)
@@ -1060,6 +1086,25 @@ def _print_history_detail(entry: RecordingHistoryEntry, recordings_root: Path) -
 def _run_duel_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
     repository = DuelRecordRepository.from_runtime_paths(paths)
     try:
+        if args.duel_command == "create":
+            saved = repository.create_manual(
+                DuelRecordValues(
+                    status="confirmed",
+                    result=args.result,
+                    play_order=args.play_order,
+                    coin_face=args.coin_face,
+                    coin_toss_outcome=args.coin_toss_outcome,
+                    own_deck=args.own_deck,
+                    opponent_deck=args.opponent_deck,
+                    duel_type=args.duel_type,
+                    tags=tuple(args.tag),
+                    notes=args.notes,
+                ),
+                occurred_at=args.occurred_at or datetime.now(timezone.utc),
+                source="user",
+            )
+            _print_duel_record(saved, as_json=args.json)
+            return EXIT_SUCCESS
         if args.duel_command == "show":
             record = repository.get(args.recording_id)
             if record is None:
@@ -1080,6 +1125,12 @@ def _run_duel_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
                 play_order=args.play_order
                 if args.play_order is not None
                 else base.play_order,
+                coin_face=args.coin_face
+                if args.coin_face is not None
+                else base.coin_face,
+                coin_toss_outcome=args.coin_toss_outcome
+                if args.coin_toss_outcome is not None
+                else base.coin_toss_outcome,
                 own_deck=args.own_deck if args.own_deck is not None else base.own_deck,
                 opponent_deck=(
                     args.opponent_deck
@@ -1091,6 +1142,7 @@ def _run_duel_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
                 else base.duel_type,
                 tags=tuple(args.tag) if args.tag is not None else base.tags,
                 notes=args.notes if args.notes is not None else base.notes,
+                season_id=base.season_id,
             )
             saved = repository.save(
                 args.recording_id,
@@ -1113,7 +1165,7 @@ def _run_duel_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
                 document = [
                     {
                         "change_id": change.change_id,
-                        "recording_id": change.recording_id,
+                        "duel_id": change.duel_id,
                         "revision": change.revision,
                         "source": change.source,
                         "before": change.before,
@@ -1148,10 +1200,15 @@ def _print_duel_record(record: object, *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(document, ensure_ascii=False, sort_keys=True))
         return
-    print(f"recording id: {document['recording_id']}")
+    print(f"duel id: {document['duel_id']}")
+    print(f"recording id: {document['recording_id'] or '-'}")
+    print(f"entry origin: {document['entry_origin']}")
+    print(f"occurred at: {document['occurred_at']}")
     print(f"status: {document['status']}")
     print(f"result: {document['result']}")
     print(f"play order: {document['play_order']}")
+    print(f"coin face: {document['coin_face']}")
+    print(f"coin toss outcome: {document['coin_toss_outcome']}")
     print(f"own deck: {document['own_deck'] or '-'}")
     print(f"opponent deck: {document['opponent_deck'] or '-'}")
     print(f"duel type: {document['duel_type']}")

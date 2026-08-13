@@ -67,12 +67,20 @@ class HistoryQuery:
     own_deck_id: int | None = None
     opponent_deck_id: int | None = None
     tag_entry_ids: tuple[int, ...] = ()
+    coin_face: str | None = None
+    coin_toss_outcome: str | None = None
     limit: int = 50
     offset: int = 0
 
     def __post_init__(self) -> None:
         if self.state is not None and self.state not in HISTORY_STATES:
             raise ValueError(f"未対応の録画状態です: {self.state}")
+        if self.coin_face is not None and self.coin_face not in {"heads", "tails", "unknown"}:
+            raise ValueError(f"未対応のコインの面です: {self.coin_face}")
+        if self.coin_toss_outcome is not None and self.coin_toss_outcome not in {
+            "win", "loss", "unknown"
+        }:
+            raise ValueError(f"未対応のコイントス勝敗です: {self.coin_toss_outcome}")
         _optional_aware_datetime(self.since, "since")
         _optional_aware_datetime(self.until, "until")
         if (
@@ -405,10 +413,21 @@ class RecordingHistoryRepository:
         if selected.tag_entry_ids:
             placeholders = ",".join("?" for _ in selected.tag_entry_ids)
             clauses.append(
-                "EXISTS (SELECT 1 FROM duel_record_tag_links tags WHERE "
-                f"tags.recording_id = recordings.recording_id AND tags.tag_entry_id IN ({placeholders}))"
+                "EXISTS (SELECT 1 FROM duel_record_tag_links tags "
+                "JOIN duel_records duel ON duel.duel_id = tags.duel_id WHERE "
+                f"duel.recording_id = recordings.recording_id AND tags.tag_entry_id IN ({placeholders}))"
             )
             parameters.extend(selected.tag_entry_ids)
+        if selected.coin_face is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM duel_records duel WHERE duel.recording_id = recordings.recording_id AND duel.coin_face = ?)"
+            )
+            parameters.append(selected.coin_face)
+        if selected.coin_toss_outcome is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM duel_records duel WHERE duel.recording_id = recordings.recording_id AND duel.coin_toss_outcome = ?)"
+            )
+            parameters.append(selected.coin_toss_outcome)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         parameters.extend((selected.limit, selected.offset))
         sql = (
@@ -450,23 +469,30 @@ class RecordingHistoryRepository:
                 moved.append((path, staged))
 
             with self._connection() as connection:
-                connection.execute(
-                    "DELETE FROM duel_record_tags WHERE recording_id = ?", (identifier,)
-                )
-                connection.execute(
-                    "DELETE FROM duel_record_tag_links WHERE recording_id = ?",
+                duel_row = connection.execute(
+                    "SELECT duel_id FROM duel_records WHERE recording_id = ?",
                     (identifier,),
-                )
-                connection.execute(
-                    "DELETE FROM duel_record_changes WHERE recording_id = ?",
-                    (identifier,),
-                )
+                ).fetchone()
+                duel_id = str(duel_row["duel_id"]) if duel_row is not None else None
+                if duel_id is not None:
+                    connection.execute(
+                        "DELETE FROM duel_record_tags WHERE duel_id = ?", (duel_id,)
+                    )
+                    connection.execute(
+                        "DELETE FROM duel_record_tag_links WHERE duel_id = ?",
+                        (duel_id,),
+                    )
+                    connection.execute(
+                        "DELETE FROM duel_record_changes WHERE duel_id = ?",
+                        (duel_id,),
+                    )
                 connection.execute(
                     "DELETE FROM duel_events WHERE recording_id = ?", (identifier,)
                 )
-                connection.execute(
-                    "DELETE FROM duel_records WHERE recording_id = ?", (identifier,)
-                )
+                if duel_id is not None:
+                    connection.execute(
+                        "DELETE FROM duel_records WHERE duel_id = ?", (duel_id,)
+                    )
                 cursor = connection.execute(
                     "DELETE FROM recordings WHERE recording_id = ?", (identifier,)
                 )

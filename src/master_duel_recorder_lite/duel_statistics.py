@@ -13,6 +13,8 @@ from .runtime_paths import RuntimePaths
 
 GRANULARITIES = {"day", "week", "month"}
 PLAY_ORDER_FILTERS = {"first", "second"}
+COIN_FACE_FILTERS = {"heads", "tails", "unknown"}
+COIN_TOSS_OUTCOME_FILTERS = {"win", "loss", "unknown"}
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,8 @@ class StatisticsFilter:
     own_deck: str | None = None
     tag_entry_id: int | None = None
     play_order: str | None = None
+    coin_face: str | None = None
+    coin_toss_outcome: str | None = None
     season_id: int | None = None
     season_unassigned: bool = False
 
@@ -42,6 +46,15 @@ class StatisticsFilter:
                 raise ValueError("tag_entry_idは1以上である必要があります")
         if self.play_order is not None and self.play_order not in PLAY_ORDER_FILTERS:
             raise ValueError(f"未対応の先後条件です: {self.play_order}")
+        if self.coin_face is not None and self.coin_face not in COIN_FACE_FILTERS:
+            raise ValueError(f"未対応のコインの面です: {self.coin_face}")
+        if (
+            self.coin_toss_outcome is not None
+            and self.coin_toss_outcome not in COIN_TOSS_OUTCOME_FILTERS
+        ):
+            raise ValueError(
+                f"未対応のコイントス勝敗です: {self.coin_toss_outcome}"
+            )
         if self.season_id is not None and (
             isinstance(self.season_id, bool)
             or not isinstance(self.season_id, int)
@@ -87,6 +100,8 @@ class StatisticsDashboard:
     by_deck: tuple[StatisticsBreakdown, ...]
     by_play_order: tuple[StatisticsBreakdown, ...]
     by_deck_play_order: tuple[StatisticsBreakdown, ...]
+    by_coin_face: tuple[StatisticsBreakdown, ...]
+    by_coin_toss_outcome: tuple[StatisticsBreakdown, ...]
     trend: tuple[StatisticsTrendPoint, ...]
     filters: StatisticsFilter
     granularity: str
@@ -97,6 +112,8 @@ class _StatisticsRow:
     occurred_at: datetime
     result: str
     play_order: str
+    coin_face: str
+    coin_toss_outcome: str
     own_deck: str
     season_id: int | None
 
@@ -135,6 +152,8 @@ class DuelStatisticsRepository:
             by_deck=_breakdown_by_deck(filtered_rows),
             by_play_order=_breakdown_by_play_order(filtered_rows),
             by_deck_play_order=_breakdown_by_deck_play_order(filtered_rows),
+            by_coin_face=_breakdown_by_coin_face(filtered_rows),
+            by_coin_toss_outcome=_breakdown_by_coin_toss_outcome(filtered_rows),
             trend=_trend(filtered_rows, selected, granularity),
             filters=selected,
             granularity=granularity,
@@ -150,7 +169,7 @@ class DuelStatisticsRepository:
                   AND EXISTS (
                       SELECT 1
                       FROM duel_record_tag_links AS tag_link
-                      WHERE tag_link.recording_id = recording.recording_id
+                      WHERE tag_link.duel_id = duel.duel_id
                         AND tag_link.tag_entry_id = ?
                   )
             """
@@ -159,24 +178,29 @@ class DuelStatisticsRepository:
             rows = connection.execute(
                 f"""
                 SELECT
-                    COALESCE(recording.started_at, recording.created_at) AS occurred_at,
+                    duel.occurred_at,
                     duel.result,
                     duel.play_order,
-                    duel.own_deck
-                    , duel.season_id
-                FROM recordings AS recording
-                JOIN duel_records AS duel
-                  ON duel.recording_id = recording.recording_id
-                WHERE recording.state = 'completed'
-                  AND duel.status = 'confirmed'
+                    duel.coin_face,
+                    duel.coin_toss_outcome,
+                    duel.own_deck,
+                    duel.season_id
+                FROM duel_records AS duel
+                LEFT JOIN recordings AS recording
+                    ON recording.recording_id = duel.recording_id
+                WHERE duel.status = 'confirmed'
                   AND duel.result IN ('win', 'loss', 'draw')
+                  AND (
+                      duel.entry_origin = 'manual'
+                      OR recording.state = 'completed'
+                  )
                   AND NOT EXISTS (
                       SELECT 1 FROM duel_catalog_entries AS hidden_deck
                       WHERE hidden_deck.entry_id = duel.own_deck_id
                         AND hidden_deck.hidden_from_history_statistics = 1
                   )
                   {tag_clause}
-                ORDER BY occurred_at, recording.recording_id
+                ORDER BY duel.occurred_at, duel.duel_id
                 """,
                 parameters,
             ).fetchall()
@@ -185,6 +209,8 @@ class DuelStatisticsRepository:
                 occurred_at=_parse_datetime(str(row["occurred_at"])),
                 result=str(row["result"]),
                 play_order=str(row["play_order"]),
+                coin_face=str(row["coin_face"]),
+                coin_toss_outcome=str(row["coin_toss_outcome"]),
                 own_deck=str(row["own_deck"]),
                 season_id=row["season_id"],
             )
@@ -201,6 +227,13 @@ def _matches(row: _StatisticsRow, filters: StatisticsFilter) -> bool:
     if filters.own_deck and _normalized(row.own_deck) != _normalized(filters.own_deck):
         return False
     if filters.play_order is not None and row.play_order != filters.play_order:
+        return False
+    if filters.coin_face is not None and row.coin_face != filters.coin_face:
+        return False
+    if (
+        filters.coin_toss_outcome is not None
+        and row.coin_toss_outcome != filters.coin_toss_outcome
+    ):
         return False
     if filters.season_id is not None and row.season_id != filters.season_id:
         return False
@@ -272,6 +305,35 @@ def _breakdown_by_deck_play_order(
                     )
                 )
     return tuple(result)
+
+
+def _breakdown_by_coin_face(
+    rows: tuple[_StatisticsRow, ...],
+) -> tuple[StatisticsBreakdown, ...]:
+    labels = {"heads": "表", "tails": "裏", "unknown": "未設定"}
+    return _breakdown_by_choice(rows, "coin_face", labels)
+
+
+def _breakdown_by_coin_toss_outcome(
+    rows: tuple[_StatisticsRow, ...],
+) -> tuple[StatisticsBreakdown, ...]:
+    labels = {"win": "コイントス勝ち", "loss": "コイントス負け", "unknown": "未設定"}
+    return _breakdown_by_choice(rows, "coin_toss_outcome", labels)
+
+
+def _breakdown_by_choice(
+    rows: tuple[_StatisticsRow, ...],
+    field: str,
+    labels: dict[str, str],
+) -> tuple[StatisticsBreakdown, ...]:
+    grouped: dict[str, list[_StatisticsRow]] = defaultdict(list)
+    for row in rows:
+        grouped[str(getattr(row, field))].append(row)
+    return tuple(
+        StatisticsBreakdown(key, label, _metric(grouped[key]))
+        for key, label in labels.items()
+        if key in grouped
+    )
 
 
 def _trend(

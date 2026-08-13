@@ -152,6 +152,37 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
 
         self.assertEqual([entry.recording_id for entry in entries], ["target"])
 
+    def test_query_filters_coin_face_and_outcome_before_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repository = self.make_repository(root)
+            records = DuelRecordRepository(repository.database_path)
+            for index, (recording_id, face, outcome) in enumerate(
+                (
+                    ("target", "heads", "loss"),
+                    ("wrong-face", "tails", "loss"),
+                    ("wrong-outcome", "heads", "win"),
+                )
+            ):
+                repository.register_starting(
+                    recording_id=recording_id,
+                    output_path=root / "recordings" / f"{recording_id}.mkv",
+                    container="mkv",
+                    source="automatic",
+                    created_at=BASE_TIME + timedelta(seconds=index),
+                )
+                records.save(
+                    recording_id,
+                    DuelRecordValues(coin_face=face, coin_toss_outcome=outcome),
+                    expected_revision=0,
+                )
+
+            entries = repository.query(
+                HistoryQuery(coin_face="heads", coin_toss_outcome="loss", limit=1)
+            )
+
+        self.assertEqual([entry.recording_id for entry in entries], ["target"])
+
     def test_unknown_recording_returns_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             repository = self.make_repository(Path(tmp_dir))

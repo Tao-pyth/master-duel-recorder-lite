@@ -375,11 +375,13 @@ class DuelCatalogRepository:
             raise DuelCatalogError("タグ以外の項目では対戦記録を検索できません")
         with closing(connect_history_database(self.database_path)) as connection:
             rows = connection.execute(
-                "SELECT recording_id FROM duel_record_tag_links "
-                "WHERE tag_entry_id = ? ORDER BY recording_id",
+                "SELECT COALESCE(duel.recording_id, duel.duel_id) AS record_id "
+                "FROM duel_record_tag_links AS link "
+                "JOIN duel_records AS duel ON duel.duel_id = link.duel_id "
+                "WHERE link.tag_entry_id = ? ORDER BY record_id",
                 (entry.entry_id,),
             ).fetchall()
-        return tuple(row["recording_id"] for row in rows)
+        return tuple(row["record_id"] for row in rows)
 
     @staticmethod
     def _reference_count(connection: sqlite3.Connection, row: sqlite3.Row) -> int:
@@ -424,18 +426,18 @@ class DuelCatalogRepository:
                 (new_name, old_name),
             )
             return
-        recording_rows = connection.execute(
-            "SELECT recording_id FROM duel_record_tag_links WHERE tag_entry_id = ?",
+        duel_rows = connection.execute(
+            "SELECT duel_id FROM duel_record_tag_links WHERE tag_entry_id = ?",
             (entry_id,),
         ).fetchall()
-        for recording_row in recording_rows:
+        for duel_row in duel_rows:
             connection.execute(
                 "UPDATE duel_record_tags SET tag = ?, normalized_tag = ? "
-                "WHERE recording_id = ? AND normalized_tag = ?",
+                "WHERE duel_id = ? AND normalized_tag = ?",
                 (
                     new_name,
                     new_normalized_name,
-                    recording_row["recording_id"],
+                    duel_row["duel_id"],
                     unicodedata.normalize("NFC", old_name).casefold(),
                 ),
             )

@@ -99,6 +99,36 @@ class DuelCliTest(unittest.TestCase):
         self.assertNotIn("output_path", output.getvalue())
         self.assertEqual(len(json.loads(output.getvalue())), 2)
 
+    def test_create_manual_record_without_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "user_data"
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "--user-data-dir",
+                        str(root),
+                        "duel",
+                        "create",
+                        "--occurred-at",
+                        "2026-08-13T12:30:00+09:00",
+                        "--result",
+                        "win",
+                        "--own-deck",
+                        "手入力デッキ",
+                        "--json",
+                    ]
+                )
+
+            created = json.loads(output.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(created["entry_origin"], "manual")
+        self.assertIsNone(created["recording_id"])
+        self.assertEqual(created["occurred_at"], "2026-08-13T03:30:00+00:00")
+        self.assertEqual(created["status"], "confirmed")
+        self.assertEqual(len(created["duel_id"]), 32)
+
     def test_stale_revision_returns_attention(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir) / "user_data"

@@ -36,6 +36,12 @@ DELETE_ORDER = (
     "recordings",
 )
 RESET_SCOPES = {"history", "decks", "tags", "seasons", "all"}
+LEGACY_DEFAULTS = {
+    "duel_records": {
+        "coin_face": "unknown",
+        "coin_toss_outcome": "unknown",
+    }
+}
 
 
 class ManagedDataError(RuntimeError):
@@ -175,17 +181,45 @@ class ManagedDataService:
                 for table in MANAGED_TABLES
             }
         validated: dict[str, list[dict[str, object]]] = {}
+        recording_dates = {
+            str(row.get("recording_id")): row.get("started_at") or row.get("created_at")
+            for row in raw_tables["recordings"]
+            if isinstance(row, dict) and row.get("recording_id")
+        }
         for table in MANAGED_TABLES:
             rows = raw_tables[table]
             if not isinstance(rows, list):
                 raise ManagedDataError(f"{table}のデータ形式が不正です")
             normalized: list[dict[str, object]] = []
             for row in rows:
-                if not isinstance(row, dict) or set(row) != columns[table]:
+                if not isinstance(row, dict):
                     raise ManagedDataError(f"{table}の列構成が現在のDBと一致しません")
                 if any(not isinstance(key, str) for key in row):
                     raise ManagedDataError(f"{table}の列名が不正です")
-                normalized.append(dict(row))
+                item = dict(row)
+                if table == "duel_records" and "duel_id" not in item:
+                    recording_id = str(item.get("recording_id") or "")
+                    item["duel_id"] = recording_id
+                    item["entry_origin"] = "recording"
+                    item["occurred_at"] = recording_dates.get(recording_id)
+                if (
+                    table
+                    in {
+                        "duel_record_tags",
+                        "duel_record_changes",
+                        "duel_record_tag_links",
+                    }
+                    and "duel_id" not in item
+                    and "recording_id" in item
+                ):
+                    item["duel_id"] = item.pop("recording_id")
+                defaults = LEGACY_DEFAULTS.get(table, {})
+                if set(item).issubset(columns[table]):
+                    for column, default in defaults.items():
+                        item.setdefault(column, default)
+                if set(item) != columns[table]:
+                    raise ManagedDataError(f"{table}の列構成が現在のDBと一致しません")
+                normalized.append(item)
             validated[table] = normalized
         return validated
 

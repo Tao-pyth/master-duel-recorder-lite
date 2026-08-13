@@ -53,6 +53,8 @@ class ManagedDataServiceTest(unittest.TestCase):
             DuelRecordValues(
                 status="confirmed",
                 result="win",
+                coin_face="heads",
+                coin_toss_outcome="win",
                 own_deck=deck.name,
                 tags=(tag.name,),
                 season_id=season.season_id,
@@ -77,6 +79,57 @@ class ManagedDataServiceTest(unittest.TestCase):
         self.assertIsNotNone(record)
         assert record is not None
         self.assertEqual(record.values.own_deck, "テストデッキ")
+        self.assertEqual(record.values.tags, ("大会",))
+        self.assertEqual(record.values.coin_face, "heads")
+        self.assertEqual(record.values.coin_toss_outcome, "win")
+
+    def test_import_accepts_v019_export_without_coin_columns(self) -> None:
+        self._seed()
+        exported = self.paths.exports / "legacy.json"
+        self.service.export_to(exported)
+        payload = json.loads(exported.read_text(encoding="utf-8"))
+        for row in payload["tables"]["duel_records"]:
+            row.pop("coin_face")
+            row.pop("coin_toss_outcome")
+        exported.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        self.service.reset("all")
+        self.service.import_from(exported)
+        record = DuelRecordRepository.from_runtime_paths(self.paths).get("duel")
+
+        assert record is not None
+        self.assertEqual(record.values.coin_face, "unknown")
+        self.assertEqual(record.values.coin_toss_outcome, "unknown")
+
+    def test_import_accepts_v020_export_with_recording_keyed_relations(self) -> None:
+        self._seed()
+        exported = self.paths.exports / "v020.json"
+        self.service.export_to(exported)
+        payload = json.loads(exported.read_text(encoding="utf-8"))
+        legacy_ids = {
+            row["duel_id"]: row["recording_id"]
+            for row in payload["tables"]["duel_records"]
+        }
+        for row in payload["tables"]["duel_records"]:
+            row.pop("duel_id")
+            row.pop("entry_origin")
+            row.pop("occurred_at")
+        for table in (
+            "duel_record_tags",
+            "duel_record_changes",
+            "duel_record_tag_links",
+        ):
+            for row in payload["tables"][table]:
+                row["recording_id"] = legacy_ids[row.pop("duel_id")]
+        exported.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        self.service.reset("all")
+        self.service.import_from(exported)
+        record = DuelRecordRepository.from_runtime_paths(self.paths).get("duel")
+
+        assert record is not None
+        self.assertEqual(record.duel_id, "duel")
+        self.assertEqual(record.entry_origin, "recording")
         self.assertEqual(record.values.tags, ("大会",))
 
     def test_scope_resets_preserve_video_and_unrelated_data(self) -> None:
