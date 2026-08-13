@@ -24,7 +24,7 @@ V1.0.0までに、次の中核機能を段階的に提供します。
 
 ## 現在の状態
 
-現在の開発バージョンは `0.21.3`、「V0.22.0-V0.25.0実装計画策定」です。V0.21.2までの録画あり・なしの戦績管理、初期画面、更新排他を維持したうえで、戦績入力体験、自動監視信頼性、データ保全、シーズンレポートを次の4中核機能として確定しました。詳細な作業順とGitHub Issue対応は [docs/implementation-plan-v0.22-v0.25.md](docs/implementation-plan-v0.22-v0.25.md) を参照してください。外部サービスへの直接アップロードとOAuthは未実装で、V1.0.0への更新はユーザーの明示指示を待ちます。
+現在の開発バージョンは `0.22.0`、「戦績入力体験」です。録画あり・なしの統合戦績管理に、簡易入力、根拠付き候補、未完了連続処理、一括編集、保存済みフィルターを追加しました。操作と状態遷移は [docs/architecture/duel-input-workflow.md](docs/architecture/duel-input-workflow.md)、V0.25.0までの作業順は [docs/implementation-plan-v0.22-v0.25.md](docs/implementation-plan-v0.22-v0.25.md) を参照してください。外部サービスへの直接アップロードとOAuthは未実装で、V1.0.0への更新はユーザーの明示指示を待ちます。
 
 開発計画は [docs/roadmap.md](docs/roadmap.md)、バージョンごとの変更は [docs/release-notes.md](docs/release-notes.md) を参照してください。ロードマップ作業は実装前にGitHub Issueへ登録し、バージョンラベルとMilestoneへ接続します。
 

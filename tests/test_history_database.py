@@ -197,6 +197,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                         8: lambda _connection: None,
                         9: lambda _connection: None,
                         10: lambda _connection: None,
+                        11: lambda _connection: None,
                     },
                 )
 
@@ -459,7 +460,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                     "SELECT version FROM schema_version WHERE singleton = 1"
                 ).fetchone()[0]
 
-        self.assertEqual(info.version, 10)
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertTrue({"duel_id", "coin_face", "coin_toss_outcome"}.issubset(columns))
         self.assertEqual(migrated, ("win", "first", "unknown", "unknown"))
         self.assertEqual(backup_version, 8)

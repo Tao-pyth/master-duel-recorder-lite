@@ -9,7 +9,7 @@
 
 ## 手順
 
-1. `python -m pip install -e ".[build,dev]"`が成功し、`python -m master_duel_recorder_lite --version`が`0.21.3`を表示する。
+1. `python -m pip install -e ".[build,dev]"`が成功し、`python -m master_duel_recorder_lite --version`が`0.22.0`を表示する。
 2. `config init`が`app.toml`を作成し、2回目は終了コード4で既存設定を保持する。
 3. `config set`、`config get`、`config show --json`で値とJSONを確認し、不正値で元設定が変わらないことを確認する。
 4. `doctor`と`list-inputs`で画面入力、任意の音声入力、エンコーダー、保存先を確認する。
@@ -33,8 +33,9 @@
 22. 統計ページと録画・履歴・デッキ・タグ・シーズン・設定ページを1180x760と980x640で表示し、選択状態、フォーカス、無効状態、文字切れ、重なりがないことを確認する。
 23. 対戦記録でコインの面とコイントス勝敗を保存し、先後を変更せず後日編集できることを確認する。
 24. 録画履歴の表裏・コイントス勝敗フィルターと統計の同条件が同じ対象を返すことを確認する。
-25. `python scripts/build_windows_exe.py`、CLI・GUIのスモークが成功し、両方のPEバージョンが`0.21.3`、EXE隣接`user_data/`なし、既定先がLocalAppData配下であることを確認する。
-26. V0.21.3完成後にGitHub ReleaseからCLI・GUI EXEとSHA-256を再取得し、ハッシュ一致、CLIの`--version`、GUI起動を確認する。
+25. 簡易入力の保存・後回し・詳細入力、未完了キューの前後移動、一括編集の確認とロールバック、保存済みフィルターの再起動後呼出しを確認する。
+26. `python scripts/build_windows_exe.py`、CLI・GUIのスモークが成功し、両方のPEバージョンが`0.22.0`、EXE隣接`user_data/`なし、既定先がLocalAppData配下であることを確認する。
+27. V0.22.0完成後にGitHub ReleaseからCLI・GUI EXEとSHA-256を再取得し、ハッシュ一致、CLIの`--version`、GUI起動を確認する。
 
 ## 自動検証との対応
 
@@ -54,4 +55,4 @@
 
 ## V1.0.0判断
 
-V0.21.3までの計画・中核機能と検証証拠が揃っても、自動でV1.0.0へ更新しません。既知制約を確認し、ユーザーが明示的に「V1.0.0に変更せよ」と依頼するまで`0.x`を維持します。
+V0.22.0までの中核機能と検証証拠が揃っても、自動でV1.0.0へ更新しません。既知制約を確認し、ユーザーが明示的に「V1.0.0に変更せよ」と依頼するまで`0.x`を維持します。

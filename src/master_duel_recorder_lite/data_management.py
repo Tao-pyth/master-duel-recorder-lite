@@ -23,8 +23,10 @@ MANAGED_TABLES = (
     "duel_events",
     "duel_record_tag_links",
     "duel_editor_preferences",
+    "saved_duel_filters",
 )
 DELETE_ORDER = (
+    "saved_duel_filters",
     "duel_record_tag_links",
     "duel_record_tags",
     "duel_record_changes",
@@ -173,7 +175,12 @@ class ManagedDataService:
         if not isinstance(payload, dict) or payload.get("schema") != EXPORT_SCHEMA:
             raise ManagedDataError("このアプリで作成した管理データJSONではありません")
         raw_tables = payload.get("tables")
-        if not isinstance(raw_tables, dict) or set(raw_tables) != set(MANAGED_TABLES):
+        if not isinstance(raw_tables, dict):
+            raise ManagedDataError("管理データJSONのテーブル構成が不正です")
+        missing = set(MANAGED_TABLES) - set(raw_tables)
+        if missing == {"saved_duel_filters"}:
+            raw_tables["saved_duel_filters"] = []
+        if set(raw_tables) != set(MANAGED_TABLES):
             raise ManagedDataError("管理データJSONのテーブル構成が不正です")
         with closing(connect_history_database(self.database_path)) as connection:
             columns = {

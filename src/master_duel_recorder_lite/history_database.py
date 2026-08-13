@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -532,6 +532,25 @@ def _migrate_to_v10(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v11(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE saved_duel_filters (
+            filter_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            criteria_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX saved_duel_filters_updated_idx "
+        "ON saved_duel_filters(updated_at DESC, filter_id)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -543,6 +562,7 @@ _MIGRATIONS: dict[int, Migration] = {
     8: _migrate_to_v8,
     9: _migrate_to_v9,
     10: _migrate_to_v10,
+    11: _migrate_to_v11,
 }
 
 
@@ -776,6 +796,13 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "coin_toss_outcome",
     }.issubset(duel_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のduel_recordsスキーマがありません")
+    filter_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(saved_duel_filters)")
+    }
+    if not {"filter_id", "name", "normalized_name", "criteria_json"}.issubset(
+        filter_columns
+    ):
+        raise HistoryDatabaseError("録画履歴DBに必須の保存済みフィルタースキーマがありません")
     tag_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_record_tags)")
     }

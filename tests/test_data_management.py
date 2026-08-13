@@ -11,6 +11,7 @@ from master_duel_recorder_lite.data_management import (
 )
 from master_duel_recorder_lite.duel_catalog import DuelCatalogRepository
 from master_duel_recorder_lite.duel_records import DuelRecordRepository, DuelRecordValues
+from master_duel_recorder_lite.duel_workflow import DuelFilterCriteria, DuelWorkflowService
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
 from master_duel_recorder_lite.seasons import SeasonRepository
@@ -100,6 +101,23 @@ class ManagedDataServiceTest(unittest.TestCase):
         assert record is not None
         self.assertEqual(record.values.coin_face, "unknown")
         self.assertEqual(record.values.coin_toss_outcome, "unknown")
+
+    def test_export_import_preserves_saved_filters_and_accepts_legacy_without_them(self) -> None:
+        workflow = DuelWorkflowService.from_runtime_paths(self.paths)
+        workflow.save_filter("手動のみ", DuelFilterCriteria(entry_origin="manual"))
+        exported = self.paths.exports / "filters.json"
+        self.service.export_to(exported)
+        self.service.reset("all")
+        self.service.import_from(exported)
+        self.assertEqual(workflow.list_filters()[0].name, "手動のみ")
+
+        payload = json.loads(exported.read_text(encoding="utf-8"))
+        payload["tables"].pop("saved_duel_filters")
+        legacy = self.paths.exports / "legacy-without-filters.json"
+        legacy.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        self.service.reset("all")
+        self.service.import_from(legacy)
+        self.assertEqual(workflow.list_filters(), ())
 
     def test_import_accepts_v020_export_with_recording_keyed_relations(self) -> None:
         self._seed()

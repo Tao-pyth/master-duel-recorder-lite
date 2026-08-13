@@ -40,6 +40,7 @@ from .duel_statistics import (
     StatisticsTrendPoint,
 )
 from .duel_timeline import DuelEvent
+from .duel_workflow import BulkDuelUpdate, DuelFilterCriteria
 from .ffmpeg_setup import (
     FFMPEG_DOWNLOAD_URL,
     FFMPEG_LICENSE,
@@ -394,6 +395,7 @@ class RecorderGui:
         self.catalog_opponent_only_var = tk.BooleanVar(value=False)
         self.catalog_hidden_var = tk.BooleanVar(value=False)
         self.history_query = DuelManagementQuery(limit=200)
+        self.active_saved_filter_id: str | None = None
         self.active_season_buttons: list[ttk.Button] = []
         self.current_page = "record"
         self.watch_events: queue.Queue[ApplicationEvent] = queue.Queue()
@@ -882,7 +884,7 @@ class RecorderGui:
         self.manual_duel_button = ttk.Button(
             duel_summary,
             text=f"{ICON_GLYPHS['add']}  戦績を追加",
-            command=self._open_manual_duel_editor,
+            command=self._open_manual_quick_duel_editor,
         )
         self.manual_duel_button.pack(side="left", padx=(0, 14))
         ttk.Separator(duel_summary, orient="vertical").pack(
@@ -947,9 +949,21 @@ class RecorderGui:
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Label(toolbar, text="戦績管理", style="Heading.TLabel").pack(side="left")
         self.history_add_button = self._icon_button(
-            toolbar, "add", "録画を伴わない戦績を追加", self._open_manual_duel_editor
+            toolbar, "add", "録画を伴わない戦績を追加", self._open_manual_quick_duel_editor
         )
         self.history_add_button.pack(side="left", padx=(16, 6))
+        self.history_incomplete_button = ttk.Button(
+            toolbar,
+            text="未完了を処理",
+            command=self._open_incomplete_duel_queue,
+        )
+        self.history_incomplete_button.pack(side="left", padx=(0, 6))
+        self.history_bulk_button = ttk.Button(
+            toolbar,
+            text="一括編集",
+            command=self._open_bulk_duel_editor,
+        )
+        self.history_bulk_button.pack(side="left", padx=(0, 6))
         self.history_filter_button = self._icon_button(
             toolbar, "filter", "録画履歴を絞り込む", self.open_history_filter
         )
@@ -1026,7 +1040,9 @@ class RecorderGui:
             "size",
             "origin",
         )
-        self.history_tree = ttk.Treeview(panel, columns=columns, show="headings")
+        self.history_tree = ttk.Treeview(
+            panel, columns=columns, show="headings", selectmode="extended"
+        )
         history_scrollbar = ttk.Scrollbar(
             panel, orient="horizontal", command=self.history_tree.xview
         )
@@ -1075,6 +1091,8 @@ class RecorderGui:
         self.widgets["history_timeline"] = self.history_timeline_button
         self.widgets["history_delete"] = self.history_action_buttons["delete"]
         self.widgets["history_add"] = self.history_add_button
+        self.widgets["history_incomplete"] = self.history_incomplete_button
+        self.widgets["history_bulk"] = self.history_bulk_button
 
     def _build_statistics_page(self) -> None:
         page = self._new_page("statistics")
@@ -2495,7 +2513,7 @@ class RecorderGui:
         self._activity(f"録画を停止しました: {snapshot.output_path}")
         if snapshot.state is RecordingState.COMPLETED and snapshot.recording_id:
             self.refresh_history()
-            self._open_duel_editor(snapshot.recording_id)
+            self._open_quick_duel_editor(snapshot.recording_id)
 
     def toggle_watch(self) -> None:
         if self.service.watch_active:
@@ -2611,19 +2629,47 @@ class RecorderGui:
 
     def clear_history_filter(self) -> None:
         self.history_query = DuelManagementQuery(limit=200)
+        self.active_saved_filter_id = None
         self.history_filter_count_var.set("")
         self.refresh_history()
+
+    @staticmethod
+    def _criteria_from_history_query(query: DuelManagementQuery) -> DuelFilterCriteria:
+        return DuelFilterCriteria(
+            season_id=query.season_id,
+            own_deck_id=query.own_deck_id,
+            opponent_deck_id=query.opponent_deck_id,
+            tag_entry_ids=query.tag_entry_ids,
+            coin_face=query.coin_face,
+            coin_toss_outcome=query.coin_toss_outcome,
+            entry_origin=query.entry_origin,
+        )
+
+    @staticmethod
+    def _history_query_from_criteria(criteria: DuelFilterCriteria) -> DuelManagementQuery:
+        return DuelManagementQuery(
+            limit=200,
+            season_id=criteria.season_id,
+            own_deck_id=criteria.own_deck_id,
+            opponent_deck_id=criteria.opponent_deck_id,
+            tag_entry_ids=criteria.tag_entry_ids,
+            coin_face=criteria.coin_face,
+            coin_toss_outcome=criteria.coin_toss_outcome,
+            entry_origin=criteria.entry_origin,
+        )
 
     def open_history_filter(self) -> None:
         dialog = tk.Toplevel(self.root)
         dialog.title("戦績管理フィルター")
-        dialog.geometry("540x640")
+        dialog.geometry("600x700")
         dialog.transient(self.root)
         frame = ttk.Frame(dialog, padding=18)
         frame.pack(fill="both", expand=True)
         seasons = self.service.list_seasons(include_archived=True)
         decks = self.service.list_decks()
         tags = self.service.list_tags()
+        saved_filters = self.service.list_saved_duel_filters()
+        saved_by_label = {item.name: item for item in saved_filters}
         season_map = {"すべて": None, **{item.name: item.season_id for item in seasons}}
         visible_decks = tuple(
             item for item in decks if not item.hidden_from_history_statistics
@@ -2638,6 +2684,15 @@ class RecorderGui:
         coin_face_var = tk.StringVar(value="すべて")
         coin_outcome_var = tk.StringVar(value="すべて")
         origin_var = tk.StringVar(value="すべて")
+        saved_var = tk.StringVar(value="")
+        ttk.Label(frame, text="保存済み").grid(row=0, column=0, sticky="w", pady=6)
+        saved_combo = ttk.Combobox(
+            frame,
+            textvariable=saved_var,
+            values=tuple(saved_by_label),
+            state="readonly",
+        )
+        saved_combo.grid(row=0, column=1, sticky="ew", pady=6)
         for row, (label, variable, values) in enumerate(
             (
                 ("シーズン", season_var, tuple(season_map)),
@@ -2646,25 +2701,26 @@ class RecorderGui:
                 ("コインの面", coin_face_var, ("すべて", "表", "裏", "未設定")),
                 ("コイントス勝敗", coin_outcome_var, ("すべて", "勝ち", "負け", "未設定")),
                 ("登録元", origin_var, ("すべて", "録画", "手動")),
-            )
+            ),
+            start=1,
         ):
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=6)
             ttk.Combobox(
                 frame, textvariable=variable, values=values, state="readonly"
             ).grid(row=row, column=1, sticky="ew", pady=6)
         ttk.Label(frame, text="タグ（複数可）").grid(
-            row=6, column=0, sticky="nw", pady=6
+            row=7, column=0, sticky="nw", pady=6
         )
         tag_list = tk.Listbox(frame, selectmode="multiple", exportselection=False)
-        tag_list.grid(row=6, column=1, sticky="nsew", pady=6)
+        tag_list.grid(row=7, column=1, sticky="nsew", pady=6)
         for item in tags:
             tag_list.insert("end", item.name)
 
-        def apply() -> None:
+        def current_query() -> DuelManagementQuery:
             selected_tag_ids = tuple(
                 tags[index].entry_id for index in tag_list.curselection()
             )
-            self.history_query = DuelManagementQuery(
+            return DuelManagementQuery(
                 limit=200,
                 season_id=season_map[season_var.get()],
                 own_deck_id=deck_map[own_var.get()],
@@ -2680,6 +2736,9 @@ class RecorderGui:
                     origin_var.get()
                 ],
             )
+        def apply_query(query: DuelManagementQuery, *, saved_id: str | None = None) -> None:
+            self.history_query = query
+            self.active_saved_filter_id = saved_id
             count = sum(
                 value is not None
                 for value in (
@@ -2690,16 +2749,77 @@ class RecorderGui:
                     self.history_query.coin_toss_outcome,
                     self.history_query.entry_origin,
                 )
-            ) + len(selected_tag_ids)
-            self.history_filter_count_var.set(str(count) if count else "")
+            ) + len(query.tag_entry_ids)
+            label = str(count) if count else ""
+            if saved_id is not None:
+                saved = next(item for item in saved_filters if item.filter_id == saved_id)
+                label = f"{saved.name} ({count})"
+            self.history_filter_count_var.set(label)
             dialog.destroy()
             self.refresh_history()
 
+        def apply() -> None:
+            apply_query(current_query())
+
+        def load_saved(_event: object | None = None) -> None:
+            selected = saved_by_label.get(saved_var.get())
+            if selected is not None:
+                apply_query(
+                    self._history_query_from_criteria(selected.criteria),
+                    saved_id=selected.filter_id,
+                )
+
+        def save_current() -> None:
+            name = simpledialog.askstring(
+                "フィルターを保存", "フィルター名", parent=dialog
+            )
+            if not name:
+                return
+            existing = saved_by_label.get(name)
+            if existing is not None and not messagebox.askyesno(
+                "フィルターを上書き",
+                f"「{name}」を上書きしますか？",
+                parent=dialog,
+            ):
+                return
+            saved = self.service.save_duel_filter(
+                name,
+                self._criteria_from_history_query(current_query()),
+                filter_id=existing.filter_id if existing is not None else None,
+            )
+            self.active_saved_filter_id = saved.filter_id
+            dialog.destroy()
+            self.history_filter_count_var.set(saved.name)
+            self.refresh_history()
+
+        def delete_saved() -> None:
+            selected = saved_by_label.get(saved_var.get())
+            if selected is None:
+                return
+            if messagebox.askyesno(
+                "保存済みフィルターを削除",
+                f"「{selected.name}」を削除しますか？",
+                parent=dialog,
+            ):
+                self.service.delete_duel_filter(selected.filter_id)
+                if self.active_saved_filter_id == selected.filter_id:
+                    self.active_saved_filter_id = None
+                dialog.destroy()
+
         ttk.Button(frame, text="適用", style="Primary.TButton", command=apply).grid(
-            row=7, column=1, sticky="e", pady=(12, 0)
+            row=8, column=1, sticky="e", pady=(12, 0)
         )
+        saved_actions = ttk.Frame(frame)
+        saved_actions.grid(row=9, column=1, sticky="e", pady=(8, 0))
+        ttk.Button(saved_actions, text="現在条件を保存", command=save_current).pack(
+            side="left", padx=(0, 8)
+        )
+        ttk.Button(saved_actions, text="保存済みを削除", command=delete_saved).pack(
+            side="left"
+        )
+        saved_combo.bind("<<ComboboxSelected>>", load_saved)
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(6, weight=1)
+        frame.rowconfigure(7, weight=1)
         dialog.grab_set()
 
     def _history_loaded(self, dashboard: RecordingHistoryDashboard) -> None:
@@ -2791,7 +2911,17 @@ class RecorderGui:
             state="normal" if editable else "disabled"
         )
         self.history_action_buttons["delete"].configure(
-            state="normal" if view is not None else "disabled"
+            state="normal" if len(selection) == 1 and view is not None else "disabled"
+        )
+        self.history_bulk_button.configure(
+            state="normal"
+            if selection
+            and all(
+                self.history_views_by_id[str(item)].duel_record is not None
+                for item in selection
+            )
+            and self.service.duel_write_block_reason() is None
+            else "disabled"
         )
 
     def play_selected_history(self) -> None:
@@ -3058,6 +3188,16 @@ class RecorderGui:
         frame.rowconfigure(2, weight=1)
         refresh()
 
+    def _open_manual_quick_duel_editor(self) -> None:
+        reason = self.service.duel_write_block_reason()
+        if reason is not None:
+            messagebox.showinfo("戦績を追加できません", reason, parent=self.root)
+            return
+        self._run(
+            lambda: self.service.get_duel_editor_data(),
+            lambda data: self._show_quick_duel_editor(None, data),
+        )
+
     def _open_manual_duel_editor(self) -> None:
         reason = self.service.duel_write_block_reason()
         if reason is not None:
@@ -3067,6 +3207,318 @@ class RecorderGui:
             lambda: self.service.get_duel_editor_data(),
             lambda data: self._show_duel_editor(None, data, read_only_reason=None),
         )
+
+    def _open_quick_duel_editor(self, identifier: str) -> None:
+        self._run(
+            lambda: self.service.get_duel_editor_data(identifier),
+            lambda data: self._show_quick_duel_editor(identifier, data),
+        )
+
+    def _show_quick_duel_editor(
+        self,
+        identifier: str | None,
+        data: DuelEditorData,
+        *,
+        on_saved: Callable[[], None] | None = None,
+    ) -> None:
+        if self.service.duel_write_block_reason() is not None:
+            return
+        record = data.record
+        is_manual = identifier is None or (
+            record is not None and record.entry_origin == "manual"
+        )
+        dialog = tk.Toplevel(self.root)
+        dialog.title("戦績を簡易入力")
+        dialog.geometry("560x500")
+        dialog.minsize(520, 460)
+        dialog.transient(self.root)
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="戦績を簡易入力", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+        reason_text = " / ".join(data.suggestion_reasons)
+        ttk.Label(
+            frame,
+            text=reason_text or "候補値を確認して保存してください",
+            style="Muted.TLabel",
+            wraplength=480,
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        values = data.values
+        result_var = tk.StringVar(value=duel_choice_label("result", values.result))
+        order_var = tk.StringVar(value=duel_choice_label("play_order", values.play_order))
+        visible_decks = tuple(
+            item
+            for item in data.decks
+            if not item.hidden_from_history_statistics and not item.opponent_only
+        )
+        deck_var = tk.StringVar(value=values.own_deck)
+        seasons = {"未設定": None, **{item.name: item.season_id for item in data.seasons}}
+        current_season = next(
+            (name for name, season_id in seasons.items() if season_id == values.season_id),
+            "未設定",
+        )
+        season_var = tk.StringVar(value=current_season)
+        occurred_var = tk.StringVar(
+            value=(
+                record.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                if record is not None
+                else datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            )
+        )
+        fields = [
+            ("勝敗", result_var, duel_choice_labels("result")),
+            ("先後", order_var, duel_choice_labels("play_order")),
+            ("自分デッキ", deck_var, tuple(item.name for item in visible_decks)),
+            ("シーズン", season_var, tuple(seasons)),
+        ]
+        row = 2
+        if is_manual:
+            ttk.Label(frame, text="対戦日時").grid(row=row, column=0, sticky="w", pady=7)
+            ttk.Entry(frame, textvariable=occurred_var).grid(
+                row=row, column=1, sticky="ew", pady=7
+            )
+            row += 1
+        for label, variable, choices in fields:
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
+            ttk.Combobox(
+                frame,
+                textvariable=variable,
+                values=choices,
+                state="normal" if label == "自分デッキ" else "readonly",
+            ).grid(row=row, column=1, sticky="ew", pady=7)
+            row += 1
+        frame.columnconfigure(1, weight=1)
+
+        def save(status: str) -> None:
+            try:
+                occurred = datetime.strptime(
+                    occurred_var.get().strip(), "%Y-%m-%d %H:%M:%S"
+                ).astimezone()
+            except ValueError:
+                self._show_error(ValueError("対戦日時はYYYY-MM-DD HH:MM:SSで入力してください"))
+                return
+            updated = DuelRecordValues(
+                **{
+                    **values.__dict__,
+                    "status": status,
+                    "result": duel_choice_value("result", result_var.get()),
+                    "play_order": duel_choice_value("play_order", order_var.get()),
+                    "own_deck": deck_var.get(),
+                    "season_id": seasons[season_var.get()],
+                }
+            )
+            selected_season = next(
+                (item for item in data.seasons if item.season_id == updated.season_id),
+                None,
+            )
+            if selected_season is not None and not selected_season.contains(
+                occurred.date()
+            ):
+                if not messagebox.askyesno(
+                    "シーズン期間外",
+                    f"対戦日は{occurred.date()}で、選択したシーズン期間外です。保存しますか？",
+                    parent=dialog,
+                ):
+                    return
+            def operation() -> object:
+                if is_manual:
+                    return self.service.create_manual_duel_record(updated, occurred_at=occurred)
+                if record is not None and record.entry_origin == "manual":
+                    return self.service.update_duel_record(
+                        record.duel_id,
+                        updated,
+                        expected_revision=record.revision,
+                        occurred_at=occurred,
+                    )
+                recording_identifier = (
+                    record.recording_id if record is not None else identifier
+                )
+                assert recording_identifier is not None
+                return self.service.save_duel_record(
+                    recording_identifier,
+                    updated,
+                    expected_revision=record.revision if record is not None else 0,
+                )
+            self._run(
+                operation,
+                lambda _saved: self._quick_duel_saved(dialog, on_saved),
+            )
+
+        actions = ttk.Frame(frame)
+        actions.grid(row=row, column=0, columnspan=2, sticky="e", pady=(18, 0))
+        ttk.Button(actions, text="後回し", command=lambda: save("draft")).pack(
+            side="left", padx=(0, 8)
+        )
+        ttk.Button(
+            actions,
+            text="詳細入力",
+            command=lambda: (
+                dialog.destroy(),
+                self._show_duel_editor(identifier, data, read_only_reason=None),
+            ),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
+            text="保存",
+            style="Primary.TButton",
+            command=lambda: save("confirmed"),
+        ).pack(side="left")
+        dialog.bind("<Control-s>", lambda _event: save("confirmed"))
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.grab_set()
+
+    def _quick_duel_saved(
+        self, dialog: tk.Toplevel, on_saved: Callable[[], None] | None
+    ) -> None:
+        dialog.destroy()
+        self.refresh_history()
+        self.refresh_active_seasons()
+        if on_saved is not None:
+            on_saved()
+
+    def _open_incomplete_duel_queue(self) -> None:
+        reason = self.service.duel_write_block_reason()
+        if reason is not None:
+            messagebox.showinfo("未完了戦績を処理できません", reason, parent=self.root)
+            return
+        self._run(self.service.list_incomplete_duels, self._show_incomplete_duel_queue)
+
+    def _show_incomplete_duel_queue(self, items: tuple[object, ...]) -> None:
+        if not items:
+            messagebox.showinfo("未完了戦績", "未完了の戦績はありません", parent=self.root)
+            return
+        state = {"index": 0}
+        dialog = tk.Toplevel(self.root)
+        dialog.title("未完了戦績を連続処理")
+        dialog.geometry("520x240")
+        dialog.transient(self.root)
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+        progress = tk.StringVar()
+        detail = tk.StringVar()
+        ttk.Label(frame, textvariable=progress, style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(frame, textvariable=detail, style="Muted.TLabel").pack(
+            anchor="w", pady=(8, 20)
+        )
+        actions = ttk.Frame(frame)
+        actions.pack(anchor="e")
+
+        def render() -> None:
+            index = state["index"]
+            item = items[index]
+            progress.set(f"未完了 {index + 1} / {len(items)}")
+            detail.set(
+                f"{item.occurred_at.astimezone().strftime('%Y-%m-%d %H:%M:%S')} / "
+                f"{'未入力' if item.kind == 'missing' else '編集中'}"
+            )
+
+        def move(delta: int) -> None:
+            state["index"] = (state["index"] + delta) % len(items)
+            render()
+
+        def edit() -> None:
+            item = items[state["index"]]
+            dialog.destroy()
+            self._run(
+                lambda: self.service.get_duel_editor_data(item.identifier),
+                lambda data: self._show_quick_duel_editor(
+                    item.identifier,
+                    data,
+                    on_saved=self._open_incomplete_duel_queue,
+                ),
+            )
+
+        ttk.Button(actions, text="前へ", command=lambda: move(-1)).pack(side="left", padx=(0, 8))
+        ttk.Button(actions, text="後回し", command=lambda: move(1)).pack(side="left", padx=(0, 8))
+        ttk.Button(actions, text="入力する", style="Primary.TButton", command=edit).pack(side="left")
+        render()
+        dialog.grab_set()
+
+    def _open_bulk_duel_editor(self) -> None:
+        selection = tuple(str(item) for item in self.history_tree.selection())
+        records = tuple(
+            self.history_views_by_id[item].duel_record
+            for item in selection
+            if self.history_views_by_id[item].duel_record is not None
+        )
+        if not records:
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("戦績を一括編集")
+        dialog.geometry("560x460")
+        dialog.transient(self.root)
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=f"選択した {len(records)} 件を一括編集", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
+        )
+        seasons = self.service.list_seasons(include_archived=True)
+        decks = tuple(
+            item
+            for item in self.service.list_decks()
+            if not item.hidden_from_history_statistics and not item.opponent_only
+        )
+        season_values = {"変更しない": "", "未設定": "none", **{item.name: str(item.season_id) for item in seasons}}
+        deck_values = ("変更しない", *(item.name for item in decks))
+        type_values = ("変更しない", *duel_choice_labels("duel_type"))
+        season_var = tk.StringVar(value="変更しない")
+        deck_var = tk.StringVar(value="変更しない")
+        type_var = tk.StringVar(value="変更しない")
+        add_tags_var = tk.StringVar()
+        remove_tags_var = tk.StringVar()
+        rows = (
+            ("シーズン", season_var, tuple(season_values)),
+            ("自分デッキ", deck_var, deck_values),
+            ("対戦種別", type_var, type_values),
+        )
+        for row, (label, variable, choices) in enumerate(rows, start=1):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
+            ttk.Combobox(frame, textvariable=variable, values=choices, state="readonly").grid(
+                row=row, column=1, sticky="ew", pady=7
+            )
+        for row, (label, variable) in enumerate(
+            (("追加タグ（カンマ区切り）", add_tags_var), ("削除タグ（カンマ区切り）", remove_tags_var)),
+            start=4,
+        ):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
+            ttk.Entry(frame, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=7)
+        frame.columnconfigure(1, weight=1)
+
+        def apply() -> None:
+            if not messagebox.askyesno(
+                "一括更新を確認",
+                f"{len(records)}件へ変更を適用しますか？",
+                parent=dialog,
+            ):
+                return
+            season_value = season_values[season_var.get()]
+            update = BulkDuelUpdate(
+                season_id=None if season_value in {"", "none"} else int(season_value),
+                change_season=season_value != "",
+                own_deck=None if deck_var.get() == "変更しない" else deck_var.get(),
+                duel_type=None
+                if type_var.get() == "変更しない"
+                else duel_choice_value("duel_type", type_var.get()),
+                add_tags=tuple(item.strip() for item in add_tags_var.get().split(",") if item.strip()),
+                remove_tags=tuple(item.strip() for item in remove_tags_var.get().split(",") if item.strip()),
+            )
+            self._run(
+                lambda: self.service.bulk_update_duel_records(
+                    tuple(item.duel_id for item in records), update
+                ),
+                lambda saved: (
+                    self._activity(f"戦績を一括更新しました: {len(saved)}件"),
+                    dialog.destroy(),
+                    self.refresh_history(),
+                    self.refresh_active_seasons(),
+                ),
+            )
+
+        ttk.Button(frame, text="適用", style="Primary.TButton", command=apply).grid(
+            row=6, column=1, sticky="e", pady=(18, 0)
+        )
+        dialog.grab_set()
 
     def _open_duel_editor(self, identifier: str) -> None:
         read_only_reason = self.service.duel_write_block_reason()

@@ -45,6 +45,14 @@ from .duel_statistics import (
     StatisticsFilter,
 )
 from .duel_timeline import DuelEvent, DuelTimelineRepository
+from .duel_workflow import (
+    BulkDuelUpdate,
+    DuelFilterCriteria,
+    DuelInputSuggestion,
+    DuelWorkflowService,
+    IncompleteDuel,
+    SavedDuelFilter,
+)
 from .ffmpeg import (
     AudioInputTestResult,
     InputEnumerationResult,
@@ -115,6 +123,7 @@ class DuelEditorData:
     decks: tuple[DuelCatalogEntry, ...]
     tags: tuple[DuelCatalogEntry, ...]
     seasons: tuple[Season, ...]
+    suggestion_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -626,11 +635,12 @@ class RecorderApplicationService:
     def get_duel_editor_data(self, identifier: str | None = None) -> DuelEditorData:
         record = self.get_duel_record(identifier) if identifier is not None else None
         catalog = DuelCatalogRepository.from_runtime_paths(self.paths)
-        values = (
-            record.values
-            if record is not None
-            else catalog.preferences().to_record_values()
+        suggestion = (
+            DuelWorkflowService.from_runtime_paths(self.paths).input_suggestion()
+            if record is None
+            else None
         )
+        values = record.values if record is not None else suggestion.values
         return DuelEditorData(
             record=record,
             values=values,
@@ -639,7 +649,47 @@ class RecorderApplicationService:
             seasons=SeasonRepository.from_runtime_paths(self.paths).list(
                 include_archived=True
             ),
+            suggestion_reasons=suggestion.reasons if suggestion is not None else (),
         )
+
+    def get_duel_input_suggestion(
+        self, *, occurred_on: date | None = None
+    ) -> DuelInputSuggestion:
+        return DuelWorkflowService.from_runtime_paths(self.paths).input_suggestion(
+            occurred_on=occurred_on
+        )
+
+    def list_incomplete_duels(self) -> tuple[IncompleteDuel, ...]:
+        return DuelWorkflowService.from_runtime_paths(self.paths).list_incomplete()
+
+    def bulk_update_duel_records(
+        self, duel_ids: tuple[str, ...], update: BulkDuelUpdate
+    ) -> tuple[DuelRecord, ...]:
+        self._require_duel_write_idle()
+        saved = DuelWorkflowService.from_runtime_paths(self.paths).bulk_update(
+            duel_ids, update
+        )
+        catalog = DuelCatalogRepository.from_runtime_paths(self.paths)
+        for record in saved:
+            catalog.remember_record_values(record.values)
+        return saved
+
+    def list_saved_duel_filters(self) -> tuple[SavedDuelFilter, ...]:
+        return DuelWorkflowService.from_runtime_paths(self.paths).list_filters()
+
+    def save_duel_filter(
+        self,
+        name: str,
+        criteria: DuelFilterCriteria,
+        *,
+        filter_id: str | None = None,
+    ) -> SavedDuelFilter:
+        return DuelWorkflowService.from_runtime_paths(self.paths).save_filter(
+            name, criteria, filter_id=filter_id
+        )
+
+    def delete_duel_filter(self, filter_id: str) -> SavedDuelFilter:
+        return DuelWorkflowService.from_runtime_paths(self.paths).delete_filter(filter_id)
 
     def save_duel_record(
         self,
