@@ -84,4 +84,14 @@ python scripts/evaluate_visual_dataset.py --manifest user_data/visual-dataset/ma
 4. マッチエラーとリプレイを各1回確認し、正式履歴へ昇格しないことを確認する。
 5. 数値診断ZIPに画像、タイトル、絶対パスが含まれないことを確認する。
 
+試験開始前に同じPowerShellセッションで開始時刻を保持し、初期3戦と調整後10戦は別の開始時刻で集計します。
+
+```powershell
+$since = (Get-Date).ToString("o")
+# GUIで自動監視を開始し、対象の連続試験を実施する
+python scripts/validate_live_monitoring.py --since $since --required-consecutive 3 --json-out build/validation/live-initial-3.json --markdown-out build/validation/live-initial-3.md
+```
+
+初期調整後は`$since`を取り直し、`--required-consecutive 10`で最終試験を行います。終了コード0は最新の連続戦が全件、候補開始・盤面確定・結果停止・停止後3秒以上の監視継続を満たし、診断順序不正がない場合だけ返します。候補破棄は対戦数から除外し、境界停止、通常停止、未完了は失敗として表示します。移動・リサイズ、前面喪失、マッチエラー、リプレイの操作事実は数値集計だけでは証明できないため、実施メモと併せて残します。
+
 実動画または実戦の証拠が欠ける場合、単体テストが成功していてもV0.23.0を公開しません。
