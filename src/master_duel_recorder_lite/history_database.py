@@ -25,6 +25,7 @@ class HistoryDatabaseInfo:
 
 
 Migration = Callable[[sqlite3.Connection], None]
+MigrationBackupFactory = Callable[[int], Path]
 
 
 @dataclass(frozen=True)
@@ -571,6 +572,7 @@ def initialize_history_database(
     *,
     recordings_root: Path | None = None,
     migrations: Mapping[int, Migration] | None = None,
+    migration_backup_factory: MigrationBackupFactory | None = None,
 ) -> HistoryDatabaseInfo:
     database_path = path.expanduser().resolve()
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -599,7 +601,11 @@ def initialize_history_database(
             return HistoryDatabaseInfo(database_path, current_version, None)
 
         if existed:
-            backup_path = _backup_database(connection, database_path, current_version)
+            backup_path = (
+                migration_backup_factory(current_version)
+                if migration_backup_factory is not None
+                else _backup_database(connection, database_path, current_version)
+            )
 
         if current_version >= 2 and current_version < 7 and recordings_root is not None:
             retired_artifacts = _stage_recovery_artifacts(

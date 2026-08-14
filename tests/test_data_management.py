@@ -75,6 +75,8 @@ class ManagedDataServiceTest(unittest.TestCase):
         self.assertEqual(self.history.query(), ())
         restored = self.service.import_from(exported)
         self.assertIsNotNone(restored.backup_path)
+        assert restored.backup_path is not None
+        self.assertEqual(restored.backup_path.suffix, ".mdrl-backup")
         self.assertEqual(self.history.get("duel").recording_id, "duel")
         record = DuelRecordRepository.from_runtime_paths(self.paths).get("duel")
         self.assertIsNotNone(record)

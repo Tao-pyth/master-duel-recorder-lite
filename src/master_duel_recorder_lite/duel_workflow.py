@@ -115,6 +115,9 @@ class DuelWorkflowService:
 
     @classmethod
     def from_runtime_paths(cls, paths: RuntimePaths) -> DuelWorkflowService:
+        from .data_protection import initialize_protected_history_database
+
+        initialize_protected_history_database(paths)
         return cls(paths.db / HISTORY_DATABASE_NAME)
 
     def input_suggestion(self, *, occurred_on: date | None = None) -> DuelInputSuggestion:

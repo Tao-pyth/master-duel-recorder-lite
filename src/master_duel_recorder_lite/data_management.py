@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import uuid
 
+from .data_protection import DataProtectionError, DataProtectionService
 from .history_database import HISTORY_DATABASE_NAME, connect_history_database
 from .runtime_paths import RuntimePaths
 
@@ -59,14 +60,27 @@ class ManagedDataResult:
 
 
 class ManagedDataService:
-    def __init__(self, database_path: Path, exports_path: Path) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        exports_path: Path,
+        protection: DataProtectionService | None = None,
+    ) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.exports_path = exports_path.expanduser().resolve()
+        self.protection = protection
         connect_history_database(self.database_path).close()
 
     @classmethod
     def from_runtime_paths(cls, paths: RuntimePaths) -> ManagedDataService:
-        return cls(paths.db / HISTORY_DATABASE_NAME, paths.exports)
+        from .data_protection import initialize_protected_history_database
+
+        initialize_protected_history_database(paths)
+        return cls(
+            paths.db / HISTORY_DATABASE_NAME,
+            paths.exports,
+            DataProtectionService(paths),
+        )
 
     def export_to(self, path: Path) -> ManagedDataResult:
         destination = path.expanduser().resolve()
@@ -242,6 +256,11 @@ class ManagedDataService:
         connection.executemany(sql, [tuple(row[column] for column in columns) for row in rows])
 
     def _backup(self, reason: str) -> Path:
+        if self.protection is not None:
+            try:
+                return self.protection.create_backup(reason).path
+            except DataProtectionError as exc:
+                raise ManagedDataError(f"操作前バックアップを作成できません: {exc}") from exc
         self.exports_path.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         destination = self.exports_path / f"history.{reason}.{timestamp}.{uuid.uuid4().hex}.sqlite3"
@@ -263,6 +282,14 @@ class ManagedDataService:
                 source.close()
 
     def _restore_backup(self, backup: Path) -> None:
+        if self.protection is not None and backup.suffix == ".mdrl-backup":
+            try:
+                self.protection.restore(backup, create_safety_backup=False)
+                return
+            except DataProtectionError as exc:
+                raise ManagedDataError(
+                    f"処理に失敗し、バックアップの復元にも失敗しました: {backup}: {exc}"
+                ) from exc
         source: sqlite3.Connection | None = None
         target: sqlite3.Connection | None = None
         try:

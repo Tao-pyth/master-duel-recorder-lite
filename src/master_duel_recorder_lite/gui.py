@@ -80,6 +80,8 @@ ICON_GLYPHS = {
     "unavailable": "\ue783",
     "expand": "\ue70d",
     "collapse": "\ue70e",
+    "link": "\ue71b",
+    "duplicates": "\ue8ef",
 }
 HISTORY_ROW_ACTIONS = (
     ("play", "再生", "Enter"),
@@ -1042,6 +1044,21 @@ class RecorderGui:
             state="disabled",
         )
         self.history_diagnostic_button.pack(side="left", padx=(0, 6))
+        self.history_relink_button = self._icon_button(
+            action_bar,
+            "link",
+            "欠損した録画ファイルを再関連付け",
+            command=self.relink_selected_history,
+            state="disabled",
+        )
+        self.history_relink_button.pack(side="left", padx=(0, 6))
+        self.history_duplicates_button = self._icon_button(
+            action_bar,
+            "duplicates",
+            "重複戦績候補を比較",
+            command=self.open_duplicate_candidates,
+        )
+        self.history_duplicates_button.pack(side="left", padx=(0, 6))
         self._icon_button(
             action_bar,
             "refresh",
@@ -1117,6 +1134,8 @@ class RecorderGui:
         self.widgets["history_diagnostic"] = self.history_diagnostic_button
         self.widgets["history_duel"] = self.history_action_buttons["edit"]
         self.widgets["history_timeline"] = self.history_timeline_button
+        self.widgets["history_relink"] = self.history_relink_button
+        self.widgets["history_duplicates"] = self.history_duplicates_button
         self.widgets["history_delete"] = self.history_action_buttons["delete"]
         self.widgets["history_add"] = self.history_add_button
         self.widgets["history_incomplete"] = self.history_incomplete_button
@@ -1811,6 +1830,58 @@ class RecorderGui:
                 ),
             ).grid(row=0, column=column, sticky="ew", padx=(0, 8 if column < 3 else 0))
             reset_grid.columnconfigure(column, weight=1, uniform="reset-control")
+        ttk.Separator(data_panel, orient="horizontal").pack(fill="x", pady=(22, 18))
+        protection_header = ttk.Frame(data_panel, style="Surface.TFrame")
+        protection_header.pack(fill="x")
+        ttk.Label(
+            protection_header, text="データ保全", style="Heading.TLabel"
+        ).pack(side="left")
+        self._icon_button(
+            protection_header,
+            "import",
+            "検証済みバックアップから復元",
+            self.restore_data_backup,
+        ).pack(side="right")
+        self._icon_button(
+            protection_header,
+            "diagnostic",
+            "データ整合性を診断",
+            self.run_data_integrity_diagnosis,
+        ).pack(side="right", padx=(0, 8))
+        self._icon_button(
+            protection_header,
+            "save",
+            "データバックアップを作成",
+            self.create_data_backup,
+            style="Primary.TButton",
+        ).pack(side="right", padx=(0, 8))
+        self.data_protection_status_var = tk.StringVar(value="保全状態を確認中")
+        ttk.Label(
+            data_panel,
+            textvariable=self.data_protection_status_var,
+            style="Muted.TLabel",
+            justify="left",
+        ).pack(anchor="w", pady=(10, 0))
+        self.data_backup_tree = ttk.Treeview(
+            data_panel,
+            columns=("created", "reason", "schema", "size", "protected"),
+            show="headings",
+            height=5,
+        )
+        for key, label, width in (
+            ("created", "作成日時", 155),
+            ("reason", "作成契機", 190),
+            ("schema", "DB版", 70),
+            ("size", "サイズ", 90),
+            ("protected", "保護", 70),
+        ):
+            self.data_backup_tree.heading(key, text=label)
+            self.data_backup_tree.column(
+                key, width=width, stretch=key == "reason", anchor="center" if key != "reason" else "w"
+            )
+        self.data_backup_tree.pack(fill="x", pady=(10, 0))
+        self.widgets["data_protection_status"] = self.data_protection_status_var
+        self.widgets["data_backup_table"] = self.data_backup_tree
         panel.columnconfigure(0, weight=1)
         panel.columnconfigure(1, weight=1)
         panel.columnconfigure(2, weight=1)
@@ -1856,6 +1927,7 @@ class RecorderGui:
             self.refresh_preparations()
         elif key == "settings":
             self.load_settings()
+            self.refresh_data_protection()
 
     def refresh_all(self) -> None:
         self.refresh_targets()
@@ -2975,6 +3047,14 @@ class RecorderGui:
         self.history_action_buttons["delete"].configure(
             state="normal" if len(selection) == 1 and view is not None else "disabled"
         )
+        missing_recording = False
+        if has_recording and view is not None and view.entry is not None:
+            missing_recording = not (
+                self.service.paths.recordings / view.entry.output_path
+            ).is_file()
+        self.history_relink_button.configure(
+            state="normal" if missing_recording else "disabled"
+        )
         self.history_bulk_button.configure(
             state="normal"
             if selection
@@ -3011,6 +3091,230 @@ class RecorderGui:
             lambda: self.service.reveal_recording(recording_id),
             lambda reference: self._recording_opened("保存場所を開きました", reference),
         )
+
+    def relink_selected_history(self) -> None:
+        selection = self.history_tree.selection()
+        if not selection:
+            return
+        view = self.history_views_by_id[str(selection[0])]
+        if view.recording_id is None:
+            return
+        candidate = filedialog.askopenfilename(
+            title="再関連付けする録画ファイルを選択",
+            initialdir=self.service.paths.recordings,
+            filetypes=(("録画ファイル", "*.mkv *.mp4"), ("すべてのファイル", "*.*")),
+            parent=self.root,
+        )
+        if not candidate:
+            return
+
+        def confirm(preview: object) -> None:
+            if not messagebox.askyesno(
+                "録画ファイルを再関連付け",
+                "録画ファイルの参照先だけを更新します。動画は移動・変更しません。\n\n"
+                f"録画ID: {preview.recording_id}\n"
+                f"現在: {preview.previous_path}\n"
+                f"候補: {preview.candidate_path}\n"
+                f"サイズ: {_format_bytes(preview.size_bytes)}\n"
+                f"SHA-256: {preview.sha256}\n\n"
+                "事前バックアップを作成して続行しますか？",
+                parent=self.root,
+            ):
+                return
+            self._run(
+                lambda: self.service.relink_recording(preview),
+                lambda _result: (
+                    self._activity(f"録画ファイルを再関連付けしました: {preview.recording_id}"),
+                    self.refresh_history(),
+                    self.refresh_data_protection(),
+                ),
+            )
+
+        self._run(
+            lambda: self.service.preview_recording_relink(
+                view.recording_id, Path(candidate)
+            ),
+            confirm,
+        )
+
+    def open_duplicate_candidates(self) -> None:
+        self._run(
+            self.service.duplicate_duel_candidates,
+            self._show_duplicate_candidates,
+        )
+
+    def _show_duplicate_candidates(self, candidates: tuple[object, ...]) -> None:
+        if not candidates:
+            messagebox.showinfo(
+                "重複戦績候補",
+                "比較対象となる重複候補はありません。データは変更していません。",
+                parent=self.root,
+            )
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("重複戦績候補を比較")
+        dialog.geometry("940x560")
+        dialog.minsize(780, 460)
+        dialog.transient(self.root)
+        frame = ttk.Frame(dialog, padding=18)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text="候補を比較し、両方保持・個別編集・片方削除を選択できます",
+            style="Heading.TLabel",
+        ).pack(anchor="w", pady=(0, 10))
+        ttk.Label(
+            frame,
+            text="候補提示だけではデータを変更しません。自動統合は行いません。",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(0, 10))
+        tree = ttk.Treeview(
+            frame,
+            columns=("left", "right", "score", "reason"),
+            show="headings",
+            height=9,
+        )
+        for key, label, width in (
+            ("left", "候補A", 250),
+            ("right", "候補B", 250),
+            ("score", "一致度", 80),
+            ("reason", "根拠", 300),
+        ):
+            tree.heading(key, text=label)
+            tree.column(key, width=width, stretch=key == "reason")
+        tree.pack(fill="both", expand=True)
+        candidate_by_row: dict[str, object] = {}
+
+        def record_label(identifier: str) -> str:
+            record = self.service.get_duel_record(identifier)
+            if record is None:
+                return identifier
+            values = record.values
+            deck = values.own_deck or "デッキ未設定"
+            result = duel_choice_label("result", values.result)
+            return f"{record.occurred_at.astimezone():%Y-%m-%d %H:%M:%S} / {deck} / {result}"
+
+        for index, candidate in enumerate(candidates):
+            row_id = f"candidate:{index}"
+            candidate_by_row[row_id] = candidate
+            tree.insert(
+                "",
+                "end",
+                iid=row_id,
+                values=(
+                    record_label(candidate.left_duel_id),
+                    record_label(candidate.right_duel_id),
+                    candidate.score,
+                    "、".join(candidate.reasons),
+                ),
+            )
+        detail_var = tk.StringVar(value="候補を選択してください")
+        ttk.Label(
+            frame,
+            textvariable=detail_var,
+            style="Muted.TLabel",
+            justify="left",
+            wraplength=880,
+        ).pack(
+            anchor="w", fill="x", pady=(10, 8)
+        )
+        actions = ttk.Frame(frame)
+        actions.pack(anchor="e")
+        action_buttons: list[ttk.Button] = []
+
+        def selected_candidate() -> object | None:
+            selection = tree.selection()
+            return candidate_by_row.get(str(selection[0])) if selection else None
+
+        def select_side(side: str) -> str | None:
+            candidate = selected_candidate()
+            return getattr(candidate, f"{side}_duel_id", None) if candidate else None
+
+        def edit_side(side: str) -> None:
+            identifier = select_side(side)
+            if identifier is not None:
+                self._open_duel_editor(identifier)
+
+        def delete_side(side: str) -> None:
+            identifier = select_side(side)
+            if identifier is None:
+                return
+            record = self.service.get_duel_record(identifier)
+            if record is None:
+                return
+            deletes_recording = record.recording_id is not None
+            warning = (
+                "対戦記録に加えて録画ファイルも完全に削除します。"
+                if deletes_recording
+                else "録画を伴わない対戦記録を完全に削除します。"
+            )
+            if not messagebox.askyesno(
+                "重複候補を削除",
+                f"{warning}\n\n対象: {record_label(identifier)}\n\n"
+                "管理データの事前バックアップを作成して続行しますか？",
+                parent=dialog,
+            ):
+                return
+
+            def operation() -> object:
+                if record.recording_id is not None:
+                    return self.service.delete_history(record.recording_id)
+                return self.service.delete_duel_record(record.duel_id)
+
+            def deleted(_result: object) -> None:
+                dialog.destroy()
+                self._activity("重複候補から選択した戦績を削除しました")
+                self.refresh_history()
+                self.refresh_data_protection()
+
+            self._run(operation, deleted)
+
+        def selection_changed(_event: object | None = None) -> None:
+            candidate = selected_candidate()
+            enabled = "normal" if candidate is not None else "disabled"
+            for button in action_buttons:
+                button.configure(state=enabled)
+            if candidate is None:
+                detail_var.set("候補を選択してください")
+                return
+
+            def detail(side: str, identifier: str) -> str:
+                record = self.service.get_duel_record(identifier)
+                if record is None:
+                    return f"{side}: 取得できません ({identifier})"
+                values = record.values
+                recording = record.recording_id or "なし（手動戦績）"
+                tags = "、".join(values.tags) or "なし"
+                notes = values.notes.strip() or "なし"
+                return (
+                    f"{side}: {record.occurred_at.astimezone():%Y-%m-%d %H:%M:%S} / "
+                    f"録画 {recording} / デッキ {values.own_deck or '未設定'} / "
+                    f"勝敗 {duel_choice_label('result', values.result)} / "
+                    f"先後 {duel_choice_label('play_order', values.play_order)}\n"
+                    f"タグ: {tags} / メモ: {notes}"
+                )
+
+            detail_var.set(
+                f"開始時刻差 {candidate.time_delta_seconds:.1f}秒 / "
+                f"一致度 {candidate.score} / 根拠: {'、'.join(candidate.reasons)}\n"
+                f"{detail('A', candidate.left_duel_id)}\n"
+                f"{detail('B', candidate.right_duel_id)}"
+            )
+
+        for label, command in (
+            ("Aを編集", lambda: edit_side("left")),
+            ("Bを編集", lambda: edit_side("right")),
+            ("Aを削除", lambda: delete_side("left")),
+            ("Bを削除", lambda: delete_side("right")),
+        ):
+            button = ttk.Button(actions, text=label, command=command, state="disabled")
+            button.pack(side="left", padx=(0, 8))
+            action_buttons.append(button)
+        ttk.Button(actions, text="両方保持して閉じる", command=dialog.destroy).pack(
+            side="left"
+        )
+        tree.bind("<<TreeviewSelect>>", selection_changed)
+        dialog.grab_set()
 
     def delete_selected_history(self) -> None:
         selection = self.history_tree.selection()
@@ -4224,6 +4528,112 @@ class RecorderGui:
                 self._activity(f"{label}を初期化しました / バックアップ: {result.backup_path}"),
                 self.refresh_all(),
             ),
+        )
+
+    def refresh_data_protection(self) -> None:
+        if self.smoke_mode:
+            return
+        self._run(
+            lambda: (
+                self.service.diagnose_data_integrity(),
+                self.service.list_data_backups(),
+            ),
+            self._data_protection_loaded,
+        )
+
+    def _data_protection_loaded(self, result: object) -> None:
+        report, backups = result
+        latest = backups[0] if backups else None
+        finding_severities = {item.severity for item in report.findings}
+        severity = (
+            "要確認"
+            if "error" in finding_severities
+            else "注意"
+            if "warning" in finding_severities
+            else "正常"
+        )
+        latest_text = (
+            f"{latest.created_at.astimezone():%Y-%m-%d %H:%M} / {_format_bytes(latest.size_bytes)}"
+            if latest is not None
+            else "未作成"
+        )
+        total = sum(item.size_bytes for item in backups)
+        self.data_protection_status_var.set(
+            f"DB: {severity} / 最終バックアップ: {latest_text} / "
+            f"{len(backups)}世代 {_format_bytes(total)}"
+        )
+        self._clear_tree(self.data_backup_tree)
+        for backup in backups:
+            self.data_backup_tree.insert(
+                "",
+                "end",
+                values=(
+                    backup.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                    backup.reason,
+                    backup.schema_version,
+                    _format_bytes(backup.size_bytes),
+                    "保護" if backup.protected else "通常",
+                ),
+            )
+
+    def create_data_backup(self) -> None:
+        self._run(
+            self.service.create_data_backup,
+            lambda backup: (
+                self._activity(f"データバックアップを作成しました: {backup.path}"),
+                self.refresh_data_protection(),
+            ),
+        )
+
+    def run_data_integrity_diagnosis(self) -> None:
+        self._run(
+            self.service.diagnose_data_integrity,
+            lambda report: messagebox.showinfo(
+                "データ整合性診断",
+                "\n".join(
+                    f"[{item.severity}] {item.message}\n{item.recommendation}"
+                    for item in report.findings
+                ),
+                parent=self.root,
+            ),
+        )
+
+    def restore_data_backup(self) -> None:
+        source = filedialog.askopenfilename(
+            parent=self.root,
+            title="検証済みバックアップを選択",
+            filetypes=(("MDRL backup", "*.mdrl-backup"),),
+            initialdir=str(self.service.paths.data / "backups"),
+        )
+        if not source:
+            return
+
+        def preview_loaded(preview: object) -> None:
+            before = preview.current_counts
+            after = preview.backup_counts
+            lines = [
+                f"{name}: {before.get(name, 0)} -> {after.get(name, 0)}"
+                for name in ("recordings", "duels", "decks", "tags", "seasons", "filters")
+            ]
+            if not messagebox.askyesno(
+                "バックアップ復元の最終確認",
+                "現在のDBを安全退避して、次の内容へ置き換えます。\n\n"
+                + "\n".join(lines)
+                + "\n\n録画ファイルは変更しません。続行しますか？",
+                parent=self.root,
+            ):
+                return
+            self._run(
+                lambda: self.service.restore_data_backup(Path(source)),
+                lambda _result: (
+                    self._activity("検証済みバックアップから復元しました"),
+                    self.refresh_all(),
+                    self.refresh_data_protection(),
+                ),
+            )
+
+        self._run(
+            lambda: self.service.preview_data_restore(Path(source)), preview_loaded
         )
 
     def refresh_preparations(self) -> None:

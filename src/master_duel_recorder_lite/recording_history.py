@@ -7,7 +7,7 @@ from enum import Enum
 import json
 from pathlib import Path
 import sqlite3
-from typing import Iterator
+from typing import Callable, Iterator
 import uuid
 
 from .history_database import (
@@ -138,6 +138,7 @@ class RecordingHistoryRepository:
         *,
         database_path: Path,
         recordings_root: Path,
+        migration_backup_factory: Callable[[int], Path] | None = None,
     ) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.recordings_root = recordings_root.expanduser().resolve()
@@ -145,12 +146,16 @@ class RecordingHistoryRepository:
             initialize_history_database(
                 self.database_path,
                 recordings_root=self.recordings_root,
+                migration_backup_factory=migration_backup_factory,
             )
         except (OSError, HistoryDatabaseError) as exc:
             raise RecordingHistoryError(str(exc)) from exc
 
     @classmethod
     def from_runtime_paths(cls, paths: RuntimePaths) -> RecordingHistoryRepository:
+        from .data_protection import initialize_protected_history_database
+
+        initialize_protected_history_database(paths)
         return cls(
             database_path=paths.db / HISTORY_DATABASE_NAME,
             recordings_root=paths.recordings,

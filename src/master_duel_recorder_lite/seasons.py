@@ -47,6 +47,9 @@ class SeasonRepository:
 
     @classmethod
     def from_runtime_paths(cls, paths: RuntimePaths) -> SeasonRepository:
+        from .data_protection import initialize_protected_history_database
+
+        initialize_protected_history_database(paths)
         return cls(paths.db / HISTORY_DATABASE_NAME)
 
     def list(self, *, include_archived: bool = False) -> tuple[Season, ...]:

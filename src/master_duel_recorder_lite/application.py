@@ -31,6 +31,17 @@ from .config import (
 )
 from .config_management import updated_config
 from .data_management import ManagedDataResult, ManagedDataService
+from .data_protection import (
+    BackupInfo,
+    DataProtectionService,
+    IntegrityReport,
+    RestorePreview,
+)
+from .data_reconciliation import (
+    DataReconciliationService,
+    DuplicateCandidate,
+    RelinkPreview,
+)
 from .detection import DetectionPolicy, DuelDetectionStateMachine, DuelObservation
 from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
 from .duel_start_monitor import MasterDuelStartMonitor
@@ -703,6 +714,44 @@ class RecorderApplicationService:
         self._require_data_management_idle()
         return ManagedDataService.from_runtime_paths(self.paths).reset(scope)
 
+    def list_data_backups(self) -> tuple[BackupInfo, ...]:
+        return DataProtectionService(self.paths).list_backups()
+
+    def create_data_backup(self, reason: str = "manual") -> BackupInfo:
+        self._require_data_management_idle()
+        return DataProtectionService(self.paths).create_backup(reason)
+
+    def preview_data_restore(self, path: Path) -> RestorePreview:
+        self._require_data_management_idle()
+        return DataProtectionService(self.paths).preview_restore(path)
+
+    def restore_data_backup(self, path: Path) -> RestorePreview:
+        self._require_data_management_idle()
+        preview = DataProtectionService(self.paths).restore(path)
+        self._recording_browser = None
+        return preview
+
+    def diagnose_data_integrity(self) -> IntegrityReport:
+        return DataProtectionService(self.paths).diagnose()
+
+    def preview_recording_relink(
+        self, recording_id: str, path: Path
+    ) -> RelinkPreview:
+        self._require_data_management_idle()
+        history = RecordingHistoryRepository.from_runtime_paths(self.paths)
+        return DataReconciliationService(history).preview_relink(recording_id, path)
+
+    def relink_recording(self, preview: RelinkPreview) -> None:
+        self._require_data_management_idle()
+        DataProtectionService(self.paths).create_backup("pre-relink")
+        history = RecordingHistoryRepository.from_runtime_paths(self.paths)
+        DataReconciliationService(history).relink(preview)
+        self._recording_browser = None
+
+    def duplicate_duel_candidates(self) -> tuple[DuplicateCandidate, ...]:
+        history = RecordingHistoryRepository.from_runtime_paths(self.paths)
+        return DataReconciliationService(history).duplicate_candidates()
+
     def _require_data_management_idle(self) -> None:
         with self._lock:
             self._collect_manual_terminal_locked()
@@ -852,6 +901,7 @@ class RecorderApplicationService:
 
     def delete_duel_record(self, duel_id: str) -> DuelRecord:
         self._require_duel_write_idle()
+        DataProtectionService(self.paths).create_backup("pre-duel-delete")
         return DuelRecordRepository.from_runtime_paths(self.paths).delete_manual(duel_id)
 
     def duel_write_block_reason(self) -> str | None:
@@ -1071,6 +1121,7 @@ class RecorderApplicationService:
                 raise ApplicationOperationError(
                     "録画または自動監視の実行中は履歴を削除できません"
                 )
+        DataProtectionService(self.paths).create_backup("pre-history-delete")
         return RecordingHistoryRepository.from_runtime_paths(self.paths).delete(
             recording_id
         )

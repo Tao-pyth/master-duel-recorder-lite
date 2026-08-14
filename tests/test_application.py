@@ -224,9 +224,11 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             )
 
             deleted = service.delete_duel_record(created.duel_id)
+            backups = service.list_data_backups()
 
         self.assertEqual(deleted.duel_id, created.duel_id)
         self.assertEqual(service.list_history_views(), ())
+        self.assertEqual(backups[0].reason, "pre-duel-delete")
 
     def test_new_duel_editor_inherits_last_values_but_existing_record_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
