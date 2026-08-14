@@ -215,6 +215,64 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             [item.season.name for item in summaries], ["ランク", "イベントA"]
         )
 
+    def test_season_report_update_export_and_archive_use_application_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            season = service.add_season(
+                name="レポート対象",
+                season_type="custom",
+                duel_type="other",
+                start_date=date(2026, 8, 1),
+                end_date=date(2026, 8, 31),
+            )
+            service.create_manual_duel_record(
+                DuelRecordValues(
+                    status="confirmed", result="win", season_id=season.season_id
+                ),
+                occurred_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
+            )
+            updated = service.update_season_report(
+                season.season_id,
+                report_notes="従来メモ",
+                report_goal="目標",
+                report_highlights="良かった点",
+                report_challenges="課題",
+                report_next_plan="次期方針",
+                expected_revision=0,
+            )
+            report = service.get_season_report(
+                season.season_id, use_default_comparison=False
+            )
+            output = service.export_season_report(
+                report, service.paths.exports / "report.html"
+            )
+            archived = service.archive_season_report(season.season_id)
+
+            self.assertEqual(updated.report_revision, 1)
+            self.assertTrue(output.is_file())
+            self.assertTrue(archived.is_archived)
+            self.assertEqual(
+                service.list_data_backups()[0].reason, "pre-season-archive"
+            )
+
+    def test_deleting_unreferenced_season_creates_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            season = service.add_season(
+                name="削除対象",
+                season_type="custom",
+                duel_type="other",
+                start_date=date(2026, 8, 1),
+                end_date=date(2026, 8, 31),
+            )
+
+            deleted = service.delete_season(season.season_id)
+
+            self.assertEqual(deleted.season_id, season.season_id)
+            self.assertEqual(
+                service.list_data_backups()[0].reason, "pre-season-delete"
+            )
+
     def test_manual_duel_can_be_deleted_without_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")

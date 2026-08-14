@@ -52,6 +52,7 @@ from .preflight import CheckStatus, PreflightReport
 from .operation_state import OperationAction
 from .recording_browsing import RecordingReference
 from .recording_session import RecordingState
+from .season_reports import SeasonReport
 
 
 T = TypeVar("T")
@@ -593,6 +594,12 @@ class RecorderGui:
             "MetricLabel.TLabel",
             background=self.COLORS["surface"],
             foreground=self.COLORS["muted"],
+            font=("Segoe UI Semibold", 9),
+        )
+        style.configure(
+            "Warning.TLabel",
+            background=self.COLORS["surface"],
+            foreground=self.COLORS["amber"],
             font=("Segoe UI Semibold", 9),
         )
         style.configure("TNotebook", background=self.COLORS["canvas"], borderwidth=0)
@@ -2737,18 +2744,8 @@ class RecorderGui:
         season_id = season.season_id
         self._run(
             lambda: (
-                season,
-                (
-                    self.service.get_statistics_dashboard(
-                        StatisticsFilter(season_id=season_id), granularity="day"
-                    ),
-                    self.service.get_statistics_dashboard(
-                        StatisticsFilter(season_id=season_id), granularity="week"
-                    ),
-                    self.service.get_statistics_dashboard(
-                        StatisticsFilter(season_id=season_id), granularity="month"
-                    ),
-                ),
+                self.service.get_season_report(season_id),
+                self.service.list_seasons(include_archived=True),
             ),
             self._show_season_report_dialog,
         )
@@ -4369,92 +4366,509 @@ class RecorderGui:
         season_id = season.season_id
         self._run(
             lambda: (
-                season,
-                (
-                    self.service.get_statistics_dashboard(
-                        StatisticsFilter(season_id=season_id), granularity="day"
-                    ),
-                    self.service.get_statistics_dashboard(
-                        StatisticsFilter(season_id=season_id), granularity="week"
-                    ),
-                    self.service.get_statistics_dashboard(
-                        StatisticsFilter(season_id=season_id), granularity="month"
-                    ),
-                ),
+                self.service.get_season_report(season_id),
+                self.service.list_seasons(include_archived=True),
             ),
             self._show_season_report_dialog,
         )
 
     def _show_season_report_dialog(self, payload: tuple[object, object]) -> None:
-        season, dashboards = payload
+        report, seasons = payload
+        assert isinstance(report, SeasonReport)
+        season = report.season
         dialog = tk.Toplevel(self.root)
         dialog.title(f"シーズンレポート - {season.name}")
-        dialog.geometry("720x610")
+        dialog_width = min(980, max(900, dialog.winfo_screenwidth() - 40))
+        dialog_height = min(640, max(600, dialog.winfo_screenheight() - 80))
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.minsize(min(900, dialog_width), min(600, dialog_height))
         dialog.transient(self.root)
         dialog.configure(background=self.COLORS["canvas"])
-        frame = ttk.Frame(dialog, style="App.TFrame", padding=22)
+        frame = ttk.Frame(dialog, style="App.TFrame", padding=18)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text=season.name, style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
-            frame,
-            text=f"{season.start_date} - {season.end_date} / "
-            f"{ {'ranked': 'ランク', 'event': 'イベント', 'custom': 'カスタム'}[season.season_type] }",
-            style="Muted.TLabel",
-        ).pack(anchor="w", pady=(2, 12))
-        metrics = self._surface(frame, padding=(16, 14))
-        metrics.pack(fill="x", pady=(0, 12))
-        ttk.Label(metrics, text="ライブ集計レポート", style="Heading.TLabel").pack(anchor="w")
-        ttk.Label(
-            metrics,
-            text=self._season_report_text(dashboards),
-            style="Body.TLabel",
-            justify="left",
-        ).pack(anchor="w", pady=(8, 0))
-        ttk.Label(frame, text="レポートメモ", style="Heading.TLabel").pack(anchor="w")
-        notes = tk.Text(
-            frame,
-            height=12,
-            wrap="word",
-            borderwidth=1,
-            relief="solid",
-            background=self.COLORS["surface"],
-            foreground=self.COLORS["text"],
-            font=("Segoe UI", 10),
-            padx=10,
-            pady=10,
-        )
-        notes.insert("1.0", season.report_notes)
-        notes.pack(fill="both", expand=True, pady=(6, 12))
 
-        def save_notes() -> None:
+        header = ttk.Frame(frame, style="App.TFrame")
+        header.pack(fill="x", pady=(0, 10))
+        title = ttk.Frame(header, style="App.TFrame")
+        title.pack(side="left", fill="x", expand=True)
+        ttk.Label(title, text=season.name, style="Title.TLabel").pack(anchor="w")
+        ended = season.has_ended()
+        ttk.Label(
+            title,
+            text=(
+                f"{season.start_date} - {season.end_date} / "
+                f"{'終了済み' if ended else '開催中'} / "
+                f"{'アーカイブ' if season.is_archived else '利用中'}"
+            ),
+            style="Muted.TLabel",
+        ).pack(anchor="w")
+        comparison_frame = ttk.Frame(header, style="App.TFrame")
+        comparison_frame.pack(side="right", anchor="n")
+        comparison_values: dict[str, tuple[int | None, bool]] = {
+            "比較なし": (None, False)
+        }
+        for item in seasons:
+            if item.season_id != season.season_id:
+                comparison_values[f"{item.name} ({item.start_date})"] = (
+                    item.season_id,
+                    False,
+                )
+        current_comparison_label = "比較なし"
+        if report.comparison_season is not None:
+            current_comparison_label = (
+                f"{report.comparison_season.name} "
+                f"({report.comparison_season.start_date})"
+            )
+        comparison_var = tk.StringVar(value=current_comparison_label)
+        ttk.Combobox(
+            comparison_frame,
+            textvariable=comparison_var,
+            values=tuple(comparison_values),
+            state="readonly",
+            width=28,
+        ).pack(side="left", padx=(0, 6))
+
+        def apply_comparison() -> None:
+            selected_id, use_default = comparison_values[comparison_var.get()]
+            dialog.destroy()
             self._run(
-                lambda: self.service.update_season(
-                    season.season_id,
-                    name=season.name,
-                    season_type=season.season_type,
-                    duel_type=season.duel_type,
-                    start_date=season.start_date,
-                    end_date=season.end_date,
-                    description=season.description,
-                    report_notes=notes.get("1.0", "end-1c"),
+                lambda: (
+                    self.service.get_season_report(
+                        season.season_id,
+                        comparison_season_id=selected_id,
+                        use_default_comparison=use_default,
+                    ),
+                    self.service.list_seasons(include_archived=True),
                 ),
-                lambda _saved: (dialog.destroy(), self.refresh_seasons()),
+                self._show_season_report_dialog,
             )
 
+        ttk.Button(
+            comparison_frame,
+            text="比較を適用",
+            command=apply_comparison,
+        ).pack(side="left")
+
+        notebook = ttk.Notebook(frame)
+        notebook.pack(fill="both", expand=True)
+        overview = self._surface(notebook, padding=(16, 14))
+        deck_tab = self._surface(notebook, padding=(10, 10))
+        axis_tab = self._surface(notebook, padding=(10, 10))
+        trend_tab = self._surface(notebook, padding=(10, 10))
+        reflection = self._surface(notebook, padding=(16, 12))
+        notebook.add(overview, text="概要")
+        notebook.add(deck_tab, text="デッキ・先後")
+        notebook.add(axis_tab, text="コイントス")
+        notebook.add(trend_tab, text="推移")
+        notebook.add(reflection, text="振り返り")
+
+        metric = report.comparison.current
+        comparison_metric = report.comparison.comparison
+        comparison_name = (
+            report.comparison_season.name
+            if report.comparison_season is not None
+            else "比較なし"
+        )
+        delta = (
+            "算出不可"
+            if report.comparison.win_rate_delta is None
+            else f"{report.comparison.win_rate_delta * 100:+.1f}ポイント"
+        )
+        summary = ttk.Frame(overview, style="Surface.TFrame")
+        summary.pack(fill="x")
+        for column, (label, value, detail) in enumerate(
+            (
+                (
+                    "対象シーズン",
+                    _format_win_rate(metric),
+                    _format_statistics_detail(metric),
+                ),
+                (
+                    comparison_name,
+                    _format_win_rate(comparison_metric)
+                    if comparison_metric is not None
+                    else "-",
+                    _format_statistics_detail(comparison_metric)
+                    if comparison_metric is not None
+                    else "比較対象なし",
+                ),
+                (
+                    "勝率差",
+                    delta,
+                    "対戦数差 算出不可"
+                    if report.comparison.match_delta is None
+                    else f"対戦数差 {report.comparison.match_delta:+d}",
+                ),
+            )
+        ):
+            block = ttk.Frame(summary, style="Surface.TFrame", padding=(14, 8))
+            block.grid(row=0, column=column, sticky="nsew")
+            ttk.Label(block, text=label, style="MetricLabel.TLabel").pack(anchor="w")
+            ttk.Label(block, text=value, style="Metric.TLabel").pack(anchor="w")
+            ttk.Label(block, text=detail, style="Muted.TLabel").pack(anchor="w")
+            summary.columnconfigure(column, weight=1, uniform="season-summary")
+        if report.small_sample:
+            ttk.Label(
+                overview,
+                text=f"注意: {report.sample_threshold}戦未満のため少数標本です",
+                style="Warning.TLabel",
+            ).pack(anchor="w", pady=(14, 0))
+        ttk.Label(
+            overview,
+            text=(
+                "確定済みで勝敗入力済みの正常録画または手動戦績を集計します。"
+                "シーズン割当と期間の両方が一致し、非表示の自分デッキは除外します。"
+            ),
+            style="Body.TLabel",
+            wraplength=840,
+        ).pack(anchor="w", pady=(14, 0))
+
+        deck_holder = ttk.Frame(deck_tab, style="Surface.TFrame")
+        deck_holder.pack(fill="both", expand=True)
+        deck_tree = ttk.Treeview(
+            deck_holder,
+            columns=("deck", "order", "matches", "wins", "losses", "draws", "rate", "notice"),
+            show="headings",
+        )
+        for key, label, width in (
+            ("deck", "デッキ", 210),
+            ("order", "区分", 90),
+            ("matches", "対戦", 70),
+            ("wins", "勝", 60),
+            ("losses", "負", 60),
+            ("draws", "引分", 60),
+            ("rate", "勝率", 90),
+            ("notice", "注意", 100),
+        ):
+            deck_tree.heading(key, text=label)
+            deck_tree.column(key, width=width, stretch=key == "deck")
+        deck_colors: dict[str, str] = {}
+        for index, item in enumerate(report.deck_orders):
+            row_id = f"deck-order:{index}"
+            deck_tree.insert(
+                "",
+                "end",
+                iid=row_id,
+                values=(
+                    item.deck_name,
+                    item.label,
+                    item.metric.matches,
+                    item.metric.wins,
+                    item.metric.losses,
+                    item.metric.draws,
+                    _format_win_rate(item.metric),
+                    "少数標本" if item.small_sample else "",
+                ),
+            )
+            if item.color:
+                deck_colors[row_id] = item.color
+        deck_color_lines: list[tk.Frame] = []
+
+        def draw_deck_colors() -> None:
+            for line in deck_color_lines:
+                line.destroy()
+            deck_color_lines.clear()
+            for row_id, color in deck_colors.items():
+                bounds = deck_tree.bbox(row_id, "deck")
+                if not bounds:
+                    continue
+                x, y, _width, height = bounds
+                line = tk.Frame(deck_tree, background=color, borderwidth=0)
+                line.place(x=x + 3, y=y + 5, width=4, height=max(1, height - 10))
+                deck_color_lines.append(line)
+
+        deck_scrollbar = ttk.Scrollbar(deck_holder, orient="vertical")
+
+        def scroll_decks(*arguments: object) -> None:
+            deck_tree.yview(*arguments)
+            dialog.after_idle(draw_deck_colors)
+
+        deck_scrollbar.configure(command=scroll_decks)
+        deck_tree.configure(yscrollcommand=deck_scrollbar.set)
+        deck_scrollbar.pack(side="right", fill="y")
+        deck_tree.pack(side="left", fill="both", expand=True)
+        deck_tree.bind(
+            "<Configure>", lambda _event: dialog.after_idle(draw_deck_colors)
+        )
+        deck_tree.bind(
+            "<MouseWheel>",
+            lambda _event: dialog.after_idle(draw_deck_colors),
+            add="+",
+        )
+        notebook.bind(
+            "<<NotebookTabChanged>>",
+            lambda _event: dialog.after_idle(draw_deck_colors),
+            add="+",
+        )
+
+        axis_holder = ttk.Frame(axis_tab, style="Surface.TFrame")
+        axis_holder.pack(fill="both", expand=True)
+        axis_tree = ttk.Treeview(
+            axis_holder,
+            columns=("axis", "matches", "wins", "losses", "draws", "rate", "notice"),
+            show="headings",
+        )
+        for key, label, width in (
+            ("axis", "集計軸", 250),
+            ("matches", "対戦", 70),
+            ("wins", "勝", 60),
+            ("losses", "負", 60),
+            ("draws", "引分", 60),
+            ("rate", "勝率", 90),
+            ("notice", "注意", 100),
+        ):
+            axis_tree.heading(key, text=label)
+            axis_tree.column(key, width=width, stretch=key == "axis")
+        for item in report.axes:
+            axis_tree.insert(
+                "",
+                "end",
+                values=(
+                    item.label,
+                    item.metric.matches,
+                    item.metric.wins,
+                    item.metric.losses,
+                    item.metric.draws,
+                    _format_win_rate(item.metric),
+                    "少数標本" if item.small_sample else "",
+                ),
+            )
+        axis_scrollbar = ttk.Scrollbar(
+            axis_holder, orient="vertical", command=axis_tree.yview
+        )
+        axis_tree.configure(yscrollcommand=axis_scrollbar.set)
+        axis_scrollbar.pack(side="right", fill="y")
+        axis_tree.pack(side="left", fill="both", expand=True)
+
+        trend_holder = ttk.Frame(trend_tab, style="Surface.TFrame")
+        trend_holder.pack(fill="both", expand=True)
+        trend_tree = ttk.Treeview(
+            trend_holder,
+            columns=("unit", "period", "matches", "wins", "losses", "draws", "rate", "decks"),
+            show="headings",
+        )
+        for key, label, width in (
+            ("unit", "単位", 55),
+            ("period", "期間", 90),
+            ("matches", "対戦", 60),
+            ("wins", "勝", 50),
+            ("losses", "負", 50),
+            ("draws", "引分", 50),
+            ("rate", "勝率", 80),
+            ("decks", "使用デッキ比率", 320),
+        ):
+            trend_tree.heading(key, text=label)
+            trend_tree.column(key, width=width, stretch=key == "decks")
+        daily_usage = {item.period_start: item for item in report.daily_deck_usage}
+        weekly_usage = {item.period_start: item for item in report.weekly_deck_usage}
+        for unit, points, usage in (
+            ("日", report.daily_trend, daily_usage),
+            ("週", report.weekly_trend, weekly_usage),
+        ):
+            for point in points:
+                shares = usage.get(point.period_start)
+                deck_text = (
+                    " / ".join(
+                        f"{item.deck_name} {item.ratio * 100:.1f}%"
+                        for item in shares.decks
+                    )
+                    if shares is not None and shares.decks
+                    else "対戦なし"
+                )
+                trend_tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        unit,
+                        point.label,
+                        point.metric.matches,
+                        point.metric.wins,
+                        point.metric.losses,
+                        point.metric.draws,
+                        _format_win_rate(point.metric),
+                        deck_text,
+                    ),
+                )
+        trend_scrollbar = ttk.Scrollbar(
+            trend_holder, orient="vertical", command=trend_tree.yview
+        )
+        trend_tree.configure(yscrollcommand=trend_scrollbar.set)
+        trend_scrollbar.pack(side="right", fill="y")
+        trend_tree.pack(side="left", fill="both", expand=True)
+
+        report_inputs: dict[str, tk.Text] = {}
+        for row, (key, label, value, height) in enumerate(
+            (
+                ("goal", "目標", season.report_goal, 2),
+                ("highlights", "良かった点", season.report_highlights, 2),
+                ("challenges", "課題", season.report_challenges, 2),
+                ("next_plan", "次期方針", season.report_next_plan, 2),
+                ("notes", "従来メモ", season.report_notes, 3),
+            )
+        ):
+            ttk.Label(reflection, text=label, style="Body.TLabel").grid(
+                row=row, column=0, sticky="nw", padx=(0, 10), pady=4
+            )
+            editor = tk.Text(
+                reflection,
+                height=height,
+                wrap="word",
+                borderwidth=1,
+                relief="solid",
+                background=self.COLORS["surface"],
+                foreground=self.COLORS["text"],
+                font=("Segoe UI", 9),
+                padx=8,
+                pady=5,
+            )
+            editor.insert("1.0", value)
+            editor.grid(row=row, column=1, sticky="nsew", pady=4)
+            report_inputs[key] = editor
+            reflection.rowconfigure(row, weight=1 if key == "notes" else 0)
+        reflection.columnconfigure(1, weight=1)
+
+        def report_values() -> dict[str, object]:
+            return {
+                "report_notes": report_inputs["notes"].get("1.0", "end-1c"),
+                "report_goal": report_inputs["goal"].get("1.0", "end-1c"),
+                "report_highlights": report_inputs["highlights"].get("1.0", "end-1c"),
+                "report_challenges": report_inputs["challenges"].get("1.0", "end-1c"),
+                "report_next_plan": report_inputs["next_plan"].get("1.0", "end-1c"),
+                "expected_revision": season.report_revision,
+            }
+
+        def save_report() -> None:
+            self._run(
+                lambda: self.service.update_season_report(
+                    season.season_id, **report_values()
+                ),
+                lambda saved: (
+                    dialog.destroy(),
+                    self._activity(f"振り返りを保存しました: {saved.name}"),
+                    self.refresh_seasons(),
+                    self._open_season_report(saved),
+                ),
+            )
+
+        def archive_report() -> None:
+            timing = "終了済み" if ended else "開催期間中"
+            if not messagebox.askyesno(
+                "振り返りを確定してアーカイブ",
+                f"このシーズンは{timing}です。入力内容を保存し、"
+                "ライブ集計を維持したままアーカイブしますか？",
+                parent=dialog,
+            ):
+                return
+
+            def operation() -> object:
+                self.service.update_season_report(
+                    season.season_id, **report_values()
+                )
+                return self.service.archive_season_report(season.season_id)
+
+            self._run(
+                operation,
+                lambda archived: (
+                    dialog.destroy(),
+                    self._activity(f"シーズンをアーカイブしました: {archived.name}"),
+                    self.refresh_all(),
+                ),
+            )
+
+        def export_report() -> None:
+            safe_name = "".join(
+                char for char in season.name if char.isalnum() or char in "-_"
+            ) or "season"
+            destination = filedialog.asksaveasfilename(
+                parent=dialog,
+                title="シーズンレポートをHTML出力",
+                defaultextension=".html",
+                filetypes=(("HTML", "*.html"),),
+                initialdir=str(self.service.paths.exports),
+                initialfile=f"{safe_name}-report.html",
+            )
+            if not destination:
+                return
+            target = Path(destination)
+            overwrite = target.exists()
+            if overwrite and not messagebox.askyesno(
+                "HTMLを上書き",
+                f"{target.name}を上書きしますか？",
+                parent=dialog,
+            ):
+                return
+
+            def exported(path: object) -> None:
+                self._activity(f"シーズンレポートを出力しました: {path}")
+                if messagebox.askyesno(
+                    "HTML出力完了", "出力したレポートを開きますか？", parent=dialog
+                ):
+                    webbrowser.open(Path(path).as_uri())
+
+            self._run(
+                lambda: self.service.export_season_report(
+                    report, target, overwrite=overwrite
+                ),
+                exported,
+            )
+
+        footer = ttk.Frame(frame, style="App.TFrame")
+        footer.pack(fill="x", pady=(10, 0))
+        ttk.Label(
+            footer,
+            text="統計値は保存せず、常に現在の戦績から再集計します",
+            style="Muted.TLabel",
+        ).pack(side="left")
         self._icon_button(
-            frame, "save", "レポートメモを保存", save_notes, style="Primary.TButton"
-        ).pack(anchor="e")
+            footer, "export", "保存済み内容をHTML出力", export_report
+        ).pack(side="right")
+        if not season.is_archived:
+            ttk.Button(
+                footer,
+                text="確定してアーカイブ",
+                command=archive_report,
+            ).pack(side="right", padx=(0, 8))
+        self._icon_button(
+            footer,
+            "save",
+            "振り返りを保存",
+            save_report,
+            style="Primary.TButton",
+        ).pack(side="right", padx=(0, 8))
+        dialog.bind("<Control-s>", lambda _event: save_report())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.grab_set()
 
     def delete_selected_season(self) -> None:
         selected = self.season_tree.selection()
-        if selected and messagebox.askyesno(
-            "シーズン", "未参照なら削除、参照中ならアーカイブします。", parent=self.root
-        ):
-            self._run(
-                lambda: self.service.delete_season(int(selected[0])),
-                lambda _item: self.refresh_seasons(),
-            )
+        if not selected:
+            return
+        season_id = int(selected[0])
+
+        def checked(reference_count: object) -> None:
+            if int(reference_count) > 0:
+                messagebox.showinfo(
+                    "参照中のシーズン",
+                    "戦績から参照されているため削除できません。"
+                    "レポートを確認し、「確定してアーカイブ」を使用してください。",
+                    parent=self.root,
+                )
+                self.open_selected_season_report()
+                return
+            if messagebox.askyesno(
+                "シーズンを削除",
+                "未参照のシーズンを完全に削除しますか？",
+                parent=self.root,
+            ):
+                self._run(
+                    lambda: self.service.delete_season(season_id),
+                    lambda _item: self.refresh_seasons(),
+                )
+
+        self._run(
+            lambda: self.service.season_reference_count(season_id),
+            checked,
+        )
 
     def export_managed_data(self) -> None:
         destination = filedialog.asksaveasfilename(

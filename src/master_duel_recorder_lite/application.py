@@ -98,6 +98,8 @@ from .recording_history import (
 )
 from .recording_browsing import RecordingBrowser, RecordingReference
 from .recording_session import RecordingResult, RecordingState
+from .season_report_html import SeasonReportHtmlExporter
+from .season_reports import SeasonReport, SeasonReportService
 from .seasons import Season, SeasonRepository
 from .runtime_paths import default_runtime_paths
 from .upload_export import UploadExporter
@@ -971,7 +973,63 @@ class RecorderApplicationService:
         )
 
     def delete_season(self, season_id: int) -> Season:
-        return SeasonRepository.from_runtime_paths(self.paths).delete(season_id)
+        repository = SeasonRepository.from_runtime_paths(self.paths)
+        if repository.reference_count(season_id) > 0:
+            return repository.delete(season_id)
+        DataProtectionService(self.paths).create_backup("pre-season-delete")
+        return repository.delete(season_id)
+
+    def season_reference_count(self, season_id: int) -> int:
+        return SeasonRepository.from_runtime_paths(self.paths).reference_count(season_id)
+
+    def get_season_report(
+        self,
+        season_id: int,
+        *,
+        comparison_season_id: int | None = None,
+        use_default_comparison: bool = True,
+    ) -> SeasonReport:
+        return SeasonReportService(self.paths).build(
+            season_id,
+            comparison_season_id=comparison_season_id,
+            use_default_comparison=use_default_comparison,
+        )
+
+    def update_season_report(
+        self,
+        season_id: int,
+        *,
+        report_notes: str,
+        report_goal: str,
+        report_highlights: str,
+        report_challenges: str,
+        report_next_plan: str,
+        expected_revision: int,
+    ) -> Season:
+        return SeasonRepository.from_runtime_paths(self.paths).update_report(
+            season_id,
+            report_notes=report_notes,
+            report_goal=report_goal,
+            report_highlights=report_highlights,
+            report_challenges=report_challenges,
+            report_next_plan=report_next_plan,
+            expected_revision=expected_revision,
+        )
+
+    def archive_season_report(self, season_id: int) -> Season:
+        DataProtectionService(self.paths).create_backup("pre-season-archive")
+        return SeasonRepository.from_runtime_paths(self.paths).archive(season_id)
+
+    def export_season_report(
+        self,
+        report: SeasonReport,
+        destination: Path,
+        *,
+        overwrite: bool = False,
+    ) -> Path:
+        return SeasonReportHtmlExporter().export(
+            report, destination, overwrite=overwrite
+        )
 
     def get_statistics_dashboard(
         self,

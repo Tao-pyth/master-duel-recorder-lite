@@ -1,5 +1,5 @@
 from contextlib import closing
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -7,7 +7,11 @@ import unittest
 
 from master_duel_recorder_lite.duel_catalog import DuelCatalogRepository
 from master_duel_recorder_lite.duel_records import DuelRecordRepository, DuelRecordValues
-from master_duel_recorder_lite.duel_statistics import DuelStatisticsRepository, StatisticsFilter
+from master_duel_recorder_lite.duel_statistics import (
+    DuelStatisticsRepository,
+    StatisticsFilter,
+    statistics_local_date,
+)
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 
 
@@ -28,6 +32,14 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_local_date_conversion_handles_timezone_day_boundary(self) -> None:
+        instant = datetime(2026, 7, 31, 15, 30, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            statistics_local_date(instant, timezone(timedelta(hours=9))),
+            date(2026, 8, 1),
+        )
 
     def _record(
         self,

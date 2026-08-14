@@ -11,7 +11,7 @@ from master_duel_recorder_lite.recording_history import (
     HistoryQuery,
     RecordingHistoryRepository,
 )
-from master_duel_recorder_lite.seasons import SeasonRepository
+from master_duel_recorder_lite.seasons import SeasonError, SeasonRepository
 
 
 class SeasonRepositoryTest(unittest.TestCase):
@@ -54,7 +54,9 @@ class SeasonRepositoryTest(unittest.TestCase):
                 history.query(HistoryQuery(season_id=season.season_id))[0].recording_id,
                 "duel",
             )
-            archived = seasons.delete(season.season_id)
+            with self.assertRaisesRegex(SeasonError, "レポート"):
+                seasons.delete(season.season_id)
+            archived = seasons.archive(season.season_id)
             self.assertTrue(archived.is_archived)
             self.assertEqual(seasons.list(), ())
             self.assertEqual(

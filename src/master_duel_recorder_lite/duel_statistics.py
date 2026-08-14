@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 import unicodedata
 
@@ -115,7 +115,11 @@ class _StatisticsRow:
     coin_face: str
     coin_toss_outcome: str
     own_deck: str
+    own_deck_id: int | None
     season_id: int | None
+
+
+StatisticsRow = _StatisticsRow
 
 
 class DuelStatisticsRepository:
@@ -143,12 +147,7 @@ class DuelStatisticsRepository:
         if granularity not in GRANULARITIES:
             raise ValueError(f"未対応の集計単位です: {granularity}")
         all_rows = self._read_rows()
-        source_rows = (
-            self._read_rows(tag_entry_id=selected.tag_entry_id)
-            if selected.tag_entry_id is not None
-            else all_rows
-        )
-        filtered_rows = tuple(row for row in source_rows if _matches(row, selected))
+        filtered_rows = self.rows(selected)
         return StatisticsDashboard(
             overall=_metric(all_rows),
             filtered=_metric(filtered_rows),
@@ -161,6 +160,13 @@ class DuelStatisticsRepository:
             filters=selected,
             granularity=granularity,
         )
+
+    def rows(
+        self, filters: StatisticsFilter | None = None
+    ) -> tuple[StatisticsRow, ...]:
+        selected = filters or StatisticsFilter()
+        source_rows = self._read_rows(tag_entry_id=selected.tag_entry_id)
+        return tuple(row for row in source_rows if _matches(row, selected))
 
     def _read_rows(
         self, *, tag_entry_id: int | None = None
@@ -187,6 +193,7 @@ class DuelStatisticsRepository:
                     duel.coin_face,
                     duel.coin_toss_outcome,
                     duel.own_deck,
+                    duel.own_deck_id,
                     duel.season_id
                 FROM duel_records AS duel
                 LEFT JOIN recordings AS recording
@@ -215,6 +222,7 @@ class DuelStatisticsRepository:
                 coin_face=str(row["coin_face"]),
                 coin_toss_outcome=str(row["coin_toss_outcome"]),
                 own_deck=str(row["own_deck"]),
+                own_deck_id=row["own_deck_id"],
                 season_id=row["season_id"],
             )
             for row in rows
@@ -222,7 +230,7 @@ class DuelStatisticsRepository:
 
 
 def _matches(row: _StatisticsRow, filters: StatisticsFilter) -> bool:
-    local_date = row.occurred_at.astimezone().date()
+    local_date = statistics_local_date(row.occurred_at)
     if filters.date_from is not None and local_date < filters.date_from:
         return False
     if filters.date_to is not None and local_date > filters.date_to:
@@ -346,7 +354,7 @@ def _trend(
 ) -> tuple[StatisticsTrendPoint, ...]:
     if not rows and filters.date_from is None and filters.date_to is None:
         return ()
-    row_dates = tuple(row.occurred_at.astimezone().date() for row in rows)
+    row_dates = tuple(statistics_local_date(row.occurred_at) for row in rows)
     start = filters.date_from or (min(row_dates) if row_dates else filters.date_to)
     end = filters.date_to or (max(row_dates) if row_dates else filters.date_from)
     if start is None or end is None:
@@ -355,7 +363,7 @@ def _trend(
     last = _period_start(end, granularity)
     grouped: dict[date, list[_StatisticsRow]] = defaultdict(list)
     for row in rows:
-        grouped[_period_start(row.occurred_at.astimezone().date(), granularity)].append(
+        grouped[_period_start(statistics_local_date(row.occurred_at), granularity)].append(
             row
         )
     points: list[StatisticsTrendPoint] = []
@@ -401,6 +409,12 @@ def _parse_datetime(value: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def statistics_local_date(value: datetime, zone: tzinfo | None = None) -> date:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("統計日時にはタイムゾーンが必要です")
+    return value.astimezone(zone).date()
 
 
 def _normalized(value: str) -> str:

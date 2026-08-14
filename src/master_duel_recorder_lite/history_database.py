@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -552,6 +552,22 @@ def _migrate_to_v11(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v12(connection: sqlite3.Connection) -> None:
+    for column in (
+        "report_goal",
+        "report_highlights",
+        "report_challenges",
+        "report_next_plan",
+    ):
+        connection.execute(
+            f"ALTER TABLE seasons ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+        )
+    connection.execute(
+        "ALTER TABLE seasons ADD COLUMN report_revision INTEGER NOT NULL DEFAULT 0 "
+        "CHECK (report_revision >= 0)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -564,6 +580,7 @@ _MIGRATIONS: dict[int, Migration] = {
     9: _migrate_to_v9,
     10: _migrate_to_v10,
     11: _migrate_to_v11,
+    12: _migrate_to_v12,
 }
 
 
@@ -868,6 +885,11 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "end_date",
         "description",
         "report_notes",
+        "report_goal",
+        "report_highlights",
+        "report_challenges",
+        "report_next_plan",
+        "report_revision",
         "is_archived",
     }.issubset(season_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のseasonsスキーマがありません")

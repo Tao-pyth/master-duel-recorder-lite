@@ -43,7 +43,14 @@ LEGACY_DEFAULTS = {
     "duel_records": {
         "coin_face": "unknown",
         "coin_toss_outcome": "unknown",
-    }
+    },
+    "seasons": {
+        "report_goal": "",
+        "report_highlights": "",
+        "report_challenges": "",
+        "report_next_plan": "",
+        "report_revision": 0,
+    },
 }
 
 
