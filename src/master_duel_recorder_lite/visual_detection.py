@@ -259,6 +259,7 @@ class MasterDuelUiCueExtractor:
         board = _region_features(image, 0.18, 0.08, 0.82, 0.88)
         central_banner = _region_features(image, 0.12, 0.34, 0.88, 0.63)
         result_span = _white_span(image, 0.12, 0.34, 0.88, 0.61)
+        lower_result_span = _white_span(image, 0.20, 0.48, 0.80, 0.72)
         replay_controls = _region_features(image, 0.69, 0.88, 0.84, 1.00)
         replay_span = _white_span(image, 0.69, 0.88, 0.84, 1.00)
         loading_span = _white_span(image, 0.72, 0.78, 1.00, 1.00)
@@ -323,6 +324,12 @@ class MasterDuelUiCueExtractor:
             * _inverse_scaled(abs(result_span.center_x - 0.5), 0.18, 0.08)
         )
         result_score = max(result_score, flash_victory)
+        lower_loss_score = (
+            _ultrawide_lower_loss_score(lower_result_span)
+            if image.profile_name == ULTRAWIDE_PROFILE.name
+            else 0.0
+        )
+        result_score = max(result_score, lower_loss_score)
         if board_score >= 0.35:
             result_score = 0.0
         outcome = "unknown"
@@ -519,7 +526,14 @@ class TurnChangeDetector:
 class DuelResultDetector:
     def detect(self, cues: FrameCues, elapsed_ms: int) -> DetectionCandidate | None:
         return _cue_candidate(
-            "duel_result", elapsed_ms, cues.result_score, cues, outcome=cues.outcome
+            "duel_result",
+            elapsed_ms,
+            cues.result_score,
+            cues,
+            outcome=cues.outcome,
+            evidence=(
+                "result-near-board" if cues.board_score >= 0.30 else "result-clean"
+            ),
         )
 
 
@@ -773,6 +787,11 @@ class TemporalEventConsensus:
     def _policy_for(self, candidate: DetectionCandidate) -> tuple[int, int]:
         if (
             candidate.event_type == "duel_result"
+            and candidate.evidence == "result-near-board"
+        ):
+            return 4, 5
+        if (
+            candidate.event_type == "duel_result"
             and candidate.confidence >= self._SINGLE_FRAME_RESULT_CONFIDENCE
             and candidate.outcome in {"win", "loss", "draw"}
         ):
@@ -1021,4 +1040,14 @@ def _white_span(
         ratio=(max(occupied) - min(occupied) + step_x) / roi_width,
         pixel_ratio=white / total,
         center_x=((min(occupied) + max(occupied)) / 2 - x0) / roi_width,
+    )
+
+
+def _ultrawide_lower_loss_score(span: WhiteSpan) -> float:
+    return min(
+        _scaled(span.pixel_ratio, 0.055, 0.085),
+        _inverse_scaled(span.pixel_ratio, 0.130, 0.115),
+        _scaled(span.ratio, 0.28, 0.36),
+        _inverse_scaled(span.ratio, 0.55, 0.48),
+        _inverse_scaled(abs(span.center_x - 0.5), 0.10, 0.05),
     )

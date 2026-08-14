@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from master_duel_recorder_lite.frame_capture import FrameSample
 from master_duel_recorder_lite.visual_detection import (
+    _ultrawide_lower_loss_score,
     DetectionCandidate,
     DuelConfirmationDetector,
     DuelResultDetector,
@@ -16,6 +17,7 @@ from master_duel_recorder_lite.visual_detection import (
     MasterDuelUiStateMachine,
     TemporalEventConsensus,
     TurnChangeDetector,
+    WhiteSpan,
     detect_display_profile,
     normalize_bmp,
 )
@@ -116,6 +118,67 @@ class BmpNormalizationTest(unittest.TestCase):
 
 
 class VisualDetectorTest(unittest.TestCase):
+    def test_ultrawide_lower_loss_score_rejects_dense_attack_effect(self) -> None:
+        actual_loss = WhiteSpan(ratio=0.38, pixel_ratio=0.088, center_x=0.484)
+        dense_attack = WhiteSpan(ratio=0.41, pixel_ratio=0.153, center_x=0.503)
+        fading_attack = WhiteSpan(ratio=0.41, pixel_ratio=0.121, center_x=0.503)
+
+        self.assertGreaterEqual(_ultrawide_lower_loss_score(actual_loss), 0.95)
+        self.assertEqual(_ultrawide_lower_loss_score(dense_attack), 0.0)
+        self.assertLess(_ultrawide_lower_loss_score(fading_attack), 0.70)
+
+    def test_result_near_board_requires_four_of_five_frames(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (1000, 1500, 2000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="second"),)
+            )
+
+        for elapsed_ms in (20_000, 20_500):
+            self.assertEqual(
+                consensus.process(
+                    (
+                        candidate(
+                            "duel_result",
+                            elapsed_ms,
+                            1.0,
+                            outcome="loss",
+                            evidence="result-near-board",
+                        ),
+                    )
+                ),
+                (),
+            )
+        self.assertEqual(consensus.process(()), ())
+        for elapsed_ms in (30_000, 30_500, 31_000):
+            self.assertEqual(
+                consensus.process(
+                    (
+                        candidate(
+                            "duel_result",
+                            elapsed_ms,
+                            1.0,
+                            outcome="loss",
+                            evidence="result-near-board",
+                        ),
+                    )
+                ),
+                (),
+            )
+        emitted = consensus.process(
+            (
+                candidate(
+                    "duel_result",
+                    31_500,
+                    1.0,
+                    outcome="loss",
+                    evidence="result-near-board",
+                ),
+            )
+        )
+
+        self.assertEqual([item.event_type for item in emitted], ["duel_result"])
+
     def test_state_machine_tracks_overlay_recovery_error_and_replay(self) -> None:
         machine = MasterDuelUiStateMachine()
 
