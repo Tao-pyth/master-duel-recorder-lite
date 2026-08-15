@@ -1,5 +1,19 @@
 # リリースノート
 
+## V0.26.1: クリーンアンインストール - 2026-08-16
+
+- 設定、SQLite DB、戦績、録画、ログ、キュー、バックアップ、エクスポート、導入済みFFmpegを含む現在の実行時ルートを一括削除する機能を追加した
+- 設定画面の管理データタブへ、削除対象パス、件数、容量、不可逆警告、確認語、最終確認を持つアンインストール画面を追加した
+- `uninstall --yes --confirm アンインストール` CLIと、配布EXE自身も削除する`--remove-executable`を追加した
+- 録画・自動監視・他処理中の実行を拒否し、ドライブ、ホーム、LocalAppData、不明な任意ルートの削除を拒否するようにした
+- シンボリックリンクやジャンクションの参照先をたどらず、アプリの保存領域外へ削除を広げないようにした
+- Windows one-file版は一時コピーした終了後クリーナーで使用領域と元EXEを削除し、クリーナー自身を次回再起動時の削除対象へ登録するようにした
+- Ruff、全463テスト、CLI/GUI one-file EXEビルド、両スモーク、隔離した配布CLIによる実データ領域・起動EXE削除E2Eを通過した
+- ローカルCLI EXE SHA-256: `39E24BE3F0E10F003C7A748D9DF0E89337057AC51AA0C2CC5738CBEC740BB674`
+- ローカルGUI EXE SHA-256: `0B420F4095B969869EAAE47712A00EC35FF040C1ED1A2BFB790A42005FEF2D8C`
+
+追跡: [V0.26.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/50)、Issue #369 - #373
+
 ## V0.26.0: 単体音声・戦績CSV移行 - 2026-08-16
 
 - Windows Process Loopbackを使い、Master DuelのPIDと子プロセスだけを対象とするx64ネイティブ音声ヘルパーを追加した

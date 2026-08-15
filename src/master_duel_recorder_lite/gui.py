@@ -53,6 +53,13 @@ from .operation_state import OperationAction
 from .recording_browsing import RecordingReference
 from .recording_session import RecordingState
 from .season_reports import SeasonReport
+from .uninstall import (
+    CONFIRMATION_TEXT,
+    UninstallPlan,
+    create_uninstall_plan,
+    launch_cleanup_worker,
+    run_cleanup_manifest,
+)
 
 
 T = TypeVar("T")
@@ -556,6 +563,13 @@ class RecorderGui:
         )
         style.map(
             "Record.TButton",
+            background=[("active", "#8f1f19"), ("disabled", "#c6a09d")],
+        )
+        style.configure(
+            "Danger.TButton", foreground="#ffffff", background=self.COLORS["red"]
+        )
+        style.map(
+            "Danger.TButton",
             background=[("active", "#8f1f19"), ("disabled", "#c6a09d")],
         )
         style.configure(
@@ -1898,6 +1912,26 @@ class RecorderGui:
         self.data_backup_tree.pack(fill="x", pady=(10, 0))
         self.widgets["data_protection_status"] = self.data_protection_status_var
         self.widgets["data_backup_table"] = self.data_backup_tree
+        ttk.Separator(data_panel, orient="horizontal").pack(fill="x", pady=(22, 18))
+        uninstall_header = ttk.Frame(data_panel, style="Surface.TFrame")
+        uninstall_header.pack(fill="x")
+        uninstall_copy = ttk.Frame(uninstall_header, style="Surface.TFrame")
+        uninstall_copy.pack(side="left", fill="x", expand=True)
+        ttk.Label(
+            uninstall_copy, text="クリーンアンインストール", style="Heading.TLabel"
+        ).pack(anchor="w")
+        ttk.Label(
+            uninstall_copy,
+            text="設定、戦績、録画、ログ、導入済みFFmpegを含む使用領域を削除します。",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(4, 0))
+        self.uninstall_button = ttk.Button(
+            uninstall_header,
+            text="アンインストール",
+            command=self.prepare_clean_uninstall,
+        )
+        self.uninstall_button.pack(side="right", padx=(12, 0))
+        self.widgets["clean_uninstall"] = self.uninstall_button
         csv_panel = self._surface(notebook, padding=(20, 18))
         notebook.add(csv_panel, text="CSV入出力")
         ttk.Label(csv_panel, text="戦績CSV入出力", style="Heading.TLabel").pack(
@@ -5489,6 +5523,140 @@ class RecorderGui:
             error_callback=lambda _error: self._destroy(),
         )
 
+    def prepare_clean_uninstall(self) -> None:
+        if self.busy_operations > 0:
+            self._show_error(ValueError("処理中はアンインストールできません"))
+            return
+        if not self.service.operation_snapshot().allows(OperationAction.MANAGE_DATA):
+            self._show_error(
+                ValueError("録画または自動監視を停止してから実行してください")
+            )
+            return
+        self._run(
+            lambda: create_uninstall_plan(self.service.paths),
+            self._show_clean_uninstall_dialog,
+        )
+
+    def _show_clean_uninstall_dialog(self, initial: UninstallPlan) -> None:
+        if self.smoke_mode:
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("クリーンアンインストール")
+        dialog.geometry("650x500")
+        dialog.minsize(600, 460)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text="Master Duel Recorder Liteの使用領域を削除",
+            style="Heading.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            frame,
+            text=(
+                "設定、SQLite DB、戦績、録画、ログ、キュー、バックアップ、"
+                "エクスポート、アプリから導入したFFmpegを完全に削除します。"
+            ),
+            style="Body.TLabel",
+            justify="left",
+            wraplength=590,
+        ).pack(anchor="w", pady=(10, 14))
+        details = ttk.Frame(frame, style="Container.TFrame", padding=14)
+        details.pack(fill="x")
+        ttk.Label(
+            details,
+            text=(
+                f"保存領域: {initial.runtime_root}\n"
+                f"ファイル: {initial.file_count}件\n"
+                f"フォルダ: {initial.directory_count}件\n"
+                f"合計サイズ: {_format_bytes(initial.total_bytes)}"
+            ),
+            style="Body.TLabel",
+            justify="left",
+            wraplength=550,
+        ).pack(anchor="w")
+        remove_executable_var = tk.BooleanVar(
+            value=bool(getattr(sys, "frozen", False))
+        )
+        executable_check = ttk.Checkbutton(
+            frame,
+            text="この起動EXEも終了後に削除する",
+            variable=remove_executable_var,
+        )
+        executable_check.pack(anchor="w", pady=(16, 0))
+        if not bool(getattr(sys, "frozen", False)):
+            executable_check.configure(state="disabled")
+        ttk.Label(
+            frame,
+            text=(
+                "外部に導入したFFmpeg、別フォルダへ移動した動画、旧版の別保存領域は"
+                "削除しません。必要なデータは先に書き出してください。"
+            ),
+            style="Muted.TLabel",
+            justify="left",
+            wraplength=590,
+        ).pack(anchor="w", pady=(12, 14))
+        ttk.Label(
+            frame,
+            text=f"続行するには「{CONFIRMATION_TEXT}」と入力してください。",
+            style="Body.TLabel",
+        ).pack(anchor="w")
+        confirmation_var = tk.StringVar()
+        confirmation = ttk.Entry(frame, textvariable=confirmation_var)
+        confirmation.pack(fill="x", pady=(6, 0))
+        actions = ttk.Frame(frame)
+        actions.pack(side="bottom", fill="x", pady=(18, 0))
+        uninstall_button = ttk.Button(
+            actions,
+            text="すべて削除して終了",
+            state="disabled",
+            style="Danger.TButton",
+        )
+        uninstall_button.pack(side="right")
+        ttk.Button(actions, text="キャンセル", command=dialog.destroy).pack(
+            side="right", padx=(0, 8)
+        )
+
+        def validate_confirmation(*_args: object) -> None:
+            uninstall_button.configure(
+                state=(
+                    "normal"
+                    if confirmation_var.get() == CONFIRMATION_TEXT
+                    else "disabled"
+                )
+            )
+
+        def uninstall() -> None:
+            if not messagebox.askyesno(
+                "最終確認",
+                "表示した使用領域を完全に削除します。元に戻せません。続行しますか？",
+                parent=dialog,
+            ):
+                return
+            try:
+                plan = create_uninstall_plan(
+                    self.service.paths,
+                    remove_executable=remove_executable_var.get(),
+                )
+                launch_cleanup_worker(plan, module="master_duel_recorder_lite.gui")
+            except Exception as exc:
+                self._show_error(exc)
+                return
+            dialog.destroy()
+            self.closing = True
+            self.busy_label.configure(text="アンインストール準備中")
+            self.tasks.submit(
+                self.service.close,
+                callback=lambda _value: self._destroy(),
+                error_callback=lambda _error: self._destroy(),
+            )
+
+        confirmation_var.trace_add("write", validate_confirmation)
+        uninstall_button.configure(command=uninstall)
+        confirmation.focus_set()
+
     def _destroy(self) -> None:
         self.tasks.close()
         self.root.destroy()
@@ -5806,11 +5974,16 @@ def build_gui_parser() -> argparse.ArgumentParser:
     parser.add_argument("--user-data-dir", type=Path, default=None)
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--smoke-output", type=Path, default=None)
+    parser.add_argument(
+        "--cleanup-manifest", type=Path, default=None, help=argparse.SUPPRESS
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_gui_parser().parse_args(argv)
+    if args.cleanup_manifest is not None:
+        return run_cleanup_manifest(args.cleanup_manifest)
     root = tk.Tk()
     service = RecorderApplicationService(
         project_root=args.project_root,

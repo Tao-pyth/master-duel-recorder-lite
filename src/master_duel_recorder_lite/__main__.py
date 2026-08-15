@@ -84,6 +84,13 @@ from .upload_queue import (
     UploadQueueState,
     UploadQueueStore,
 )
+from .uninstall import (
+    CONFIRMATION_TEXT,
+    UninstallError,
+    create_uninstall_plan,
+    launch_cleanup_worker,
+    run_cleanup_manifest,
+)
 
 
 EXIT_SUCCESS = 0
@@ -166,6 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+    parser.add_argument(
+        "--cleanup-manifest", type=Path, default=None, help=argparse.SUPPRESS
     )
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser(
@@ -406,6 +416,29 @@ def build_parser() -> argparse.ArgumentParser:
         "cancel", help="待機中の準備処理を取消します。"
     )
     prepare_cancel.add_argument("queue_id")
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="現在の使用領域をすべて削除します。",
+        description=(
+            "設定、DB、録画、ログ、キュー、バックアップ、導入済みFFmpegを含む"
+            "現在の実行時データを終了後に削除します。"
+        ),
+        epilog=(
+            "確認: mdrl uninstall --yes --confirm アンインストール\n"
+            "PyInstaller版では--remove-executableで起動EXEも削除します。"
+        ),
+    )
+    uninstall_parser.add_argument(
+        "--yes", action="store_true", help="不可逆な全削除を承認します。"
+    )
+    uninstall_parser.add_argument(
+        "--confirm", default="", metavar="TEXT", help="確認語を入力します。"
+    )
+    uninstall_parser.add_argument(
+        "--remove-executable",
+        action="store_true",
+        help="PyInstaller版の起動EXEも終了後に削除します。",
+    )
     return parser
 
 
@@ -413,6 +446,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     configure_standard_streams()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.cleanup_manifest is not None:
+        return run_cleanup_manifest(args.cleanup_manifest)
     paths = default_runtime_paths(
         project_root=args.project_root, user_data_dir=args.user_data_dir
     )
@@ -543,6 +578,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             project_root=args.project_root,
             user_data_dir=args.user_data_dir,
         )
+
+    if args.command == "uninstall":
+        try:
+            plan = create_uninstall_plan(
+                paths, remove_executable=args.remove_executable
+            )
+        except UninstallError as exc:
+            _print_cli_error(
+                "E_UNINSTALL_PLAN", str(exc), "保存先設定を確認してください。"
+            )
+            return EXIT_CONFIGURATION
+        print(f"削除対象: {plan.runtime_root}")
+        print(f"ファイル: {plan.file_count} / フォルダ: {plan.directory_count}")
+        print(f"合計サイズ: {plan.total_bytes} bytes")
+        print(f"起動EXEを削除: {'はい' if plan.remove_executable else 'いいえ'}")
+        if not args.yes or args.confirm != CONFIRMATION_TEXT:
+            _print_cli_error(
+                "E_UNINSTALL_CONFIRMATION",
+                "クリーンアンインストールはまだ開始していません。",
+                "実行する場合は--yes --confirm アンインストールを指定してください。",
+            )
+            return EXIT_ATTENTION
+        launch_cleanup_worker(plan, module="master_duel_recorder_lite")
+        print("終了後クリーナーを開始しました。このプロセスの終了後に削除します。")
+        return EXIT_SUCCESS
 
     if args.init_user_data:
         ensure_runtime_dirs(paths)
