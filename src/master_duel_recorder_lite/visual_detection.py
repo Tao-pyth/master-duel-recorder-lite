@@ -104,6 +104,7 @@ class FrameCues:
     replay_score: float = 0.0
     loading_score: float = 0.0
     profile_name: str = "unknown"
+    result_evidence: str | None = None
 
 
 @dataclass(frozen=True)
@@ -333,7 +334,11 @@ class MasterDuelUiCueExtractor:
         if board_score >= 0.35:
             result_score = 0.0
         outcome = "unknown"
-        if result_score >= 0.5:
+        result_evidence: str | None = None
+        if lower_loss_score >= 0.95 and result_score >= 0.95:
+            outcome = "loss"
+            result_evidence = "ultrawide-lower-loss"
+        elif result_score >= 0.5:
             outcome = "win" if result_span.ratio >= 0.60 else "loss"
 
         turn_shape = _scaled(result_span.ratio, 0.38, 0.46) * _inverse_scaled(
@@ -410,6 +415,7 @@ class MasterDuelUiCueExtractor:
             replay_score=replay_score,
             loading_score=loading_score,
             profile_name=image.profile_name,
+            result_evidence=result_evidence,
         )
 
 
@@ -532,7 +538,8 @@ class DuelResultDetector:
             cues,
             outcome=cues.outcome,
             evidence=(
-                "result-near-board" if cues.board_score >= 0.30 else "result-clean"
+                cues.result_evidence
+                or ("result-near-board" if cues.board_score >= 0.30 else "result-clean")
             ),
         )
 
@@ -788,6 +795,13 @@ class TemporalEventConsensus:
         # Attack and summon effects can briefly form a centered white shape that
         # resembles LOSE. A real loss screen persists; require the stricter
         # window regardless of confidence or board visibility.
+        if (
+            candidate.event_type == "duel_result"
+            and candidate.outcome == "loss"
+            and candidate.evidence == "ultrawide-lower-loss"
+            and candidate.confidence >= self._SINGLE_FRAME_RESULT_CONFIDENCE
+        ):
+            return 1, 1
         if candidate.event_type == "duel_result" and candidate.outcome == "loss":
             return 4, 5
         if (

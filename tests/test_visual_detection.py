@@ -215,6 +215,27 @@ class VisualDetectorTest(unittest.TestCase):
 
         self.assertEqual([item.event_type for item in emitted], ["duel_result"])
 
+    def test_high_confidence_ultrawide_lower_loss_can_emit_once(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (1000, 1500, 2000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="second"),)
+            )
+
+        emitted = consensus.process(
+            (
+                candidate(
+                    "duel_result",
+                    20_000,
+                    1.0,
+                    outcome="loss",
+                    evidence="ultrawide-lower-loss",
+                ),
+            )
+        )
+
+        self.assertEqual([item.event_type for item in emitted], ["duel_result"])
+
     def test_short_loss_shaped_attack_effect_does_not_end_duel(self) -> None:
         consensus = TemporalEventConsensus(assume_started=True)
         for elapsed_ms in (1000, 1500, 2000):

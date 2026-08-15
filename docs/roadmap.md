@@ -680,7 +680,7 @@
 
 実装順: 集計契約 #316、比較・分析 #317 - #320、終了フロー #321、レポートGUI・メモ #322 - #323、HTML出力 #324 - #325、検証・Release #326 - #327。
 
-追跡: [V0.25.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/47)、親Issue #315、子Issue #316 - #327、修正Issue #333 - #336
+追跡: [V0.25.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/47)、親Issue #315、子Issue #316 - #327、修正Issue #333 - #337
 
 完了条件: 統計ページと同じ母集団で比較・分析・推移・メモ・HTML出力を提供し、集計一致、描画、出力検証、Ruff、全テスト、両EXE、Windows CIが成功すること。
 
