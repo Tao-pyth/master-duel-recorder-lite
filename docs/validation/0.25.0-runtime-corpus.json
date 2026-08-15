@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "dataset_id": "v0.25-ultrawide-runtime-regression-2026-08",
+  "captured_at": "2026-08",
+  "ui_language": "ja",
+  "display_profile": "ultrawide-fullscreen",
+  "frame_rate": 2.0,
+  "privacy": "Videos remain local; this manifest contains no file paths or images.",
+  "entries": [
+    {"id": "runtime-15365274", "role": "positive", "size_bytes": 305946053, "sha256": "50b84b7ed4e1bda1e26f3774a2f3db63bba48fad091af448b914aef165ca7d6b"},
+    {"id": "runtime-4cb9f8e8", "role": "positive", "size_bytes": 313879077, "sha256": "1ca55d480bc7b782484aadff459e5004999a09fcb0c95b03ebc86ebc4ea928a8"},
+    {"id": "runtime-b3a1b91b", "role": "positive", "size_bytes": 231601827, "sha256": "e3c62edbc1b6850653fc7edbb3730fda09de04ce65ad90e2aed1db43b4eb473d"},
+    {"id": "runtime-580c0e3b", "role": "positive", "size_bytes": 524693312, "sha256": "a1e8231cc3ccf970660506221775a7f1f57968955f092d392317b3a6f09dfa87"},
+    {"id": "runtime-416310a8", "role": "positive", "size_bytes": 402025712, "sha256": "a0d48d2af0ad161f21d842f0b8187ec9eef004e9072b8403b5021f5aa2883990"},
+    {"id": "runtime-4b942be1", "role": "positive", "size_bytes": 555222867, "sha256": "84cf4bde6ea04862aff818ff8554284a1dc5fc086c923bad721eee1656ee4c96"},
+    {"id": "runtime-f25749c5", "role": "positive", "size_bytes": 270676323, "sha256": "2a5b9a04941203ad1d80bea9f78db0e165b6b4b9bca390c136236e558ea9c74a"},
+    {"id": "runtime-b44b24c2", "role": "positive", "size_bytes": 104914161, "sha256": "cc0f8f44fa562100e236a549071a641565a9e3341ab8f0ad5f0ba0e6c7e3b25d"},
+    {"id": "runtime-3014092d", "role": "positive", "size_bytes": 472667881, "sha256": "14217b9672f35348997cbaec8e055807960752a9ed81ade467197e7d7ce8e3c6"},
+    {"id": "runtime-52510234", "role": "positive", "size_bytes": 77557386, "sha256": "052fe4862ecebf8b1c965df9d85f830dfa3ac8617c86b33f71d429b698f09042"},
+    {"id": "runtime-eac9e4b6", "role": "positive", "size_bytes": 313535562, "sha256": "f531112477210edbb7940e276e920dfc6434bb46f7a18e09e8a7d947fa783261"},
+    {"id": "runtime-bd131c54", "role": "negative-broken", "size_bytes": 4774560, "sha256": "a0e77798a8512a62c63a5e36261dff513ec7e3f04a8c94453b1141eb4a0e5f1b"},
+    {"id": "runtime-a63af082", "role": "negative-broken", "size_bytes": 5092785, "sha256": "1cfb62cd1f573731b6caf7501f84623d75627fdcaa0a615fc2e3f580e5ce9875"},
+    {"id": "runtime-af4b5147", "role": "negative-non-duel", "size_bytes": 126155004, "sha256": "594ae75677dfb9a152286c56aa8ebd353340d4332f0b4211e78a9afeecad0c89"}
+  ]
+}
