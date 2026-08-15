@@ -34,6 +34,7 @@ class VideoDatasetEntry:
     has_audio: bool | None
     events: tuple[EventAnnotation, ...]
     strict_event_types: tuple[str, ...]
+    assume_started: bool = False
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,7 @@ def load_visual_dataset(manifest_path: Path) -> VisualDataset:
                 has_audio=raw.get("has_audio"),
                 events=annotations,
                 strict_event_types=tuple(str(item) for item in raw.get("strict_event_types", [])),
+                assume_started=bool(raw.get("assume_started", False)),
             )
         )
     return VisualDataset(_required_text(payload, "dataset_id"), manifest, tuple(videos))
@@ -207,6 +209,7 @@ def analyze_video(
             consensus=TemporalEventConsensus(
                 source=entry.source,
                 maximum_gap_ms=maximum_gap_ms,
+                assume_started=entry.assume_started,
             )
         )
 

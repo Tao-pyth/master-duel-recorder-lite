@@ -28,6 +28,7 @@ class VisualDatasetTest(unittest.TestCase):
                                 "display_profile": "standard-16:9-window",
                                 "duel_type": "event",
                                 "has_audio": True,
+                                "assume_started": True,
                                 "strict_event_types": ["duel_result"],
                                 "events": [
                                     {
@@ -49,6 +50,7 @@ class VisualDatasetTest(unittest.TestCase):
 
         self.assertEqual(dataset.dataset_id, "test-ja")
         self.assertEqual(dataset.videos[0].source, "replay")
+        self.assertTrue(dataset.videos[0].assume_started)
         self.assertEqual(dataset.videos[0].file, (root / "videos" / "one.mkv").resolve())
         self.assertEqual(dataset.videos[0].events[0].outcome, "win")
 

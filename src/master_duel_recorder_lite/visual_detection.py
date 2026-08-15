@@ -9,7 +9,7 @@ from .frame_capture import FrameSample
 
 
 DETECTOR_ID = "mdrl.master-duel-ui"
-DETECTOR_VERSION = "3"
+DETECTOR_VERSION = "4"
 MAX_NORMALIZED_WIDTH = 640
 MAX_NORMALIZED_HEIGHT = 360
 TIMELINE_EVENT_TYPES = {"duel_start", "turn_change", "duel_result"}
@@ -288,6 +288,12 @@ class MasterDuelUiCueExtractor:
             + 0.20 * phase_score
             + 0.18 * _scaled(board.edge_density, 0.07, 0.20),
         )
+        overlay_score = 0.0
+        if 0.18 <= board_score < 0.70:
+            overlay_score = min(
+                1.0,
+                0.55 * lp_score + 0.45 * _scaled(board.edge_density, 0.06, 0.18),
+            )
 
         actor = "unknown"
         if board_score >= 0.50:
@@ -340,7 +346,11 @@ class MasterDuelUiCueExtractor:
             result_score = 0.0
         outcome = "unknown"
         result_evidence: str | None = None
-        if lower_loss_score >= 0.95 and result_score >= 0.95:
+        if _is_single_frame_ultrawide_loss(
+            lower_loss_score,
+            board_score=board_score,
+            overlay_score=overlay_score,
+        ):
             outcome = "loss"
             result_evidence = "ultrawide-lower-loss"
         elif standard_loss_score >= 0.70 and result_score >= 0.70:
@@ -394,10 +404,6 @@ class MasterDuelUiCueExtractor:
         match_error_score *= _inverse_scaled(error_panel.bright_ratio, 0.030, 0.015)
         if board_score >= 0.50:
             match_error_score *= 0.25
-
-        overlay_score = 0.0
-        if 0.18 <= board_score < 0.70:
-            overlay_score = min(1.0, 0.55 * lp_score + 0.45 * _scaled(board.edge_density, 0.06, 0.18))
 
         detail = (
             f"profile={image.profile_name}, coin={coin_toss_score:.2f}, "
@@ -1078,6 +1084,17 @@ def _ultrawide_lower_loss_score(span: WhiteSpan) -> float:
         _inverse_scaled(span.ratio, 0.55, 0.48),
         _inverse_scaled(abs(span.center_x - 0.5), 0.10, 0.05),
     )
+
+
+def _is_single_frame_ultrawide_loss(
+    loss_score: float,
+    *,
+    board_score: float,
+    overlay_score: float,
+) -> bool:
+    # Summon cut-ins can reproduce the lower LOSE text geometry. A genuine
+    # result keeps less board structure and does not raise the card-overlay cue.
+    return loss_score >= 0.95 and board_score < 0.30 and overlay_score <= 0.50
 
 
 def _standard_center_loss_score(span: WhiteSpan) -> float:

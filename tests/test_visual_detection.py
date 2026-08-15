@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from master_duel_recorder_lite.frame_capture import FrameSample
 from master_duel_recorder_lite.visual_detection import (
+    _is_single_frame_ultrawide_loss,
     _standard_center_loss_score,
     _ultrawide_lower_loss_score,
     DetectionCandidate,
@@ -127,6 +128,22 @@ class VisualDetectorTest(unittest.TestCase):
         self.assertGreaterEqual(_ultrawide_lower_loss_score(actual_loss), 0.95)
         self.assertEqual(_ultrawide_lower_loss_score(dense_attack), 0.0)
         self.assertLess(_ultrawide_lower_loss_score(fading_attack), 0.70)
+
+    def test_single_frame_ultrawide_loss_rejects_summon_cut_in(self) -> None:
+        self.assertTrue(
+            _is_single_frame_ultrawide_loss(
+                1.0,
+                board_score=0.292,
+                overlay_score=0.450,
+            )
+        )
+        self.assertFalse(
+            _is_single_frame_ultrawide_loss(
+                1.0,
+                board_score=0.308,
+                overlay_score=0.554,
+            )
+        )
 
     def test_standard_center_loss_score_accepts_persistent_window_loss(self) -> None:
         actual_loss = WhiteSpan(ratio=0.42, pixel_ratio=0.121, center_x=0.497)
