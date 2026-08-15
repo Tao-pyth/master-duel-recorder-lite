@@ -67,12 +67,16 @@ class FakeProcess:
 
 
 class FakeAuxiliaryAudio:
-    def __init__(self, *, start_error: Exception | None = None, warning: str | None = None) -> None:
+    def __init__(
+        self, *, start_error: Exception | None = None, warning: str | None = None
+    ) -> None:
         self.start_error = start_error
         self.warning = warning
         self.diagnostics = ("event=ready",)
         self.started = False
         self.stopped = False
+        self.stop_requested = False
+        self.capturing_waited = False
 
     def start(self) -> None:
         self.started = True
@@ -82,12 +86,21 @@ class FakeAuxiliaryAudio:
     def poll(self) -> str | None:
         return self.warning
 
+    def wait_until_capturing(self, timeout_seconds: float) -> bool:
+        self.capturing_waited = True
+        return timeout_seconds > 0
+
+    def request_stop(self) -> None:
+        self.stop_requested = True
+
     def stop(self) -> None:
         self.stopped = True
 
 
 class RecordingSessionTest(unittest.TestCase):
-    def test_auxiliary_audio_starts_before_ffmpeg_and_stops_with_recording(self) -> None:
+    def test_auxiliary_audio_starts_before_ffmpeg_and_stops_with_recording(
+        self,
+    ) -> None:
         events: list[str] = []
         auxiliary = FakeAuxiliaryAudio()
         original_start = auxiliary.start
@@ -96,10 +109,29 @@ class RecordingSessionTest(unittest.TestCase):
             events.append("audio")
             original_start()
 
+        original_stop = auxiliary.stop
+        original_request_stop = auxiliary.request_stop
+
+        def request_stop_audio() -> None:
+            events.append("audio-stop-request")
+            original_request_stop()
+
+        def stop_audio() -> None:
+            events.append("audio-stop")
+            original_stop()
+
         auxiliary.start = start_audio  # type: ignore[method-assign]
+        auxiliary.request_stop = request_stop_audio  # type: ignore[method-assign]
+        auxiliary.stop = stop_audio  # type: ignore[method-assign]
         with tempfile.TemporaryDirectory() as tmp_dir:
             output = Path(tmp_dir) / "recording.mkv"
             process = FakeProcess(output_path=output)
+
+            def stop_ffmpeg() -> None:
+                events.append("ffmpeg-stop")
+                process._write_output()
+
+            process.stdin.on_stop = stop_ffmpeg
 
             def process_factory(*_args: object, **_kwargs: object) -> FakeProcess:
                 events.append("ffmpeg")
@@ -115,7 +147,12 @@ class RecordingSessionTest(unittest.TestCase):
             session.start()
             session.stop()
 
-        self.assertEqual(events, ["audio", "ffmpeg"])
+        self.assertEqual(
+            events,
+            ["audio", "ffmpeg", "audio-stop-request", "ffmpeg-stop", "audio-stop"],
+        )
+        self.assertTrue(auxiliary.stop_requested)
+        self.assertTrue(auxiliary.capturing_waited)
         self.assertTrue(auxiliary.stopped)
         self.assertIn("音声: event=ready", session.diagnostics)
 
@@ -125,7 +162,9 @@ class RecordingSessionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             output = Path(tmp_dir) / "recording.mkv"
 
-            def process_factory(command: tuple[str, ...], **_kwargs: object) -> FakeProcess:
+            def process_factory(
+                command: tuple[str, ...], **_kwargs: object
+            ) -> FakeProcess:
                 commands.append(tuple(command))
                 return FakeProcess(output_path=output)
 
@@ -145,7 +184,9 @@ class RecordingSessionTest(unittest.TestCase):
         self.assertIn("映像のみ録画", session.audio_warning or "")
 
     def test_audio_runtime_failure_is_warning_and_video_continues(self) -> None:
-        auxiliary = FakeAuxiliaryAudio(warning="音声が停止しました。映像録画は継続します")
+        auxiliary = FakeAuxiliaryAudio(
+            warning="音声が停止しました。映像録画は継続します"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             output = Path(tmp_dir) / "recording.mkv"
             process = FakeProcess(output_path=output)
@@ -162,6 +203,7 @@ class RecordingSessionTest(unittest.TestCase):
 
         self.assertTrue(result.succeeded)
         self.assertEqual(session.audio_warning, auxiliary.warning)
+
     def test_start_uses_hidden_windows_process_settings(self) -> None:
         captured_kwargs: dict[str, object] = {}
 
@@ -237,7 +279,9 @@ class RecordingSessionTest(unittest.TestCase):
     def test_nonzero_early_exit_captures_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output = Path(tmp_dir) / "recording.mkv"
-            process = FakeProcess(immediate_returncode=1, returncode=1, stderr="入力を開けません\n")
+            process = FakeProcess(
+                immediate_returncode=1, returncode=1, stderr="入力を開けません\n"
+            )
             session = RecordingSession(
                 command=("ffmpeg",),
                 output_path=output,
@@ -254,7 +298,9 @@ class RecordingSessionTest(unittest.TestCase):
     def test_windows_unsigned_exit_code_is_shown_in_three_forms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output = Path(tmp_dir) / "recording.mkv"
-            process = FakeProcess(immediate_returncode=4294967291, returncode=4294967291)
+            process = FakeProcess(
+                immediate_returncode=4294967291, returncode=4294967291
+            )
             session = RecordingSession(
                 command=("ffmpeg",),
                 output_path=output,
@@ -293,7 +339,9 @@ class RecordingSessionTest(unittest.TestCase):
         diagnostics = "".join(f"line-{index}\n" for index in range(150))
         with tempfile.TemporaryDirectory() as tmp_dir:
             output = Path(tmp_dir) / "recording.mkv"
-            process = FakeProcess(immediate_returncode=1, returncode=1, stderr=diagnostics)
+            process = FakeProcess(
+                immediate_returncode=1, returncode=1, stderr=diagnostics
+            )
             session = RecordingSession(
                 command=("ffmpeg",),
                 output_path=output,

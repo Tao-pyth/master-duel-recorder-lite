@@ -24,7 +24,9 @@ def build_recording_command(
     if not output.is_relative_to(root):
         raise RecordingCommandError("出力先はrecordings配下である必要があります")
     if output.suffix.lower() != profile.extension:
-        raise RecordingCommandError(f"出力拡張子は{profile.extension}である必要があります")
+        raise RecordingCommandError(
+            f"出力拡張子は{profile.extension}である必要があります"
+        )
     if output.exists():
         raise RecordingCommandError("既存の録画ファイルは上書きできません")
 
@@ -41,15 +43,25 @@ def build_recording_command(
         "-n",
         "-fflags",
         "+genpts",
-        "-use_wallclock_as_timestamps",
-        "1",
-        "-thread_queue_size",
-        "512",
-        "-f",
-        selected_input.input_format,
-        "-framerate",
-        str(profile.frame_rate),
     ]
+    if profile.audio_mode != "process":
+        command.extend(["-use_wallclock_as_timestamps", "1"])
+    command.extend(
+        [
+            "-thread_queue_size",
+            "512",
+        ]
+    )
+    if profile.audio_mode == "process":
+        command.extend(["-probesize", "32", "-analyzeduration", "0"])
+    command.extend(
+        [
+            "-f",
+            selected_input.input_format,
+            "-framerate",
+            str(profile.frame_rate),
+        ]
+    )
     command.extend(selected_input.options)
     command.extend(["-i", selected_input.input_name])
     if profile.audio_mode == "process":
@@ -58,9 +70,7 @@ def build_recording_command(
         command.extend(
             [
                 "-thread_queue_size",
-                "512",
-                "-use_wallclock_as_timestamps",
-                "1",
+                "4096",
                 "-f",
                 "s16le",
                 "-ar",
@@ -91,16 +101,28 @@ def build_recording_command(
             "0:v:0",
             "-c:v",
             profile.video_encoder,
+        ]
+    )
+    if profile.video_encoder == "libx264":
+        command.extend(["-preset", "ultrafast"])
+    command.extend(
+        [
             "-b:v",
             f"{profile.video_bitrate_kbps}k",
             "-pix_fmt",
             "yuv420p",
         ]
     )
+    video_filters: list[str] = []
     if profile.width is not None and profile.height is not None:
-        command.extend(["-vf", f"scale={profile.width}:{profile.height}"])
+        video_filters.append(f"scale={profile.width}:{profile.height}")
+    else:
+        video_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
+    command.extend(["-vf", ",".join(video_filters)])
 
     if profile.has_audio:
+        resample_filter = "aresample=async=1:first_pts=0"
+        audio_filters = [f"volume={profile.audio_gain_db:g}dB", resample_filter]
         command.extend(
             [
                 "-map",
@@ -112,7 +134,7 @@ def build_recording_command(
                 "-ac",
                 str(profile.audio_channels),
                 "-af",
-                f"volume={profile.audio_gain_db:g}dB,aresample=async=1:first_pts=0",
+                ",".join(audio_filters),
                 "-b:a",
                 f"{profile.audio_bitrate_kbps}k",
             ]
@@ -121,6 +143,8 @@ def build_recording_command(
         command.append("-an")
 
     command.extend(["-max_muxing_queue_size", "1024"])
+    if profile.audio_mode == "process":
+        command.extend(["-max_interleave_delta", "100000"])
     if profile.recording_format == "mp4":
         command.extend(["-movflags", "+faststart"])
     command.append(str(output))

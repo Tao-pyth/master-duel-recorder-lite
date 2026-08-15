@@ -3,7 +3,10 @@ import unittest
 from pathlib import Path
 
 from master_duel_recorder_lite.capture_targets import CaptureInput
-from master_duel_recorder_lite.recording_command import RecordingCommandError, build_recording_command
+from master_duel_recorder_lite.recording_command import (
+    RecordingCommandError,
+    build_recording_command,
+)
 from master_duel_recorder_lite.recording_profile import RecordingProfile
 
 
@@ -22,9 +25,11 @@ class RecordingCommandTest(unittest.TestCase):
 
         self.assertIsInstance(command, tuple)
         self.assertIn("gdigrab", command)
+        self.assertIn("ultrafast", command)
         self.assertIn("desktop", command)
         self.assertIn("-an", command)
         self.assertIn("-n", command)
+        self.assertIn("pad=ceil(iw/2)*2:ceil(ih/2)*2", command)
         self.assertEqual(command[-1], str(output.resolve()))
 
     def test_audio_name_with_spaces_and_japanese_is_one_argument(self) -> None:
@@ -60,6 +65,43 @@ class RecordingCommandTest(unittest.TestCase):
         self.assertIn("48000", command)
         self.assertIn("volume=3.5dB,aresample=async=1:first_pts=0", command)
         self.assertEqual(command.count("-use_wallclock_as_timestamps"), 2)
+
+    def test_process_audio_uses_raw_pcm_timestamps_and_even_video_dimensions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "recordings"
+            root.mkdir()
+            profile = RecordingProfile(audio_mode="process")
+            command = build_recording_command(
+                executable=Path("C:/ffmpeg/bin/ffmpeg.exe"),
+                profile=profile,
+                output_path=root / "duel.mkv",
+                recordings_root=root,
+                process_audio_pipe=r"\\.\pipe\mdrl-test",
+            )
+
+        self.assertNotIn("-use_wallclock_as_timestamps", command)
+        self.assertIn("-probesize", command)
+        self.assertIn("-analyzeduration", command)
+        audio_input = command.index(r"\\.\pipe\mdrl-test")
+        self.assertEqual(
+            command[audio_input - 9 : audio_input],
+            (
+                "-thread_queue_size",
+                "4096",
+                "-f",
+                "s16le",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-i",
+            ),
+        )
+        self.assertIn("pad=ceil(iw/2)*2:ceil(ih/2)*2", command)
+        self.assertIn("volume=0dB,aresample=async=1:first_pts=0", command)
+        self.assertIn("100000", command)
 
     def test_output_outside_recordings_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

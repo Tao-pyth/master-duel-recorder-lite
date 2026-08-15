@@ -302,6 +302,8 @@ int Capture(DWORD process_id, const std::wstring& pipe_name) {
     CloseHandle(process);
     return 6;
   }
+  const ULONGLONG capture_started_at = GetTickCount64();
+  std::uint64_t frames_written = 0;
   Diagnostic(L"capturing");
   int exit_code = 0;
   while (true) {
@@ -314,7 +316,7 @@ int Capture(DWORD process_id, const std::wstring& pipe_name) {
       Diagnostic(L"stopping");
       break;
     }
-    const DWORD wait = WaitForSingleObject(samples_ready, 100);
+    const DWORD wait = WaitForSingleObject(samples_ready, 20);
     if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT) {
       Diagnostic(L"sample_wait_failed", HRESULT_FROM_WIN32(GetLastError()));
       exit_code = 6;
@@ -342,9 +344,30 @@ int Capture(DWORD process_id, const std::wstring& pipe_name) {
         exit_code = 5;
         break;
       }
+      frames_written += frames;
     }
     if (exit_code != 0) {
       break;
+    }
+    const ULONGLONG elapsed_ms = GetTickCount64() - capture_started_at;
+    const std::uint64_t expected_frames =
+        elapsed_ms * static_cast<std::uint64_t>(format.nSamplesPerSec) / 1000;
+    if (expected_frames > frames_written) {
+      const std::uint64_t missing_frames = expected_frames - frames_written;
+      const std::uint64_t missing_bytes =
+          missing_frames * static_cast<std::uint64_t>(format.nBlockAlign);
+      if (missing_bytes > static_cast<std::uint64_t>(MAXDWORD)) {
+        Diagnostic(L"silence_gap_too_large");
+        exit_code = 6;
+        break;
+      }
+      std::vector<BYTE> silence(static_cast<size_t>(missing_bytes), 0);
+      if (!WriteAll(pipe, silence.data(), static_cast<DWORD>(missing_bytes))) {
+        Diagnostic(L"pipe_disconnected");
+        exit_code = 5;
+        break;
+      }
+      frames_written = expected_frames;
     }
   }
 

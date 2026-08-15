@@ -50,6 +50,8 @@ class AuxiliaryAudioProcess(Protocol):
 
     def start(self) -> None: ...
     def poll(self) -> str | None: ...
+    def wait_until_capturing(self, timeout_seconds: float) -> bool: ...
+    def request_stop(self) -> None: ...
     def stop(self) -> None: ...
 
 
@@ -155,7 +157,9 @@ class RecordingSession:
 
     def start(self) -> RecordingState:
         if self.state is not RecordingState.CREATED:
-            raise RecordingStateError(f"録画はcreated状態からだけ開始できます: {self.state.value}")
+            raise RecordingStateError(
+                f"録画はcreated状態からだけ開始できます: {self.state.value}"
+            )
         self.state = RecordingState.STARTING
         self._started_at = self._clock()
 
@@ -212,6 +216,15 @@ class RecordingSession:
                 break
             time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
 
+        if self._auxiliary_audio is not None:
+            try:
+                if not self._auxiliary_audio.wait_until_capturing(5.0):
+                    self._append_diagnostic(
+                        "Master Duel単体音声の取得開始を5秒以内に確認できませんでした"
+                    )
+            except Exception as exc:
+                self._append_diagnostic(f"音声取得の開始確認に失敗しました: {exc}")
+
         self.state = RecordingState.RECORDING
         self._last_output_size = self._output_size()
         self._last_output_growth_at = self._monotonic_clock()
@@ -242,6 +255,7 @@ class RecordingSession:
             raise RecordingStateError("開始していない録画は停止できません")
 
         self.state = RecordingState.STOPPING
+        self._request_auxiliary_audio_stop()
         try:
             if self._process.stdin is None:
                 raise OSError("FFmpegの標準入力を利用できません")
@@ -261,7 +275,10 @@ class RecordingSession:
                 returncode = self._process.wait(timeout=5.0)
             except (subprocess.TimeoutExpired, OSError, ValueError):
                 returncode = None
-            self._fail("正常停止がタイムアウトしたためFFmpegを強制終了しました", returncode=returncode)
+            self._fail(
+                "正常停止がタイムアウトしたためFFmpegを強制終了しました",
+                returncode=returncode,
+            )
             assert self._result is not None
             return self._result
         except (OSError, ValueError) as exc:
@@ -293,7 +310,9 @@ class RecordingSession:
             except (OSError, ValueError) as exc:
                 self._append_diagnostic(f"FFmpeg診断出力を読み取れません: {exc}")
 
-        self._stderr_thread = threading.Thread(target=read_stderr, name="mdrl-ffmpeg-stderr", daemon=True)
+        self._stderr_thread = threading.Thread(
+            target=read_stderr, name="mdrl-ffmpeg-stderr", daemon=True
+        )
         self._stderr_thread.start()
 
     def _append_diagnostic(self, line: str) -> None:
@@ -327,20 +346,31 @@ class RecordingSession:
             returncode = self._process.wait(timeout=5.0)
         except (OSError, ValueError, subprocess.TimeoutExpired):
             returncode = None
-        self._fail("FFmpegの出力が停止したため録画を終了しました", returncode=returncode)
+        self._fail(
+            "FFmpegの出力が停止したため録画を終了しました", returncode=returncode
+        )
 
     def _finalize(self, returncode: int, *, early_exit: bool) -> None:
         self._stop_auxiliary_audio()
         self._join_stderr_reader()
         self._close_process_streams()
-        size_bytes = self.output_path.stat().st_size if self.output_path.is_file() else 0
+        size_bytes = (
+            self.output_path.stat().st_size if self.output_path.is_file() else 0
+        )
         if returncode != 0:
             suffix = f": {self.diagnostics[-1]}" if self.diagnostics else ""
             described = describe_process_returncode(returncode)
-            self._fail(f"FFmpegが終了コード{described}で失敗しました{suffix}", returncode=returncode)
+            self._fail(
+                f"FFmpegが終了コード{described}で失敗しました{suffix}",
+                returncode=returncode,
+            )
             return
         if size_bytes <= 0:
-            reason = "録画開始直後にFFmpegが終了し、出力ファイルを確定できませんでした" if early_exit else "録画出力が存在しないか空です"
+            reason = (
+                "録画開始直後にFFmpegが終了し、出力ファイルを確定できませんでした"
+                if early_exit
+                else "録画出力が存在しないか空です"
+            )
             self._fail(reason, returncode=returncode)
             return
         self.state = RecordingState.COMPLETED
@@ -360,7 +390,9 @@ class RecordingSession:
         self._join_stderr_reader()
         self._close_process_streams()
         self.state = RecordingState.FAILED
-        size_bytes = self.output_path.stat().st_size if self.output_path.is_file() else 0
+        size_bytes = (
+            self.output_path.stat().st_size if self.output_path.is_file() else 0
+        )
         self._result = RecordingResult(
             state=self.state,
             output_path=self.output_path,
@@ -410,3 +442,12 @@ class RecordingSession:
         for line in auxiliary.diagnostics:
             self._append_diagnostic(f"音声: {line}")
         self._auxiliary_audio = None
+
+    def _request_auxiliary_audio_stop(self) -> None:
+        auxiliary = self._auxiliary_audio
+        if auxiliary is None:
+            return
+        try:
+            auxiliary.request_stop()
+        except Exception as exc:
+            self._append_diagnostic(f"音声ヘルパーへ停止要求を送信できません: {exc}")

@@ -15,10 +15,12 @@
 - 設定画面へ独立した「CSV入出力」タブを追加し、出力、取込、サンプル保存、件数確認、行別エラー表示を提供した
 - Ruff、全453テスト、ネイティブx64ビルド・probe、CLI/GUI one-file EXEビルドと両隔離スモークを通過した
 - Windows Media Player PIDを使うProcess Loopback実機PoCで5秒・48kHz・2chの有音取得を確認した
-- ローカルCLI EXE SHA-256: `92286F0BCFAEF4AEE76D25489AC1CB3C3D94D1A6F0FDB555664242682171CE65`
-- ローカルGUI EXE SHA-256: `1F2DD2C4E5BDC6CACE66E8C34BE30F5CE195C60568C8F71B5519A12012FAAFC4`
+- 無音PCM補完、Process入力キュー、停止順序、libx264 ultrafastを追加し、30分録画で映像1800.866秒、音声1800.429秒、累積ドリフトなしを確認した
+- 奇数幅のデスクトップ入力を最大1px補完し、libx264が扱える偶数寸法で保存するようにした
+- ローカルCLI EXE SHA-256: `EF76D5C475DB76F4558BCEFBF4DECE22DEF1840A3B1329060B2B4B521B43215D`
+- ローカルGUI EXE SHA-256: `EBA78002CC38BE470B55574B744C5E3CD5DC1301CBCC494E26C26551A8FBF97E`
 
-追跡: [V0.26.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/49)、Issue #340 - #365
+追跡: [V0.26.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/49)、Issue #340 - #365、#368
 
 ## V0.25.0: シーズンレポート - 2026-08-16
 

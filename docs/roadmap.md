@@ -686,7 +686,7 @@
 
 ## V0.26.0: 単体音声・戦績CSV移行
 
-状態: 実装中、ローカル自動検証済み、実機音声E2E・公開検証待ち
+状態: 実装・ローカル実機検証済み、最終配布・公開検証待ち
 
 - Windows Process LoopbackでMaster Duelと子プロセスの音声だけを48kHz stereo PCMとして取得する
 - 映像対象と音声対象を分離し、デスクトップ映像とMaster Duel単体音声を組み合わせられるようにする
@@ -701,7 +701,7 @@
 
 実装順: 音声契約 #341、PoC・ヘルパー #342 - #345、設定・GUI・事前待機 #346 - #349、配布・検証 #350 - #353、CSV契約・DB #355 - #356、出力・解析・適用 #357 - #362、GUI・検証 #363 - #365。
 
-追跡: [V0.26.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/49)、親Issue #340・#354、子Issue #341 - #353・#355 - #365
+追跡: [V0.26.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/49)、親Issue #340・#354、子Issue #341 - #353・#355 - #365、修正Issue #368
 
 完了条件: Master Duel以外の音を混入させない実機音声録画、手動・自動・デスクトップ映像の組み合わせ、30分A/V同期、CSV往復・ロールバック、Ruff、全テスト、両EXE、Windows CI、公開SHA-256が成功すること。
 

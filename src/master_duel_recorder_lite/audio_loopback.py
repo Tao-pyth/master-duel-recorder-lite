@@ -58,7 +58,10 @@ def process_loopback_capability(
             False, build, None, f"音声ヘルパーが見つかりません: {helper}"
         )
     return ProcessLoopbackCapability(
-        True, build, helper, f"Master Duel単体音声を利用できます（Windows build {build}）"
+        True,
+        build,
+        helper,
+        f"Master Duel単体音声を利用できます（Windows build {build}）",
     )
 
 
@@ -94,6 +97,7 @@ class ProcessLoopbackController:
         self.startup_timeout_seconds = startup_timeout_seconds
         self._process: HelperProcess | None = None
         self._ready = threading.Event()
+        self._capturing = threading.Event()
         self._diagnostics: deque[str] = deque(maxlen=100)
         self._reader: threading.Thread | None = None
         self._warning: str | None = None
@@ -112,7 +116,9 @@ class ProcessLoopbackController:
                 return
             raise ProcessLoopbackError("音声ヘルパーはすでに終了しています")
         if not self.helper_path.is_file():
-            raise ProcessLoopbackError(f"音声ヘルパーが見つかりません: {self.helper_path}")
+            raise ProcessLoopbackError(
+                f"音声ヘルパーが見つかりません: {self.helper_path}"
+            )
         configure_windows_process_errors()
         try:
             self._process = subprocess.Popen(
@@ -145,7 +151,9 @@ class ProcessLoopbackController:
                 )
             if time.monotonic() >= deadline:
                 self.stop()
-                raise ProcessLoopbackError("音声ヘルパーの初期化が10秒で完了しませんでした")
+                raise ProcessLoopbackError(
+                    "音声ヘルパーの初期化が10秒で完了しませんでした"
+                )
 
     def poll(self) -> str | None:
         if self._process is None:
@@ -158,15 +166,28 @@ class ProcessLoopbackController:
             )
         return self._warning
 
+    def wait_until_capturing(self, timeout_seconds: float) -> bool:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_secondsは0より大きい必要があります")
+        return self._capturing.wait(timeout=timeout_seconds)
+
+    def request_stop(self) -> None:
+        process = self._process
+        if process is None or process.poll() is not None or process.stdin is None:
+            return
+        try:
+            process.stdin.write("q\n")
+            process.stdin.flush()
+        except (OSError, ValueError):
+            pass
+
     def stop(self) -> None:
         process = self._process
         if process is None:
             return
         if process.poll() is None:
             try:
-                if process.stdin is not None:
-                    process.stdin.write("q\n")
-                    process.stdin.flush()
+                self.request_stop()
                 process.wait(timeout=3.0)
             except (OSError, ValueError, subprocess.TimeoutExpired):
                 try:
@@ -198,6 +219,8 @@ class ProcessLoopbackController:
                     self._diagnostics.append(line[:1000])
                     if line.startswith("event=ready"):
                         self._ready.set()
+                    elif line.startswith("event=capturing"):
+                        self._capturing.set()
             except (OSError, ValueError) as exc:
                 self._diagnostics.append(f"音声診断を読み取れません: {exc}")
 
