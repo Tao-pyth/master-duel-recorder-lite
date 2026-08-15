@@ -1,5 +1,17 @@
 # リリースノート
 
+## V1.0.0: 中核機能完成 - 2026-08-16
+
+- V0.2.0からV0.26.2までに実装・検証した録画、閲覧、戦績、タイムライン、統計、シーズン、データ保全、単体音声、CSV移行、アップロード準備、クリーンアンインストールを正式版として確定した
+- V0.26.2で全Issue・Milestone・ロードマップ・検証記録を整合し、空の実行時ルートによる最終E2Eを完了した
+- 2026-08-16に受領したユーザーの明示的なV1.0.0変更指示に基づき、コード、README、Release tooling、ロードマップを1.0.0へ更新した
+- 日本語UIと対応解像度、Process Loopback要件、未署名EXE、YouTube直接アップロード対象外の既知制約を維持した
+- Ruff、全463テスト、実FFmpeg試験2件、CLI/GUI one-file EXEビルド、両スモーク、正式版番号でのクリーン環境E2Eを通過した
+- ローカルCLI EXE SHA-256: `410A7F9BB75FD66A0ECCDB14DAECC7492AC55DF10344DA3AF0EEBE7E63AAA616`
+- ローカルGUI EXE SHA-256: `498EF1572C6DDB6204B1384BD0794FAB4470BA89BA18FC168F202B1E284510D7`
+
+追跡: [V1.0.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/52)、Issue #378 - #380
+
 ## V0.26.2: V1移行準備 - 2026-08-16
 
 - 仕様変更後に残っていたIssue #250へ、V0.25.0で`coin_toss_outcome`を撤去した理由とDB・互換テストの証拠を記録して完了し、V0.20.0 Milestoneを閉じた
