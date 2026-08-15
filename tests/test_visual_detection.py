@@ -179,6 +179,83 @@ class VisualDetectorTest(unittest.TestCase):
 
         self.assertEqual([item.event_type for item in emitted], ["duel_result"])
 
+    def test_loss_requires_four_of_five_frames_even_when_clean_and_high_confidence(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (1000, 1500, 2000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="second"),)
+            )
+
+        for elapsed_ms in (20_000, 20_500, 21_000):
+            self.assertEqual(
+                consensus.process(
+                    (
+                        candidate(
+                            "duel_result",
+                            elapsed_ms,
+                            0.99,
+                            outcome="loss",
+                            evidence="result-clean",
+                        ),
+                    )
+                ),
+                (),
+            )
+        emitted = consensus.process(
+            (
+                candidate(
+                    "duel_result",
+                    21_500,
+                    0.99,
+                    outcome="loss",
+                    evidence="result-clean",
+                ),
+            )
+        )
+
+        self.assertEqual([item.event_type for item in emitted], ["duel_result"])
+
+    def test_short_loss_shaped_attack_effect_does_not_end_duel(self) -> None:
+        consensus = TemporalEventConsensus(assume_started=True)
+        for elapsed_ms in (1000, 1500, 2000):
+            consensus.process(
+                (candidate("duel_confirmed", elapsed_ms, play_order="second"),)
+            )
+
+        self.assertEqual(
+            consensus.process(
+                (
+                    candidate(
+                        "duel_result",
+                        20_000,
+                        0.7661,
+                        outcome="loss",
+                        evidence="result-clean",
+                    ),
+                )
+            ),
+            (),
+        )
+        self.assertEqual(consensus.process(()), ())
+        self.assertEqual(
+            consensus.process(
+                (
+                    candidate(
+                        "duel_result",
+                        21_000,
+                        0.775,
+                        outcome="loss",
+                        evidence="result-clean",
+                    ),
+                )
+            ),
+            (),
+        )
+        self.assertEqual(consensus.process(()), ())
+        self.assertEqual(consensus.process(()), ())
+
+        self.assertFalse(consensus._resulted)
+
     def test_state_machine_tracks_overlay_recovery_error_and_replay(self) -> None:
         machine = MasterDuelUiStateMachine()
 

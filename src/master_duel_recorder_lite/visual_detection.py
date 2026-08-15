@@ -9,7 +9,7 @@ from .frame_capture import FrameSample
 
 
 DETECTOR_ID = "mdrl.master-duel-ui"
-DETECTOR_VERSION = "2"
+DETECTOR_VERSION = "3"
 MAX_NORMALIZED_WIDTH = 640
 MAX_NORMALIZED_HEIGHT = 360
 TIMELINE_EVENT_TYPES = {"duel_start", "turn_change", "duel_result"}
@@ -785,6 +785,11 @@ class TemporalEventConsensus:
         )
 
     def _policy_for(self, candidate: DetectionCandidate) -> tuple[int, int]:
+        # Attack and summon effects can briefly form a centered white shape that
+        # resembles LOSE. A real loss screen persists; require the stricter
+        # window regardless of confidence or board visibility.
+        if candidate.event_type == "duel_result" and candidate.outcome == "loss":
+            return 4, 5
         if (
             candidate.event_type == "duel_result"
             and candidate.evidence == "result-near-board"

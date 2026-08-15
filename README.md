@@ -158,9 +158,9 @@ python -m master_duel_recorder_lite watch
 
 GUIは録画状態を色付きの表示帯で示します。青の「自動監視中 | 録画待機」は動画を保存していない待機状態、黄の「自動監視中 | 録画中（対戦確認中）」は盤面確定前の候補録画、赤の「自動監視中 | 録画中（対戦記録中）」は盤面確定後の本録画です。色だけでなく文言でも録画の有無を判別できます。
 
-GUIは取得元、解像度、表示プロファイル、実効fps、状態、`coin/board/turn/result/error/replay/overlay/loading`スコア、合意数、ストリーム再起動数を表示します。数値診断は`user_data/logs/visual-monitor/`へ1秒1件、1セッション900件、最新10セッション、合計2MiBを上限として原子的に保存します。診断には画像、BMP、ウィンドウタイトル、動画パスを含めません。対応表示は日本語UIの1920x1080ウィンドウと3440x1440フルスクリーンで、ボーダーレスは対象外です。`record`による手動録画は画面判定から独立しています。詳細は[Master Duel向け録画補助設計](docs/architecture/detection.md)と[基本イベント自動判定設計](docs/architecture/visual-event-detection.md)を参照してください。
+GUIは取得元、解像度、表示プロファイル、実効fps、状態、`coin/board/turn/result/error/replay/overlay/loading`スコア、合意数、ストリーム再起動数を表示します。敗北結果は攻撃・召喚演出との混同を避けるため、信頼度や盤面表示にかかわらず直近5フレーム中4件の合意で確定します。数値診断は`user_data/logs/visual-monitor/`へ1秒1件、1セッション900件、最新10セッション、合計2MiBを上限として原子的に保存し、候補イベントの勝敗・先後・根拠も記録します。診断には画像、BMP、ウィンドウタイトル、動画パスを含めません。対応表示は日本語UIの1920x1080ウィンドウと3440x1440フルスクリーンで、ボーダーレスは対象外です。`record`による手動録画は画面判定から独立しています。詳細は[Master Duel向け録画補助設計](docs/architecture/detection.md)と[基本イベント自動判定設計](docs/architecture/visual-event-detection.md)を参照してください。
 
-開発時の実戦連続試験は、試験開始前にPowerShellで`$since = (Get-Date).ToString("o")`を実行し、対戦後に`python scripts/validate_live_monitoring.py --since $since --required-consecutive 3`または`--required-consecutive 10`で集計します。候補開始、盤面確定、結果停止、停止後の監視復帰を1戦単位で判定し、旧バージョンの診断は試験期間へ含めません。
+開発時の実戦連続試験は、試験開始前にPowerShellで`$since = (Get-Date).ToString("o")`を実行し、対戦後に`python scripts/validate_live_monitoring.py --since $since --required-consecutive 3`または`--required-consecutive 10`で集計します。候補開始、盤面確定、結果停止、停止後の監視復帰を1戦単位で判定します。結果停止後から次戦候補開始まで、最大120秒の範囲で盤面スコア0.35以上が3件あれば早期停止疑いとして不合格にし、旧バージョンの診断は試験期間へ含めません。
 
 ## 録画履歴
 

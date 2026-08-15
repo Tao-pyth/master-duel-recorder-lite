@@ -5,7 +5,13 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from master_duel_recorder_lite.visual_detection import FrameAnalysis, MasterDuelState
+from master_duel_recorder_lite.visual_detection import (
+    DETECTOR_ID,
+    DETECTOR_VERSION,
+    DetectionCandidate,
+    FrameAnalysis,
+    MasterDuelState,
+)
 from master_duel_recorder_lite.visual_diagnostics import VisualDiagnosticSession
 
 
@@ -33,7 +39,18 @@ class VisualDiagnosticSessionTest(unittest.TestCase):
                 replay_score=0.0,
                 overlay_score=0.1,
                 loading_score=0.0,
-                candidates=(),
+                candidates=(
+                    DetectionCandidate(
+                        "duel_result",
+                        500,
+                        0.76,
+                        "数値診断",
+                        DETECTOR_ID,
+                        DETECTOR_VERSION,
+                        outcome="loss",
+                        evidence="result-clean",
+                    ),
+                ),
                 agreements=(),
             )
 
@@ -46,6 +63,18 @@ class VisualDiagnosticSessionTest(unittest.TestCase):
             self.assertEqual(len(report["samples"]), 1)
             self.assertEqual(report["samples"][0]["scores"]["coin"], 0.8)
             self.assertEqual(report["samples"][0]["scores"]["turn_order"], 0.7)
+            self.assertEqual(
+                report["samples"][0]["candidates"],
+                [
+                    {
+                        "event": "duel_result",
+                        "confidence": 0.76,
+                        "outcome": "loss",
+                        "play_order": None,
+                        "evidence": "result-clean",
+                    }
+                ],
+            )
             self.assertNotIn("title", text.casefold())
             self.assertNotIn("video", text.casefold())
             self.assertNotIn("bmp", text.casefold())

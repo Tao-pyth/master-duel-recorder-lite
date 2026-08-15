@@ -153,6 +153,33 @@ class LiveValidationTest(unittest.TestCase):
         self.assertFalse(report.attempts[0].passed)
         self.assertIn("停止後の監視復帰未確認", report.attempts[0].failure_reasons)
 
+    def test_board_activity_after_result_stop_fails_early_stop_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_session(
+                root,
+                "early-stop",
+                [
+                    transition("candidate_started", 0),
+                    transition("duel_confirmed", 5),
+                    transition("result_stopped", 50),
+                ],
+                sample_at=70,
+                samples=[
+                    sample(54, board=0.42),
+                    sample(56, board=0.39),
+                    sample(58, board=0.46),
+                    sample(70),
+                ],
+            )
+
+            report = evaluate_live_diagnostics(root, since=START)
+
+        self.assertFalse(report.attempts[0].passed)
+        self.assertTrue(report.attempts[0].post_stop_duel_activity)
+        self.assertIn("結果停止後も盤面継続", report.attempts[0].failure_reasons)
+        self.assertFalse(report.gate_passed(1))
+
     def test_malformed_transition_blocks_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -213,7 +240,8 @@ def write_session(
     transitions: list[dict[str, object]],
     *,
     sample_at: int,
-        scores: dict[str, float] | None = None,
+    scores: dict[str, float] | None = None,
+    samples: list[dict[str, object]] | None = None,
     effective_fps: float = 1.8,
     started_at: datetime = START,
 ) -> None:
@@ -221,13 +249,13 @@ def write_session(
         "schema_version": 1,
         "started_at": started_at.isoformat(),
         "ended_at": (START + timedelta(seconds=sample_at + 1)).isoformat(),
-        "samples": [
-            {
-                "at": (START + timedelta(seconds=sample_at)).isoformat(),
-                "state": "matchmaking",
-                "scores": scores or {},
-                "effective_fps": effective_fps,
-            }
+        "samples": samples
+        or [
+            sample(
+                sample_at,
+                scores=scores,
+                effective_fps=effective_fps,
+            )
         ],
         "transitions": transitions,
     }
@@ -235,6 +263,24 @@ def write_session(
         json.dumps(document, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def sample(
+    seconds: int,
+    *,
+    board: float = 0.0,
+    scores: dict[str, float] | None = None,
+    effective_fps: float = 1.8,
+) -> dict[str, object]:
+    values = dict(scores or {})
+    if board:
+        values["board"] = board
+    return {
+        "at": (START + timedelta(seconds=seconds)).isoformat(),
+        "state": "matchmaking",
+        "scores": values,
+        "effective_fps": effective_fps,
+    }
 
 
 if __name__ == "__main__":

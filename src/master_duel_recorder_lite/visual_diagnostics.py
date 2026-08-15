@@ -85,6 +85,16 @@ class VisualDiagnosticSession:
                         "overlay": round(analysis.overlay_score, 4),
                         "loading": round(analysis.loading_score, 4),
                     },
+                    "candidates": [
+                        {
+                            "event": item.event_type,
+                            "confidence": round(item.confidence, 4),
+                            "outcome": item.outcome,
+                            "play_order": item.play_order,
+                            "evidence": item.evidence,
+                        }
+                        for item in analysis.candidates
+                    ],
                     "agreements": [
                         {
                             "event": item.event_type,

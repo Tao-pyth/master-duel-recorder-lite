@@ -10,6 +10,9 @@ from typing import Any
 RESULT_STOP_EVENT = "result_stopped"
 FAILED_STOP_EVENTS = frozenset({"boundary_stopped", "recording_stopped"})
 RECOVERY_GRACE = timedelta(seconds=3)
+POST_STOP_ACTIVITY_WINDOW = timedelta(seconds=120)
+POST_STOP_BOARD_THRESHOLD = 0.35
+POST_STOP_BOARD_MATCHES = 3
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,7 @@ class LiveDuelAttempt:
     stopped_at: datetime | None
     stop_event: str | None
     monitoring_recovered: bool
+    post_stop_duel_activity: bool
     stream_restarts: int
 
     @property
@@ -29,6 +33,7 @@ class LiveDuelAttempt:
             self.confirmed_at is not None
             and self.stop_event == RESULT_STOP_EVENT
             and self.monitoring_recovered
+            and not self.post_stop_duel_activity
         )
 
     @property
@@ -42,6 +47,8 @@ class LiveDuelAttempt:
             reasons.append("結果以外で停止")
         if self.stopped_at is not None and not self.monitoring_recovered:
             reasons.append("停止後の監視復帰未確認")
+        if self.post_stop_duel_activity:
+            reasons.append("結果停止後も盤面継続")
         return tuple(reasons)
 
 
@@ -124,6 +131,7 @@ class LiveValidationReport:
                     "stopped_at": _isoformat(attempt.stopped_at),
                     "stop_event": attempt.stop_event,
                     "monitoring_recovered": attempt.monitoring_recovered,
+                    "post_stop_duel_activity": attempt.post_stop_duel_activity,
                     "stream_restarts": attempt.stream_restarts,
                     "failure_reasons": list(attempt.failure_reasons),
                 }
@@ -190,12 +198,12 @@ def evaluate_live_diagnostics(
 
         current: _AttemptBuilder | None = None
         attempt_number = 0
-        for transition in transitions:
+        for transition_index, transition in enumerate(transitions):
             event = transition["event"]
             at = transition["at"]
             if event == "candidate_started":
                 if current is not None:
-                    attempts.append(_finish(current, latest_sample))
+                    attempts.append(_finish(current, latest_sample, samples))
                 attempt_number += 1
                 current = _AttemptBuilder(session_id, attempt_number, at)
             elif event == "duel_confirmed":
@@ -211,7 +219,17 @@ def evaluate_live_diagnostics(
                 else:
                     current.stopped_at = at
                     current.stop_event = event
-                    attempts.append(_finish(current, latest_sample))
+                    next_candidate_at = next(
+                        (
+                            item["at"]
+                            for item in transitions[transition_index + 1 :]
+                            if item["event"] == "candidate_started"
+                        ),
+                        None,
+                    )
+                    attempts.append(
+                        _finish(current, latest_sample, samples, next_candidate_at)
+                    )
                     current = None
             elif event == "candidate_discarded":
                 if current is None:
@@ -219,7 +237,7 @@ def evaluate_live_diagnostics(
                 elif current.confirmed_at is not None:
                     current.stopped_at = at
                     current.stop_event = event
-                    attempts.append(_finish(current, latest_sample))
+                    attempts.append(_finish(current, latest_sample, samples))
                 else:
                     discarded += 1
                 current = None
@@ -228,7 +246,7 @@ def evaluate_live_diagnostics(
                 if current is not None:
                     current.stream_restarts += 1
         if current is not None:
-            attempts.append(_finish(current, latest_sample))
+            attempts.append(_finish(current, latest_sample, samples))
 
     return LiveValidationReport(
         sessions=sessions,
@@ -270,8 +288,8 @@ def render_live_validation_markdown(
         f"- ストリーム再起動: {report.stream_restarts}",
         f"- 実効fps（最小 / 平均）: {_fps(report.minimum_effective_fps)} / {_fps(report.average_effective_fps)}",
         "",
-        "| セッション | 戦 | 開始 | 盤面 | 結果停止 | 監視復帰 | 判定 |",
-        "|---|---:|---|---|---|---|---|",
+        "| セッション | 戦 | 開始 | 盤面 | 結果停止 | 監視復帰 | 停止後盤面 | 判定 |",
+        "|---|---:|---|---|---|---|---|---|",
     ]
     for attempt in report.attempts:
         lines.append(
@@ -284,6 +302,7 @@ def render_live_validation_markdown(
                     "OK" if attempt.confirmed_at else "NG",
                     "OK" if attempt.stop_event == RESULT_STOP_EVENT else "NG",
                     "OK" if attempt.monitoring_recovered else "NG",
+                    "NG" if attempt.post_stop_duel_activity else "OK",
                     "合格" if attempt.passed else " / ".join(attempt.failure_reasons),
                 )
             )
@@ -359,6 +378,8 @@ def _effective_fps(sample: dict[str, Any]) -> float | None:
 def _finish(
     current: _AttemptBuilder,
     latest_sample: datetime | None,
+    samples: list[dict[str, Any]],
+    next_candidate_at: datetime | None = None,
 ) -> LiveDuelAttempt:
     recovered = (
         current.stopped_at is not None
@@ -373,8 +394,33 @@ def _finish(
         stopped_at=current.stopped_at,
         stop_event=current.stop_event,
         monitoring_recovered=recovered,
+        post_stop_duel_activity=_post_stop_duel_activity(
+            samples,
+            current.stopped_at,
+            next_candidate_at,
+        ),
         stream_restarts=current.stream_restarts,
     )
+
+
+def _post_stop_duel_activity(
+    samples: list[dict[str, Any]],
+    stopped_at: datetime | None,
+    next_candidate_at: datetime | None,
+) -> bool:
+    if stopped_at is None:
+        return False
+    start = stopped_at + RECOVERY_GRACE
+    end = min(
+        next_candidate_at or stopped_at + POST_STOP_ACTIVITY_WINDOW,
+        stopped_at + POST_STOP_ACTIVITY_WINDOW,
+    )
+    matches = sum(
+        start <= _timestamp(sample.get("at")) < end
+        and _score(sample, "board") >= POST_STOP_BOARD_THRESHOLD
+        for sample in samples
+    )
+    return matches >= POST_STOP_BOARD_MATCHES
 
 
 def _isoformat(value: datetime | None) -> str | None:
