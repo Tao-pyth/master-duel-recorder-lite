@@ -14,6 +14,28 @@ START = datetime(2026, 8, 15, tzinfo=timezone.utc)
 
 
 class LiveValidationTest(unittest.TestCase):
+    def test_user_stopped_watch_is_reported_as_interrupted_not_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_session(
+                root,
+                "interrupted",
+                [
+                    transition("candidate_started", 0),
+                    transition("duel_confirmed", 5),
+                    transition("watch_stopped_with_active_recording", 30),
+                ],
+                sample_at=30,
+            )
+
+            report = evaluate_live_diagnostics(root, since=START)
+            markdown = render_live_validation_markdown(report, 3)
+
+        self.assertEqual(report.interrupted_attempts, 1)
+        self.assertEqual(report.attempts, ())
+        self.assertEqual(report.failed_attempts, 0)
+        self.assertIn("利用者による録画中断: 1", markdown)
+
     def test_three_complete_duels_pass_initial_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

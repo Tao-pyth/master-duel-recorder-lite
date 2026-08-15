@@ -40,7 +40,8 @@ class VisualDiagnosticSession:
         self.samples: deque[dict[str, object]] = deque(maxlen=MAX_SAMPLES)
         self.transitions: deque[dict[str, object]] = deque(maxlen=100)
         self._last_sample_at: float | None = None
-        self._first_sample_at: float | None = None
+        self._first_analysis_at: float | None = None
+        self._analyzed_frames = 0
         self._closed = False
         self._lock = threading.RLock()
         self._write()
@@ -56,14 +57,21 @@ class VisualDiagnosticSession:
             if self._closed:
                 return False
             now = self.monotonic()
+            if self._first_analysis_at is None:
+                self._first_analysis_at = now
+            self._analyzed_frames += 1
             if self._last_sample_at is not None and now - self._last_sample_at < 1.0:
                 return False
-            if self._first_sample_at is None:
-                self._first_sample_at = now
             self._last_sample_at = now
             measured_fps = effective_fps
-            if measured_fps <= 0 and self._first_sample_at is not None and now > self._first_sample_at:
-                measured_fps = (len(self.samples) + 1) / (now - self._first_sample_at)
+            if (
+                measured_fps <= 0
+                and self._first_analysis_at is not None
+                and now > self._first_analysis_at
+            ):
+                measured_fps = (self._analyzed_frames - 1) / (
+                    now - self._first_analysis_at
+                )
             self.samples.append(
                 {
                     "at": self.clock().astimezone(timezone.utc).isoformat(),

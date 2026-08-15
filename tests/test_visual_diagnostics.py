@@ -4,6 +4,7 @@ import unittest
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import Mock
 
 from master_duel_recorder_lite.visual_detection import (
     DETECTOR_ID,
@@ -16,6 +17,41 @@ from master_duel_recorder_lite.visual_diagnostics import VisualDiagnosticSession
 
 
 class VisualDiagnosticSessionTest(unittest.TestCase):
+    def test_effective_fps_counts_all_analyses_after_sample_limit(self) -> None:
+        now = [0.0]
+        with tempfile.TemporaryDirectory() as temporary:
+            session = VisualDiagnosticSession(
+                Path(temporary),
+                monotonic=lambda: now[0],
+                clock=lambda: datetime(2026, 8, 11, tzinfo=timezone.utc),
+            )
+            session._write = Mock()
+            analysis = FrameAnalysis(
+                elapsed_ms=0,
+                state=MasterDuelState.DUEL_ACTIVE,
+                profile_name="test",
+                source_width=640,
+                source_height=360,
+                coin_score=0.0,
+                board_score=1.0,
+                turn_score=0.0,
+                turn_order_score=0.0,
+                result_score=0.0,
+                error_score=0.0,
+                replay_score=0.0,
+                overlay_score=0.0,
+                loading_score=0.0,
+                candidates=(),
+                agreements=(),
+            )
+
+            for frame in range(1803):
+                now[0] = frame * 0.5
+                session.record(analysis)
+
+            self.assertEqual(len(session.samples), 900)
+            self.assertEqual(session.samples[-1]["effective_fps"], 2.0)
+
     def test_report_contains_numeric_analysis_but_no_capture_metadata(self) -> None:
         now = [0.0]
         with tempfile.TemporaryDirectory() as temporary:

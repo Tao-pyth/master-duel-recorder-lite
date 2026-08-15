@@ -13,6 +13,7 @@ from master_duel_recorder_lite.application import (
     DuelManagementQuery,
     RecorderApplicationService,
     _automatic_capture_input,
+    _remaining_poll_delay,
 )
 from master_duel_recorder_lite.auto_recording import (
     AutoRecordingEvent,
@@ -33,6 +34,11 @@ from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
+    def test_watch_poll_delay_subtracts_capture_and_analysis_time(self) -> None:
+        self.assertAlmostEqual(_remaining_poll_delay(0.5, 10.0, 10.2), 0.3)
+        self.assertEqual(_remaining_poll_delay(0.5, 10.0, 10.6), 0.0)
+        self.assertEqual(_remaining_poll_delay(0.5, 10.2, 10.0), 0.5)
+
     def test_automatic_recording_snapshot_uses_ffmpeg_session_start(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))
         started_at = datetime.now(timezone.utc)

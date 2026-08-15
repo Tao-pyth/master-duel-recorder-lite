@@ -8,6 +8,7 @@ from typing import Any
 
 
 RESULT_STOP_EVENT = "result_stopped"
+INTERRUPTED_STOP_EVENT = "watch_stopped_with_active_recording"
 FAILED_STOP_EVENTS = frozenset({"boundary_stopped", "recording_stopped"})
 RECOVERY_GRACE = timedelta(seconds=3)
 POST_STOP_ACTIVITY_WINDOW = timedelta(seconds=120)
@@ -58,6 +59,7 @@ class LiveValidationReport:
     sessions: int
     attempts: tuple[LiveDuelAttempt, ...]
     discarded_candidates: int
+    interrupted_attempts: int
     malformed_events: tuple[str, ...]
     stream_restarts: int
     observed_match_error: bool
@@ -108,6 +110,7 @@ class LiveValidationReport:
             "passed_attempts": self.passed_attempts,
             "failed_attempts": self.failed_attempts,
             "discarded_candidates": self.discarded_candidates,
+            "interrupted_attempts": self.interrupted_attempts,
             "maximum_consecutive_passes": self.maximum_consecutive_passes,
             "latest_consecutive_passes": self.latest_consecutive_passes,
             "required_consecutive": required_consecutive,
@@ -159,7 +162,7 @@ def evaluate_live_diagnostics(
     root = directory.expanduser().resolve()
     attempts: list[LiveDuelAttempt] = []
     malformed: list[str] = []
-    discarded = restarts = sessions = 0
+    discarded = interrupted = restarts = sessions = 0
     observed_match_error = observed_replay = observed_overlay = False
     effective_fps_values: list[float] = []
 
@@ -241,6 +244,12 @@ def evaluate_live_diagnostics(
                 else:
                     discarded += 1
                 current = None
+            elif event == INTERRUPTED_STOP_EVENT:
+                if current is None:
+                    malformed.append(f"{session_id}: 候補開始前に監視停止")
+                else:
+                    interrupted += 1
+                    current = None
             elif event == "stream_restarted":
                 restarts += 1
                 if current is not None:
@@ -253,6 +262,7 @@ def evaluate_live_diagnostics(
         since=_as_aware(since) if since is not None else None,
         attempts=tuple(attempts),
         discarded_candidates=discarded,
+        interrupted_attempts=interrupted,
         malformed_events=tuple(malformed),
         stream_restarts=restarts,
         observed_match_error=observed_match_error,
@@ -285,6 +295,7 @@ def render_live_validation_markdown(
         f"- 最新連続成功: {report.latest_consecutive_passes}/{required_consecutive}",
         f"- 最大連続成功: {report.maximum_consecutive_passes}",
         f"- 候補破棄: {report.discarded_candidates}",
+        f"- 利用者による録画中断: {report.interrupted_attempts}",
         f"- ストリーム再起動: {report.stream_restarts}",
         f"- 実効fps（最小 / 平均）: {_fps(report.minimum_effective_fps)} / {_fps(report.average_effective_fps)}",
         "",

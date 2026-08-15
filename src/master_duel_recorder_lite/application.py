@@ -1335,6 +1335,7 @@ class RecorderApplicationService:
             )
             self._transition_operation(OperationState.WATCH_WAITING, "対戦を待機しています")
             while not self._watch_stop.is_set():
+                iteration_started = time.monotonic()
                 observation = (
                     start_monitor.observe()
                     if controller.current is None and watch_config.auto_start_recording
@@ -1442,7 +1443,13 @@ class RecorderApplicationService:
                     if controller.current is None and watch_config.auto_start_recording
                     else watch_config.detection_poll_interval_seconds
                 )
-                self._watch_stop.wait(interval)
+                self._watch_stop.wait(
+                    _remaining_poll_delay(
+                        interval,
+                        iteration_started,
+                        time.monotonic(),
+                    )
+                )
         except Exception as exc:
             self._transition_operation(OperationState.FAILED, str(exc))
             self._notify("watch_failed", str(exc), f"watch:failed:{type(exc).__name__}")
@@ -1705,3 +1712,11 @@ def _elapsed(started_at: datetime | None, ended_at: datetime | None = None) -> f
         return 0.0
     end = ended_at or datetime.now(timezone.utc)
     return max(0.0, (end - started_at).total_seconds())
+
+
+def _remaining_poll_delay(
+    interval_seconds: float,
+    iteration_started: float,
+    iteration_finished: float,
+) -> float:
+    return max(0.0, interval_seconds - max(0.0, iteration_finished - iteration_started))
