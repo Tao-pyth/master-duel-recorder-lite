@@ -822,6 +822,203 @@ class RecorderApplicationServiceTest(unittest.TestCase):
 
         process.assert_not_called()
 
+    def test_watch_loop_hands_boundary_to_next_recording_without_waiting(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        service._operation_state.transition(OperationState.WATCH_STARTING, "開始中")
+        config = AppConfig(detection_poll_interval_seconds=0.01)
+        report = PreflightReport(
+            (PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),)
+        )
+        observation = DuelObservation(
+            DetectionSignal.PRESENT,
+            0.9,
+            "次対戦境界",
+            datetime.now(timezone.utc),
+            capture_window_handle=42,
+            capture_process_id=100,
+            capture_window_title="Master Duel",
+            capture_left=0,
+            capture_top=0,
+            capture_width=1920,
+            capture_height=1080,
+        )
+        boundary = DetectionCandidate(
+            "duel_boundary",
+            12000,
+            0.91,
+            "次対戦の開始を確認",
+            "test",
+            "1",
+            evidence="next_duel",
+        )
+        status = VisualDetectionStatus(
+            "running",
+            "判定中",
+            20,
+            0,
+            1,
+            effective_fps=2.0,
+            resolution="1920x1080",
+            profile="standard-16:9-window",
+            coin_score=0.91,
+            agreement="duel_boundary:2/4",
+        )
+        previous = SimpleNamespace(
+            visual_abort_reason=None,
+            session=SimpleNamespace(started_at=datetime.now(timezone.utc)),
+            duel_confirmed=True,
+            result_detected_monotonic=None,
+            boundary_detected_monotonic=time.monotonic(),
+            boundary_candidate=boundary,
+            visual_detection_status=status,
+            target=SimpleNamespace(
+                recording_id="previous",
+                path=Path("recordings/previous.mkv"),
+            ),
+        )
+        following = SimpleNamespace(
+            visual_abort_reason=None,
+            session=SimpleNamespace(
+                state=RecordingState.RECORDING,
+                started_at=datetime.now(timezone.utc),
+                result=None,
+            ),
+            duel_confirmed=False,
+            result_detected_monotonic=None,
+            boundary_detected_monotonic=None,
+            boundary_candidate=None,
+            visual_detection_status=status,
+            target=SimpleNamespace(
+                recording_id="following",
+                path=Path("recordings/following.mkv"),
+            ),
+        )
+        stopped = AutoRecordingEvent(
+            AutoRecordingEventAction.STOPPED,
+            "停止しました",
+            observation,
+            None,
+            recording_id="previous",
+        )
+        started = AutoRecordingEvent(
+            AutoRecordingEventAction.STARTED,
+            "引き綐ぎました",
+            observation,
+            None,
+            recording_id="following",
+        )
+        controller = SimpleNamespace(current=previous)
+
+        def manual_stop():
+            event = stopped
+            if controller.current is following:
+                event = AutoRecordingEvent(
+                    AutoRecordingEventAction.STOPPED,
+                    "監視終了",
+                    observation,
+                    None,
+                    recording_id="following",
+                )
+            controller.current = None
+            return event
+
+        controller.process = Mock(
+            return_value=AutoRecordingEvent(
+                AutoRecordingEventAction.NONE,
+                "継続",
+                observation,
+                None,
+            )
+        )
+        controller.manual_stop = Mock(side_effect=manual_stop)
+
+        def start_from_boundary(observed, candidate):
+            self.assertIs(observed, observation)
+            self.assertIs(candidate, boundary)
+            controller.current = following
+            return started
+
+        controller.start_from_boundary = Mock(side_effect=start_from_boundary)
+        window_detector = SimpleNamespace(observe=Mock(return_value=observation))
+        start_monitor = SimpleNamespace(
+            reset=Mock(),
+            status=VisualDetectionStatus("waiting", "待機中", 0, 0, 0),
+            start_candidate=None,
+        )
+        frame_stream = SimpleNamespace(
+            restart_count=0,
+            source_description="test",
+            capture=Mock(),
+            stop=Mock(),
+        )
+        diagnostics = Mock()
+        events = []
+
+        def callback(event):
+            events.append(event)
+            if event.kind == "started" and event.recording_id == "following":
+                service._operation_state.transition(OperationState.STOPPING, "停止中")
+                service._watch_stop.set()
+
+        with (
+            patch.object(
+                service,
+                "load_config",
+                return_value=SimpleNamespace(config=config, config_loaded=True),
+            ),
+            patch.object(service, "_save_automatic_start_candidate"),
+            patch("master_duel_recorder_lite.application.run_preflight", return_value=report),
+            patch(
+                "master_duel_recorder_lite.application.discover_ffmpeg",
+                return_value=SimpleNamespace(
+                    found=True,
+                    executable=Path("ffmpeg.exe").resolve(),
+                ),
+            ),
+            patch("master_duel_recorder_lite.application.GameWindowMonitor"),
+            patch(
+                "master_duel_recorder_lite.application.MasterDuelWindowDetector",
+                return_value=window_detector,
+            ),
+            patch(
+                "master_duel_recorder_lite.application.PersistentFfmpegRegionFrameCapture",
+                return_value=frame_stream,
+            ),
+            patch(
+                "master_duel_recorder_lite.application.VisualDiagnosticSession",
+                return_value=diagnostics,
+            ),
+            patch(
+                "master_duel_recorder_lite.application.MasterDuelStartMonitor",
+                return_value=start_monitor,
+            ),
+            patch(
+                "master_duel_recorder_lite.application.AutoRecordingController",
+                return_value=controller,
+            ),
+        ):
+            service._watch_stop.clear()
+            service._watch_loop(callback)
+
+        self.assertFalse(
+            [event.message for event in events if event.kind == "error"],
+            events,
+        )
+        controller.start_from_boundary.assert_called_once_with(observation, boundary)
+        self.assertEqual(controller.manual_stop.call_count, 2)
+        diagnostics.transition.assert_any_call(
+            "boundary_handoff_started",
+            elapsed_ms=0,
+            details=unittest.mock.ANY,
+        )
+        self.assertTrue(
+            any(
+                event.kind == "started" and event.recording_id == "following"
+                for event in events
+            )
+        )
+        self.assertIs(service.operation_snapshot().state, OperationState.IDLE)
+
 
 if __name__ == "__main__":
     unittest.main()
