@@ -34,7 +34,8 @@
 - 次対戦境界の時間窓合意が成立した同じ監視ループで前録画を停止し、候補を次録画へ即時引き継ぐようにした。境界スコア、合意、引継ぎ時間は数値診断の遷移へ保存する
 - ローカルCLI EXE SHA-256: `04CC09D236756B8EC7C9E7D555367115E09250A1BC7E2C7AF97D9ADB8BED5E3A`
 - ローカルGUI EXE SHA-256: `4DDB2E8C92DEB4D34891955A733BE1E724ACB6CC1B18E836B1A77F21F86FB33B`
-- fix340 GUIによる初期3戦・10戦連続試験と、その後のWindows CIが未完了のため、タグ・Release・`main` pushは保留する
+- fix340 GUIによる初期3戦は開始・盤面確定・結果停止3/3で合格した。直前の補足2戦も2/2で合格し、5録画すべてFFmpeg終了コード0と有効な終了映像を確認した
+- 別セッションでの10戦連続試験と、その後のWindows CIが未完了のため、タグ・Release・`main` pushは保留する
 
 追跡: [V0.25.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/47)、Issue #315 - #327、#333 - #339、#366
 
