@@ -984,38 +984,40 @@ class RecorderGui:
         page = self._new_page("history")
         toolbar = self._surface(page, padding=(14, 10))
         toolbar.pack(fill="x", pady=(0, 10))
-        ttk.Label(toolbar, text="戦績管理", style="Heading.TLabel").pack(side="left")
+        header_bar = ttk.Frame(toolbar, style="Surface.TFrame")
+        header_bar.pack(fill="x")
+        ttk.Label(header_bar, text="戦績管理", style="Heading.TLabel").pack(side="left")
         self.history_add_button = self._icon_button(
-            toolbar, "add", "録画を伴わない戦績を追加", self._open_manual_quick_duel_editor
+            header_bar, "add", "録画を伴わない戦績を追加", self._open_manual_quick_duel_editor
         )
         self.history_add_button.pack(side="left", padx=(16, 6))
         self.history_incomplete_button = ttk.Button(
-            toolbar,
+            header_bar,
             text="未完了を処理",
             command=self._open_incomplete_duel_queue,
         )
         self.history_incomplete_button.pack(side="left", padx=(0, 6))
         self.history_bulk_button = ttk.Button(
-            toolbar,
+            header_bar,
             text="一括編集",
             command=self._open_bulk_duel_editor,
         )
         self.history_bulk_button.pack(side="left", padx=(0, 6))
         self.history_filter_button = self._icon_button(
-            toolbar, "filter", "録画履歴を絞り込む", self.open_history_filter
+            header_bar, "filter", "録画履歴を絞り込む", self.open_history_filter
         )
         self.history_filter_button.pack(side="left", padx=(0, 6))
         self.history_filter_count_var = tk.StringVar(value="")
         ttk.Label(
-            toolbar,
+            header_bar,
             textvariable=self.history_filter_count_var,
             style="Muted.TLabel",
         ).pack(side="left", padx=(0, 6))
         self._icon_button(
-            toolbar, "clear_filter", "録画履歴の絞り込みを解除", self.clear_history_filter
+            header_bar, "clear_filter", "録画履歴の絞り込みを解除", self.clear_history_filter
         ).pack(side="left")
         action_bar = ttk.Frame(toolbar, style="Surface.TFrame")
-        action_bar.pack(side="right")
+        action_bar.pack(fill="x", pady=(8, 0))
         commands = {
             "play": self.play_selected_history,
             "edit": self.edit_selected_duel_record,
@@ -1066,12 +1068,13 @@ class RecorderGui:
             command=self.open_duplicate_candidates,
         )
         self.history_duplicates_button.pack(side="left", padx=(0, 6))
-        self._icon_button(
+        self.history_refresh_button = self._icon_button(
             action_bar,
             "refresh",
             "録画履歴を更新",
             self.refresh_history,
-        ).pack(side="left", padx=(0, 6))
+        )
+        self.history_refresh_button.pack(side="left", padx=(0, 6))
         self._icon_button(
             action_bar,
             "test",
@@ -1145,6 +1148,7 @@ class RecorderGui:
         self.widgets["history_add"] = self.history_add_button
         self.widgets["history_incomplete"] = self.history_incomplete_button
         self.widgets["history_bulk"] = self.history_bulk_button
+        self.widgets["history_refresh"] = self.history_refresh_button
 
     def _build_statistics_page(self) -> None:
         page = self._new_page("statistics")
@@ -2110,13 +2114,21 @@ class RecorderGui:
         frame.pack(fill="both", expand=True)
         current = [selected.year, selected.month]
         title = ttk.Label(frame, style="Heading.TLabel")
-        title.grid(row=0, column=1, columnspan=5)
+        title.grid(row=0, column=1, columnspan=4)
+        today = date.today()
+        today_button = ttk.Button(frame, text="今月へ", width=6)
+        today_button.grid(row=0, column=5, padx=2)
 
         def render() -> None:
             for child in frame.grid_slaves():
                 if int(child.grid_info().get("row", 0)) >= 2:
                     child.destroy()
             title.configure(text=f"{current[0]}年 {current[1]}月")
+            today_button.configure(
+                state="disabled"
+                if current == [today.year, today.month]
+                else "normal"
+            )
             for column, label in enumerate(("月", "火", "水", "木", "金", "土", "日")):
                 ttk.Label(frame, text=label).grid(row=2, column=column, padx=4, pady=4)
             for week_index, week in enumerate(calendar.monthcalendar(*current)):
@@ -2142,8 +2154,17 @@ class RecorderGui:
                 current[:] = [current[0] + 1, 1]
             render()
 
-        ttk.Button(frame, text="‹", command=lambda: move(-1)).grid(row=0, column=0)
-        ttk.Button(frame, text="›", command=lambda: move(1)).grid(row=0, column=6)
+        def move_to_current_month() -> None:
+            current[:] = [today.year, today.month]
+            render()
+
+        ttk.Button(frame, text="‹", width=3, command=lambda: move(-1)).grid(
+            row=0, column=0, padx=2
+        )
+        ttk.Button(frame, text="›", width=3, command=lambda: move(1)).grid(
+            row=0, column=6, padx=2
+        )
+        today_button.configure(command=move_to_current_month)
         render()
         dialog.grab_set()
 
@@ -3357,11 +3378,24 @@ class RecorderGui:
                 self._show_timeline(view.recording_id)
 
     def _show_timeline(self, recording_id: str) -> None:
-        dialog = tk.Toplevel(self.root)
+        previous_grab = self.root.grab_current()
+        owner = previous_grab if previous_grab is not None else self.root
+        dialog = tk.Toplevel(owner)
         dialog.title("対戦タイムライン")
         dialog.geometry("920x620")
         dialog.minsize(760, 500)
-        dialog.transient(self.root)
+        dialog.transient(owner)
+        if previous_grab is not None:
+            previous_grab.grab_release()
+
+        def close_timeline() -> None:
+            dialog.grab_release()
+            dialog.destroy()
+            if previous_grab is not None and previous_grab.winfo_exists():
+                previous_grab.grab_set()
+
+        dialog.protocol("WM_DELETE_WINDOW", close_timeline)
+        dialog.bind("<Escape>", lambda _event: close_timeline())
         frame = ttk.Frame(dialog, padding=16)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text=f"録画ID: {recording_id}", style="Heading.TLabel").grid(
@@ -3519,6 +3553,7 @@ class RecorderGui:
         frame.columnconfigure(4, weight=1)
         frame.rowconfigure(2, weight=1)
         refresh()
+        dialog.grab_set()
 
     def _open_manual_quick_duel_editor(self) -> None:
         reason = self.service.duel_write_block_reason()
@@ -3884,8 +3919,35 @@ class RecorderGui:
         dialog.geometry("720x740" if is_manual else "720x700")
         dialog.minsize(620, 620)
         dialog.transient(self.root)
-        form = ttk.Frame(dialog, padding=18)
-        form.pack(fill="both", expand=True)
+        body = ttk.Frame(dialog)
+        body.pack(fill="both", expand=True)
+        canvas = tk.Canvas(
+            body,
+            highlightthickness=0,
+            background=self.COLORS["surface"],
+        )
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        form = ttk.Frame(canvas, padding=18, style="Surface.TFrame")
+        form_window = canvas.create_window((0, 0), window=form, anchor="nw")
+
+        def update_scroll_region(_event: object | None = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def fit_form_width(event: tk.Event) -> None:
+            canvas.itemconfigure(form_window, width=event.width)
+
+        form.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", fit_form_width)
+        dialog.bind(
+            "<MouseWheel>",
+            lambda event: canvas.yview_scroll(
+                -1 if event.delta > 0 else 1,
+                "units",
+            ),
+        )
         ttk.Label(form, text="対戦内容", style="Heading.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
         )
@@ -3980,12 +4042,16 @@ class RecorderGui:
             state="normal",
         )
         tag_combo.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        tag_list = tk.Listbox(tag_panel, height=5, exportselection=False)
+        tag_list = tk.Listbox(tag_panel, height=3, exportselection=False)
         tag_list.grid(row=1, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
         tag_info_var = tk.StringVar(value="")
-        ttk.Label(tag_panel, textvariable=tag_info_var, style="Muted.TLabel").grid(
+        tag_info_label = ttk.Label(
+            tag_panel, textvariable=tag_info_var, style="Muted.TLabel"
+        )
+        tag_info_label.grid(
             row=2, column=0, columnspan=3, sticky="w", pady=(6, 0)
         )
+        tag_info_label.grid_remove()
         tag_entries = {entry.name.casefold(): entry for entry in data.tags}
 
         def style_tag(index: int, tag: str) -> None:
@@ -4032,6 +4098,10 @@ class RecorderGui:
         def show_tag_description(_event: object | None = None) -> None:
             entry = tag_entries.get(tag_var.get().strip().casefold())
             tag_info_var.set(entry.description if entry is not None else "")
+            if tag_info_var.get():
+                tag_info_label.grid()
+            else:
+                tag_info_label.grid_remove()
 
         tag_combo.bind("<<ComboboxSelected>>", show_tag_description)
         tag_panel.columnconfigure(0, weight=1)
@@ -5518,7 +5588,40 @@ def main(argv: list[str] | None = None) -> int:
     )
     app = RecorderGui(root, service, smoke_mode=args.smoke_test)
     if args.smoke_test:
+        app.show_page("history")
         root.update_idletasks()
+        history_refresh = app.widgets["history_refresh"]
+        history_refresh_right = (
+            history_refresh.winfo_rootx()
+            - root.winfo_rootx()
+            + history_refresh.winfo_width()
+        )
+        calendar_variable = tk.StringVar(value=date.today().isoformat())
+        app.open_calendar_picker(calendar_variable)
+        root.update_idletasks()
+        calendar_dialog = next(
+            child for child in root.winfo_children() if isinstance(child, tk.Toplevel)
+        )
+
+        def descendants(widget: tk.Misc) -> tuple[tk.Misc, ...]:
+            children = tuple(widget.winfo_children())
+            return children + tuple(
+                descendant
+                for child in children
+                for descendant in descendants(child)
+            )
+
+        calendar_buttons = {
+            str(widget.cget("text")): widget
+            for widget in descendants(calendar_dialog)
+            if isinstance(widget, ttk.Button)
+        }
+        calendar_contract = (
+            int(calendar_buttons["‹"].cget("width")) == 3
+            and int(calendar_buttons["›"].cget("width")) == 3
+            and str(calendar_buttons["今月へ"].cget("state")) == "disabled"
+        )
+        calendar_dialog.destroy()
         geometry = {
             "width": root.winfo_width(),
             "height": root.winfo_height(),
@@ -5526,8 +5629,16 @@ def main(argv: list[str] | None = None) -> int:
             "title": root.title(),
             "version": __version__,
             "runtime_data": str(service.paths.root),
+            "history_refresh_visible": history_refresh_right <= root.winfo_width(),
+            "calendar_contract": calendar_contract,
         }
-        if geometry["width"] < 900 or geometry["height"] < 600 or len(app.widgets) < 8:
+        if (
+            geometry["width"] < 900
+            or geometry["height"] < 600
+            or len(app.widgets) < 8
+            or not geometry["history_refresh_visible"]
+            or not geometry["calendar_contract"]
+        ):
             app._destroy()
             return 1
         if args.smoke_output is not None:
