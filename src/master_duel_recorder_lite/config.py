@@ -14,6 +14,7 @@ ALLOWED_PRIVACY_STATUSES = {"private", "unlisted"}
 ALLOWED_RECORDING_FORMATS = {"mkv", "mp4"}
 ALLOWED_SCREEN_INPUT_FORMATS = {"gdigrab"}
 ALLOWED_AUDIO_INPUT_FORMATS = {"dshow"}
+ALLOWED_AUDIO_MODES = {"process", "system", "device", "none"}
 ALLOWED_CAPTURE_MODES = {"master_duel", "window", "monitor", "desktop"}
 ALLOWED_VISUAL_DETECTION_LANGUAGES = {"auto", "ja", "en"}
 
@@ -37,6 +38,7 @@ class AppConfig:
     capture_target_id: str = ""
     audio_input: str = ""
     audio_input_format: str = "dshow"
+    audio_mode: str = "none"
     audio_gain_db: float = 0.0
     audio_sample_rate: int = 48_000
     audio_channels: int = 2
@@ -97,6 +99,9 @@ def load_app_config(
         upload_table = _table(raw, "upload")
         runtime_table = _table(raw, "runtime")
 
+        legacy_audio_input = _optional_string_value(
+            recorder_table, "audio_input", AppConfig.audio_input
+        )
         config = AppConfig(
             ffmpeg_path=_string_value(recorder_table, "ffmpeg_path", AppConfig.ffmpeg_path),
             recording_format=_recording_format(
@@ -114,11 +119,18 @@ def load_app_config(
             capture_target_id=_optional_string_value(
                 recorder_table, "capture_target_id", AppConfig.capture_target_id
             ),
-            audio_input=_optional_string_value(recorder_table, "audio_input", AppConfig.audio_input),
+            audio_input=legacy_audio_input,
             audio_input_format=_input_format(
                 _required_string_value(recorder_table, "audio_input_format", AppConfig.audio_input_format),
                 allowed=ALLOWED_AUDIO_INPUT_FORMATS,
                 key="audio_input_format",
+            ),
+            audio_mode=_audio_mode(
+                _string_value(
+                    recorder_table,
+                    "audio_mode",
+                    "device" if legacy_audio_input else AppConfig.audio_mode,
+                )
             ),
             audio_gain_db=_float_value(
                 recorder_table, "audio_gain_db", AppConfig.audio_gain_db
@@ -231,6 +243,9 @@ def validate_app_config(config: AppConfig) -> None:
     if config.capture_mode in {"window", "monitor"}:
         _required_value(config.capture_target_id, "capture_target_id")
     _input_format(config.audio_input_format, allowed=ALLOWED_AUDIO_INPUT_FORMATS, key="audio_input_format")
+    _audio_mode(config.audio_mode)
+    if config.audio_mode in {"system", "device"}:
+        _required_value(config.audio_input, "audio_input")
     _encoder_name(config.video_encoder)
     _recording_number_values(config)
     _detection_values(config)
@@ -280,6 +295,7 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"capture_target_id = {_toml_string(config.capture_target_id)}",
                 f"audio_input = {_toml_string(config.audio_input)}",
                 f"audio_input_format = {_toml_string(config.audio_input_format)}",
+                f"audio_mode = {_toml_string(config.audio_mode)}",
                 f"audio_gain_db = {config.audio_gain_db}",
                 f"audio_sample_rate = {config.audio_sample_rate}",
                 f"audio_channels = {config.audio_channels}",
@@ -418,6 +434,13 @@ def _input_format(value: str, *, allowed: set[str], key: str) -> str:
     if normalized not in allowed:
         choices = " または ".join(sorted(allowed))
         raise ValueError(f"{key} は {choices} である必要があります")
+    return normalized
+
+
+def _audio_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in ALLOWED_AUDIO_MODES:
+        raise ValueError(f"audio_mode は{sorted(ALLOWED_AUDIO_MODES)}のいずれかです")
     return normalized
 
 

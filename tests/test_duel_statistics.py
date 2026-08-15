@@ -128,6 +128,27 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual(dashboard.overall.wins, 1)
         self.assertEqual(dashboard.trend[0].period_start, date(2026, 8, 1))
 
+    def test_imported_record_is_included_without_recording_row(self) -> None:
+        record = self.records.create_manual(
+            DuelRecordValues(
+                status="confirmed",
+                result="loss",
+                play_order="second",
+                own_deck="取込デッキ",
+            ),
+            occurred_at=datetime(2026, 8, 3, 12, tzinfo=timezone.utc),
+        )
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute(
+                "UPDATE duel_records SET entry_origin = 'import' WHERE duel_id = ?",
+                (record.duel_id,),
+            )
+
+        dashboard = self.statistics.dashboard()
+
+        self.assertEqual(dashboard.overall.matches, 1)
+        self.assertEqual(dashboard.overall.losses, 1)
+
     def test_combines_date_deck_tag_and_play_order_filters(self) -> None:
         self._record(
             "target",

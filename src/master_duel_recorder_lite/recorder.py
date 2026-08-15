@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
@@ -8,12 +8,17 @@ import time
 from typing import Callable
 
 from .capture_targets import CaptureInput, CaptureTargetError, resolve_configured_capture
+from .audio_loopback import (
+    ProcessLoopbackController,
+    new_audio_pipe_name,
+    process_loopback_capability,
+)
 from .config import AppConfig
 from .duel_records import DuelRecordError, DuelRecordRepository, DuelRecordValues
 from .duel_timeline import DuelTimelineRepository
 from .ffmpeg import discover_ffmpeg
 from .frame_capture import FfmpegWindowFrameCapture, FrameCaptureResult, FrameSample
-from .game_window import WindowSnapshot
+from .game_window import GameWindowMonitor, WindowSnapshot
 from .recording_command import RecordingCommandError, build_recording_command
 from .recording_history import RecordingHistoryError, RecordingHistoryRepository
 from .recording_failure import classify_recording_failure
@@ -119,7 +124,7 @@ class PreparedRecording:
                 container=self.profile.recording_format,
                 source=source,
                 detection_reason=detection_reason,
-                audio_input=self.profile.audio_input or None,
+                audio_input=self.profile.audio_label or None,
             )
             self._history_started = True
             self._save_state("starting")
@@ -132,6 +137,11 @@ class PreparedRecording:
                 self.target.recording_id,
                 started_at=self.session.started_at,
             )
+            audio_warning = getattr(self.session, "audio_warning", None)
+            if audio_warning:
+                self.history.mark_audio_warning(
+                    self.target.recording_id, audio_warning
+                )
             self._save_state("recording")
             self._start_visual_detection()
             return state
@@ -170,6 +180,12 @@ class PreparedRecording:
 
     def poll(self) -> RecordingState:
         state = self.session.poll()
+        if self.session.audio_warning:
+            current = self.history.get(self.target.recording_id)
+            if current is not None and current.audio_warning != self.session.audio_warning:
+                self.history.mark_audio_warning(
+                    self.target.recording_id, self.session.audio_warning
+                )
         if state in {RecordingState.COMPLETED, RecordingState.FAILED}:
             self._stop_visual_detection()
             self._finalize_history()
@@ -291,6 +307,8 @@ def prepare_recording(
     visual_source: str = "",
     visual_restart_counter: Callable[[], int] | None = None,
     visual_frame_generation: Callable[[], int] | None = None,
+    audio_process_id: int | None = None,
+    reserved_process_audio: ProcessLoopbackController | None = None,
 ) -> PreparedRecording:
     discovery = discover_ffmpeg(config.ffmpeg_path)
     if not discovery.found or discovery.executable is None:
@@ -304,12 +322,54 @@ def prepare_recording(
             master_duel_window_title=master_duel_window_title,
         )
         target = create_recording_target(paths, profile)
+        auxiliary_audio = None
+        fallback_command = None
+        initial_audio_warning = None
+        process_audio_pipe = None
+        if profile.audio_mode == "process":
+            capability = process_loopback_capability()
+            pid = audio_process_id
+            if pid is None:
+                observation = GameWindowMonitor(
+                    process_name=config.game_process_name,
+                    title_contains=config.game_window_title_contains,
+                ).observe()
+                pid = observation.process.pid if observation.process is not None else None
+            if (
+                reserved_process_audio is not None
+                and pid == reserved_process_audio.process_id
+            ):
+                process_audio_pipe = reserved_process_audio.pipe_name
+                auxiliary_audio = reserved_process_audio
+            elif capability.supported and capability.helper_path is not None and pid:
+                process_audio_pipe = new_audio_pipe_name(target.recording_id)
+                auxiliary_audio = ProcessLoopbackController(
+                    helper_path=capability.helper_path,
+                    process_id=pid,
+                    pipe_name=process_audio_pipe,
+                )
+                fallback_command = build_recording_command(
+                    executable=discovery.executable,
+                    profile=replace(profile, audio_mode="none", audio_input=""),
+                    capture_input=selected_input,
+                    output_path=target.path,
+                    recordings_root=paths.recordings,
+                )
+            else:
+                detail = capability.message if not capability.supported else "Master Duelが起動していません"
+                initial_audio_warning = f"Master Duel単体音声を利用できません: {detail}。映像のみ録画します"
+        effective_profile = (
+            replace(profile, audio_mode="none", audio_input="")
+            if profile.audio_mode == "process" and auxiliary_audio is None
+            else profile
+        )
         command = build_recording_command(
             executable=discovery.executable,
-            profile=profile,
+            profile=effective_profile,
             capture_input=selected_input,
             output_path=target.path,
             recordings_root=paths.recordings,
+            process_audio_pipe=process_audio_pipe,
         )
     except (
         CaptureTargetError,
@@ -350,7 +410,13 @@ def prepare_recording(
             executable=discovery.executable,
             profile=profile,
             command=command,
-            session=RecordingSession(command=command, output_path=target.path),
+            session=RecordingSession(
+                command=command,
+                output_path=target.path,
+                auxiliary_audio=auxiliary_audio,
+                fallback_command=fallback_command,
+                initial_audio_warning=initial_audio_warning,
+            ),
             lock=recording_lock,
             history=history,
             state_store=RecordingStateStore(paths),

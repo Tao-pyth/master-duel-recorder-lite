@@ -58,6 +58,7 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
         "recorder.capture_target_id": ConfigField("capture_target_id", _stripped_text),
         "recorder.audio_input": ConfigField("audio_input", _stripped_text),
         "recorder.audio_input_format": ConfigField("audio_input_format", _lower_text),
+        "recorder.audio_mode": ConfigField("audio_mode", _lower_text),
         "recorder.audio_gain_db": ConfigField("audio_gain_db", _number),
         "recorder.audio_sample_rate": ConfigField("audio_sample_rate", _integer),
         "recorder.audio_channels": ConfigField("audio_channels", _integer),

@@ -241,6 +241,29 @@ class RecordingHistoryRepository:
         assert entry is not None
         return entry
 
+    def mark_audio_warning(
+        self, recording_id: str, warning: str
+    ) -> RecordingHistoryEntry:
+        identifier = _required_text(recording_id, "recording_id")
+        message = _required_text(warning, "warning")[:2000]
+        timestamp = _format_datetime(datetime.now(timezone.utc))
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE recordings
+                SET audio_state = 'warning', audio_warning = ?, updated_at = ?
+                WHERE recording_id = ? AND state IN ('starting', 'recording')
+                """,
+                (message, timestamp, identifier),
+            )
+        if cursor.rowcount != 1:
+            raise RecordingHistoryError(
+                f"音声警告を記録できない録画状態です: {identifier}"
+            )
+        entry = self.get(identifier)
+        assert entry is not None
+        return entry
+
     def finalize(
         self, recording_id: str, result: RecordingResult
     ) -> RecordingHistoryEntry:

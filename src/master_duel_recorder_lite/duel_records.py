@@ -18,7 +18,7 @@ RESULTS = {"win", "loss", "draw", "unknown"}
 PLAY_ORDERS = {"first", "second", "unknown"}
 COIN_FACES = {"heads", "tails", "unknown"}
 DUEL_TYPES = {"ranked", "event", "room", "solo", "other"}
-SOURCES = {"user", "system", "detected"}
+SOURCES = {"user", "system", "detected", "import"}
 DUEL_CHOICE_LABELS = {
     "status": {
         "draft": "編集中",
@@ -193,7 +193,7 @@ class DuelRecordRepository:
                     UNION ALL
                     SELECT duel_id AS identifier
                     FROM duel_records
-                    WHERE entry_origin = 'manual' AND status <> 'confirmed'
+                    WHERE entry_origin IN ('manual', 'import') AND status <> 'confirmed'
                 )
                 """
             ).fetchone()
@@ -279,7 +279,7 @@ class DuelRecordRepository:
         current = self.get(duel_id)
         if current is None or current.duel_id != _identifier(duel_id):
             raise DuelRecordError(f"対戦記録が見つかりません: {duel_id}")
-        if occurred_at is not None and current.entry_origin != "manual":
+        if occurred_at is not None and current.entry_origin not in {"manual", "import"}:
             raise DuelRecordError("録画付き対戦の対戦日時は変更できません")
         return self._save_record(
             current.duel_id,

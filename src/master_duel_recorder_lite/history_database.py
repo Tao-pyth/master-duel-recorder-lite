@@ -10,7 +10,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -608,6 +608,126 @@ def _migrate_to_v13(connection: sqlite3.Connection) -> None:
             )
 
 
+def _migrate_to_v14(connection: sqlite3.Connection) -> None:
+    """Add CSV-import provenance without weakening recording relationships."""
+    connection.execute(
+        """
+        CREATE TABLE duel_records_v14 (
+            duel_id TEXT PRIMARY KEY CHECK (length(trim(duel_id)) > 0),
+            recording_id TEXT UNIQUE REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            entry_origin TEXT NOT NULL CHECK (entry_origin IN ('recording', 'manual', 'import')),
+            occurred_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('draft', 'confirmed')),
+            result TEXT NOT NULL CHECK (result IN ('win', 'loss', 'draw', 'unknown')),
+            play_order TEXT NOT NULL CHECK (play_order IN ('first', 'second', 'unknown')),
+            coin_face TEXT NOT NULL CHECK (coin_face IN ('heads', 'tails', 'unknown')),
+            own_deck TEXT NOT NULL DEFAULT '',
+            opponent_deck TEXT NOT NULL DEFAULT '',
+            duel_type TEXT NOT NULL CHECK (duel_type IN ('ranked', 'event', 'room', 'solo', 'other')),
+            notes TEXT NOT NULL DEFAULT '',
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            season_id INTEGER REFERENCES seasons(season_id),
+            own_deck_id INTEGER REFERENCES duel_catalog_entries(entry_id),
+            opponent_deck_id INTEGER REFERENCES duel_catalog_entries(entry_id),
+            CHECK (
+                (entry_origin = 'recording' AND recording_id IS NOT NULL)
+                OR (entry_origin IN ('manual', 'import') AND recording_id IS NULL)
+            )
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO duel_records_v14 (
+            duel_id, recording_id, entry_origin, occurred_at, status, result,
+            play_order, coin_face, own_deck, opponent_deck, duel_type, notes,
+            revision, created_at, updated_at, season_id, own_deck_id, opponent_deck_id
+        )
+        SELECT duel_id, recording_id, entry_origin, occurred_at, status, result,
+               play_order, coin_face, own_deck, opponent_deck, duel_type, notes,
+               revision, created_at, updated_at, season_id, own_deck_id, opponent_deck_id
+        FROM duel_records
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_tags_v14 (
+            duel_id TEXT NOT NULL REFERENCES duel_records_v14(duel_id) ON DELETE RESTRICT,
+            tag TEXT NOT NULL,
+            normalized_tag TEXT NOT NULL,
+            PRIMARY KEY (duel_id, normalized_tag)
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO duel_record_tags_v14 SELECT duel_id, tag, normalized_tag FROM duel_record_tags"
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_changes_v14 (
+            change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            duel_id TEXT NOT NULL REFERENCES duel_records_v14(duel_id) ON DELETE RESTRICT,
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            source TEXT NOT NULL CHECK (source IN ('user', 'system', 'detected', 'import')),
+            before_json TEXT NOT NULL,
+            after_json TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            UNIQUE (duel_id, revision)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO duel_record_changes_v14 (
+            change_id, duel_id, revision, source, before_json, after_json, changed_at
+        )
+        SELECT change_id, duel_id, revision, source, before_json, after_json, changed_at
+        FROM duel_record_changes
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE duel_record_tag_links_v14 (
+            duel_id TEXT NOT NULL REFERENCES duel_records_v14(duel_id) ON DELETE RESTRICT,
+            tag_entry_id INTEGER NOT NULL REFERENCES duel_catalog_entries(entry_id) ON DELETE RESTRICT,
+            PRIMARY KEY (duel_id, tag_entry_id)
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO duel_record_tag_links_v14 SELECT duel_id, tag_entry_id FROM duel_record_tag_links"
+    )
+    connection.execute("DROP TABLE duel_record_tag_links")
+    connection.execute("DROP TABLE duel_record_tags")
+    connection.execute("DROP TABLE duel_record_changes")
+    connection.execute("DROP TABLE duel_records")
+    connection.execute("ALTER TABLE duel_records_v14 RENAME TO duel_records")
+    connection.execute("ALTER TABLE duel_record_tags_v14 RENAME TO duel_record_tags")
+    connection.execute("ALTER TABLE duel_record_changes_v14 RENAME TO duel_record_changes")
+    connection.execute("ALTER TABLE duel_record_tag_links_v14 RENAME TO duel_record_tag_links")
+    connection.execute(
+        "CREATE INDEX duel_records_updated_at_idx ON duel_records(updated_at DESC, duel_id DESC)"
+    )
+    connection.execute("CREATE INDEX duel_records_recording_idx ON duel_records(recording_id)")
+    connection.execute(
+        "CREATE INDEX duel_records_occurred_idx ON duel_records(occurred_at DESC, duel_id DESC)"
+    )
+    connection.execute("CREATE INDEX duel_records_season_idx ON duel_records(season_id)")
+    connection.execute("CREATE INDEX duel_records_own_deck_idx ON duel_records(own_deck_id)")
+    connection.execute(
+        "CREATE INDEX duel_records_opponent_deck_idx ON duel_records(opponent_deck_id)"
+    )
+    connection.execute("CREATE INDEX duel_records_coin_face_idx ON duel_records(coin_face)")
+    connection.execute(
+        "CREATE INDEX duel_record_changes_duel_idx ON duel_record_changes(duel_id, revision DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX duel_record_tag_links_tag_idx ON duel_record_tag_links(tag_entry_id, duel_id)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -622,6 +742,7 @@ _MIGRATIONS: dict[int, Migration] = {
     11: _migrate_to_v11,
     12: _migrate_to_v12,
     13: _migrate_to_v13,
+    14: _migrate_to_v14,
 }
 
 

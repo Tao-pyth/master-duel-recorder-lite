@@ -201,6 +201,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                         11: lambda _connection: None,
                         12: lambda _connection: None,
                         13: lambda _connection: None,
+                        14: lambda _connection: None,
                     },
                 )
 
@@ -560,7 +561,7 @@ if __name__ == "__main__":
                     ).fetchone()[0]
                 )
 
-        self.assertEqual(info.version, 13)
+        self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertNotIn("coin_toss_outcome", columns)
         self.assertNotIn("duel_records_coin_toss_outcome_idx", indexes)
         self.assertEqual(criteria, {"coin_face": "heads"})

@@ -188,7 +188,7 @@ class DuelStatisticsRepository:
                 WHERE duel.status = 'confirmed'
                   AND duel.result IN ('win', 'loss', 'draw')
                   AND (
-                      duel.entry_origin = 'manual'
+                      duel.entry_origin IN ('manual', 'import')
                       OR recording.state = 'completed'
                   )
                   AND NOT EXISTS (

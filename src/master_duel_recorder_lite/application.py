@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 import shutil
+import subprocess
 import threading
 import time
 
@@ -12,6 +13,12 @@ from .auto_recording import (
     AutoRecordingController,
     AutoRecordingEvent,
     AutoRecordingEventAction,
+)
+from .audio_loopback import (
+    ProcessLoopbackController,
+    ProcessLoopbackError,
+    new_audio_pipe_name,
+    process_loopback_capability,
 )
 from .capture_targets import (
     CaptureInput,
@@ -44,6 +51,7 @@ from .data_reconciliation import (
 )
 from .detection import DetectionPolicy, DuelDetectionStateMachine, DuelObservation
 from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
+from .duel_csv import DuelCsvImportResult, DuelCsvPreview, DuelCsvService
 from .duel_start_monitor import MasterDuelStartMonitor
 from .duel_records import (
     DuelRecord,
@@ -112,6 +120,7 @@ from .visual_detection import DetectionCandidate, FrameAnalysis
 from .visual_diagnostics import VisualDiagnosticSession
 from .visual_worker import VisualDetectionStatus
 from .windows_notification import NotificationMessage, WindowsNotificationService
+from .windows_process import subprocess_creation_flags
 
 
 class ApplicationOperationError(RuntimeError):
@@ -162,7 +171,7 @@ class DuelManagementQuery:
             raise ValueError("limitは整数である必要があります")
         if not 1 <= self.limit <= 1000:
             raise ValueError("limitは1から1000である必要があります")
-        if self.entry_origin not in {None, "recording", "manual"}:
+        if self.entry_origin not in {None, "recording", "manual", "import"}:
             raise ValueError(f"未対応の登録元です: {self.entry_origin}")
 
 
@@ -250,6 +259,20 @@ class ActiveSeasonSummary:
 
 
 EventCallback = Callable[[ApplicationEvent], None]
+
+
+def _ffmpeg_peak_level(stderr: str) -> float | None:
+    marker = "Peak level dB:"
+    values: list[float] = []
+    for line in stderr.splitlines():
+        if marker not in line:
+            continue
+        raw = line.rsplit(marker, 1)[1].strip()
+        try:
+            values.append(float(raw))
+        except ValueError:
+            continue
+    return max(values) if values else None
 
 
 class RecorderApplicationService:
@@ -392,6 +415,81 @@ class RecorderApplicationService:
                 "unavailable", "選択した音声入力が見つかりません"
             )
         return test_windows_audio_input(discovery.executable, device)
+
+    def test_process_audio(self) -> AudioInputTestResult:
+        capability = process_loopback_capability()
+        if not capability.supported or capability.helper_path is None:
+            return AudioInputTestResult("unavailable", capability.message)
+        config = self.load_config().config
+        observation = GameWindowMonitor(
+            process_name=config.game_process_name,
+            title_contains=config.game_window_title_contains,
+        ).observe()
+        if observation.process is None:
+            return AudioInputTestResult(
+                "unavailable", "Master Duelを起動してからテストしてください"
+            )
+        discovery = discover_ffmpeg(config.ffmpeg_path)
+        if not discovery.found or discovery.executable is None:
+            return AudioInputTestResult("unavailable", "FFmpegが見つかりません")
+        pipe_name = new_audio_pipe_name("audio-test")
+        controller = ProcessLoopbackController(
+            helper_path=capability.helper_path,
+            process_id=observation.process.pid,
+            pipe_name=pipe_name,
+        )
+        try:
+            controller.start()
+            completed = subprocess.run(
+                [
+                    str(discovery.executable),
+                    "-hide_banner",
+                    "-loglevel",
+                    "info",
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-i",
+                    pipe_name,
+                    "-t",
+                    "3",
+                    "-af",
+                    "astats=metadata=0:reset=0",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=8.0,
+                check=False,
+                creationflags=subprocess_creation_flags(),
+            )
+            if completed.returncode != 0:
+                detail = completed.stderr.strip().splitlines()
+                return AudioInputTestResult(
+                    "unavailable",
+                    "Master Duel単体音声を取得できません: "
+                    + (detail[-1] if detail else f"終了コード{completed.returncode}"),
+                )
+            peak = _ffmpeg_peak_level(completed.stderr)
+            if peak is None or peak <= -90.0:
+                return AudioInputTestResult(
+                    "silent",
+                    "取得経路は正常ですが、3秒間は無音でした。ゲーム音を再生して再確認できます",
+                )
+            return AudioInputTestResult(
+                "available", f"Master Duel単体音声を取得できました（ピーク {peak:.1f} dB）"
+            )
+        except (OSError, ProcessLoopbackError, subprocess.TimeoutExpired) as exc:
+            return AudioInputTestResult("unavailable", f"単体音声テストに失敗しました: {exc}")
+        finally:
+            controller.stop()
 
     def start_recording(self, target: CaptureTarget | None = None) -> RecordingSnapshot:
         with self._lock:
@@ -710,6 +808,19 @@ class RecorderApplicationService:
     def reset_managed_data(self, scope: str) -> ManagedDataResult:
         self._require_data_management_idle()
         return ManagedDataService.from_runtime_paths(self.paths).reset(scope)
+
+    def export_duel_csv(self, path: Path) -> Path:
+        return DuelCsvService(self.paths).export(path)
+
+    def export_duel_csv_sample(self, path: Path) -> Path:
+        return DuelCsvService(self.paths).export_sample(path)
+
+    def preview_duel_csv(self, path: Path) -> DuelCsvPreview:
+        return DuelCsvService(self.paths).preview(path)
+
+    def import_duel_csv(self, preview: DuelCsvPreview) -> DuelCsvImportResult:
+        self._require_data_management_idle()
+        return DuelCsvService(self.paths).apply(preview)
 
     def list_data_backups(self) -> tuple[BackupInfo, ...]:
         return DataProtectionService(self.paths).list_backups()
@@ -1246,6 +1357,8 @@ class RecorderApplicationService:
         diagnostics: VisualDiagnosticSession | None = None
         confirmed_recording_id: str | None = None
         reported_restart_count = 0
+        reserved_audio: ProcessLoopbackController | None = None
+        reserved_audio_reported = False
         try:
             loaded = self.load_config()
             config = loaded.config
@@ -1307,6 +1420,87 @@ class RecorderApplicationService:
                 confirmations=max(2, watch_config.start_confirmations),
                 on_analysis=record_analysis,
             )
+
+            def stop_reserved_audio() -> None:
+                nonlocal reserved_audio
+                if reserved_audio is not None:
+                    reserved_audio.stop()
+                    reserved_audio = None
+
+            def reserve_process_audio(observation: DuelObservation) -> None:
+                nonlocal reserved_audio, reserved_audio_reported
+                if watch_config.audio_mode != "process":
+                    return
+                pid = observation.capture_process_id
+                if pid is None:
+                    stop_reserved_audio()
+                    return
+                if reserved_audio is not None:
+                    if reserved_audio.process_id == pid and reserved_audio.poll() is None:
+                        return
+                    stop_reserved_audio()
+                capability = process_loopback_capability()
+                if not capability.supported or capability.helper_path is None:
+                    return
+                pipe_name = new_audio_pipe_name(f"watch-{pid}")
+                candidate = ProcessLoopbackController(
+                    helper_path=capability.helper_path,
+                    process_id=pid,
+                    pipe_name=pipe_name,
+                )
+                try:
+                    candidate.start()
+                except ProcessLoopbackError as exc:
+                    candidate.stop()
+                    if not reserved_audio_reported:
+                        reserved_audio_reported = True
+                        self._emit(
+                            callback,
+                            ApplicationEvent(
+                                "audio",
+                                f"単体音声を事前待機できません: {exc}。映像のみ継続します",
+                                state="degraded",
+                            ),
+                        )
+                    return
+                reserved_audio = candidate
+                reserved_audio_reported = False
+                self._emit(
+                    callback,
+                    ApplicationEvent(
+                        "audio",
+                        "Master Duel単体音声を事前待機しています",
+                        state="ready",
+                    ),
+                )
+
+            def prepare_automatic_recording(
+                observation: DuelObservation,
+            ) -> PreparedRecording:
+                nonlocal reserved_audio
+                reservation = reserved_audio
+                try:
+                    prepared = prepare_recording(
+                        paths=self.paths,
+                        config=watch_config,
+                        capture_input=_automatic_capture_input(observation),
+                        visual_frame_capture=capture_current_window,
+                        visual_analysis_callback=record_analysis,
+                        visual_source=frame_stream.source_description,
+                        visual_restart_counter=lambda: frame_stream.restart_count,
+                        visual_frame_generation=lambda: frame_stream.generation,
+                        audio_process_id=observation.capture_process_id,
+                        reserved_process_audio=reservation,
+                    )
+                except Exception:
+                    if reservation is not None:
+                        reservation.stop()
+                        reserved_audio = None
+                    raise
+                if reservation is not None:
+                    reserved_audio = None
+                return prepared
+
             controller = AutoRecordingController(
                 state_machine=DuelDetectionStateMachine(
                     DetectionPolicy(
@@ -1318,16 +1512,7 @@ class RecorderApplicationService:
                         automatic_stop=watch_config.auto_stop_recording,
                     )
                 ),
-                recording_factory=lambda observation: prepare_recording(
-                    paths=self.paths,
-                    config=watch_config,
-                    capture_input=_automatic_capture_input(observation),
-                    visual_frame_capture=capture_current_window,
-                    visual_analysis_callback=record_analysis,
-                    visual_source=frame_stream.source_description,
-                    visual_restart_counter=lambda: frame_stream.restart_count,
-                    visual_frame_generation=lambda: frame_stream.generation,
-                ),
+                recording_factory=prepare_automatic_recording,
             )
             self._emit(
                 callback,
@@ -1343,6 +1528,8 @@ class RecorderApplicationService:
                 )
                 if self._watch_stop.is_set():
                     break
+                if controller.current is None:
+                    reserve_process_audio(observation)
                 event = controller.process(observation)
                 if event.action is AutoRecordingEventAction.STARTED:
                     self._transition_operation(
@@ -1517,6 +1704,8 @@ class RecorderApplicationService:
                     diagnostics.transition("watch_stopped_with_active_recording")
                 event = controller.manual_stop()
                 self._emit(callback, _application_event(event))
+            if reserved_audio is not None:
+                reserved_audio.stop()
             self._clear_automatic_snapshot()
             if frame_stream is not None:
                 frame_stream.stop()

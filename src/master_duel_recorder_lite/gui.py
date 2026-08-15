@@ -1668,6 +1668,7 @@ class RecorderGui:
         self.setting_vars = {
             "recorder.ffmpeg_path": tk.StringVar(),
             "recorder.audio_input": tk.StringVar(),
+            "recorder.audio_mode": tk.StringVar(),
             "recorder.audio_gain_db": tk.StringVar(),
             "recorder.audio_sample_rate": tk.StringVar(),
             "recorder.audio_channels": tk.StringVar(),
@@ -1724,6 +1725,22 @@ class RecorderGui:
         )
         audio_row = ttk.Frame(panel, style="Surface.TFrame")
         audio_row.grid(row=4, column=0, columnspan=3, sticky="ew")
+        self.audio_mode_var = tk.StringVar(value="Master Duelのみ（推奨）")
+        self.audio_modes_by_label = {
+            "Master Duelのみ（推奨）": "process",
+            "PC全体": "system",
+            "入力デバイス": "device",
+            "音声なし": "none",
+        }
+        self.audio_mode_combo = ttk.Combobox(
+            audio_row,
+            textvariable=self.audio_mode_var,
+            values=tuple(self.audio_modes_by_label),
+            state="readonly",
+            width=24,
+        )
+        self.audio_mode_combo.pack(side="left", padx=(0, 8))
+        self.audio_mode_combo.bind("<<ComboboxSelected>>", self._audio_mode_selected)
         self.audio_choice_var = tk.StringVar(value="音声なし")
         self.audio_inputs_by_label: dict[str, object] = {}
         self.audio_input_combo = ttk.Combobox(
@@ -1881,6 +1898,50 @@ class RecorderGui:
         self.data_backup_tree.pack(fill="x", pady=(10, 0))
         self.widgets["data_protection_status"] = self.data_protection_status_var
         self.widgets["data_backup_table"] = self.data_backup_tree
+        csv_panel = self._surface(notebook, padding=(20, 18))
+        notebook.add(csv_panel, text="CSV入出力")
+        ttk.Label(csv_panel, text="戦績CSV入出力", style="Heading.TLabel").pack(
+            anchor="w"
+        )
+        ttk.Label(
+            csv_panel,
+            text="スプレッドシートとの移行用です。録画ファイルや設定のバックアップには管理データを使用してください。",
+            style="Muted.TLabel",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 18))
+        csv_actions = ttk.Frame(csv_panel, style="Surface.TFrame")
+        csv_actions.pack(fill="x")
+        ttk.Button(
+            csv_actions,
+            text="CSVを書き出す",
+            command=self.export_duel_csv,
+        ).pack(side="left")
+        ttk.Button(
+            csv_actions,
+            text="CSVを取り込む",
+            style="Primary.TButton",
+            command=self.import_duel_csv,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            csv_actions,
+            text="サンプルCSVを保存",
+            command=self.export_duel_csv_sample,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Separator(csv_panel, orient="horizontal").pack(
+            fill="x", pady=(22, 18)
+        )
+        self.csv_status_var = tk.StringVar(
+            value="取込時は全行を検証し、適用前に追加・更新件数を表示します。"
+        )
+        ttk.Label(
+            csv_panel,
+            textvariable=self.csv_status_var,
+            style="Body.TLabel",
+            justify="left",
+            wraplength=800,
+        ).pack(anchor="w")
+        self.widgets["csv_status"] = self.csv_status_var
         panel.columnconfigure(0, weight=1)
         panel.columnconfigure(1, weight=1)
         panel.columnconfigure(2, weight=1)
@@ -2679,10 +2740,16 @@ class RecorderGui:
 
     def _update_record_audio_status(self, *, active: bool) -> None:
         try:
-            audio_input = self.service.load_config().config.audio_input
+            config = self.service.load_config().config
         except Exception:
             self.record_audio_status_var.set("音声: 設定を確認できません")
             return
+        labels = {
+            "process": "Master Duelのみ",
+            "system": f"PC全体 - {config.audio_input}",
+            "device": f"入力デバイス - {config.audio_input}",
+        }
+        audio_input = labels.get(config.audio_mode, "")
         if not audio_input:
             self.record_audio_status_var.set("音声: 無効（映像のみ）")
         elif active:
@@ -2827,7 +2894,7 @@ class RecorderGui:
                 ("自分デッキ", own_var, tuple(deck_map)),
                 ("相手デッキ", opponent_var, tuple(deck_map)),
                 ("コインの面", coin_face_var, ("すべて", "表", "裏", "未設定")),
-                ("登録元", origin_var, ("すべて", "録画", "手動")),
+                ("登録元", origin_var, ("すべて", "録画", "手動", "取込")),
             ),
             start=1,
         ):
@@ -2856,7 +2923,12 @@ class RecorderGui:
                 coin_face={"すべて": None, "表": "heads", "裏": "tails", "未設定": "unknown"}[
                     coin_face_var.get()
                 ],
-                entry_origin={"すべて": None, "録画": "recording", "手動": "manual"}[
+                entry_origin={
+                    "すべて": None,
+                    "録画": "recording",
+                    "手動": "manual",
+                    "取込": "import",
+                }[
                     origin_var.get()
                 ],
             )
@@ -2987,7 +3059,11 @@ class RecorderGui:
                     duel_type,
                     duration,
                     size,
-                    "手動" if view.entry_origin == "manual" else "録画",
+                    {
+                        "manual": "手動",
+                        "import": "取込",
+                        "recording": "録画",
+                    }.get(view.entry_origin, view.entry_origin),
                 ),
             )
         if previous_id is not None and self.history_tree.exists(previous_id):
@@ -3592,7 +3668,7 @@ class RecorderGui:
             return
         record = data.record
         is_manual = identifier is None or (
-            record is not None and record.entry_origin == "manual"
+            record is not None and record.entry_origin in {"manual", "import"}
         )
         dialog = tk.Toplevel(self.root)
         dialog.title("戦績を簡易入力")
@@ -3691,7 +3767,7 @@ class RecorderGui:
             def operation() -> object:
                 if is_manual:
                     return self.service.create_manual_duel_record(updated, occurred_at=occurred)
-                if record is not None and record.entry_origin == "manual":
+                if record is not None and record.entry_origin in {"manual", "import"}:
                     return self.service.update_duel_record(
                         record.duel_id,
                         updated,
@@ -3907,7 +3983,8 @@ class RecorderGui:
         revision = data.record.revision if data.record is not None else 0
         is_new_manual = identifier is None
         is_manual = is_new_manual or (
-            data.record is not None and data.record.entry_origin == "manual"
+            data.record is not None
+            and data.record.entry_origin in {"manual", "import"}
         )
         recording_id = (
             data.record.recording_id
@@ -4922,6 +4999,106 @@ class RecorderGui:
                 ),
             )
 
+    def export_duel_csv(self) -> None:
+        destination = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="戦績CSVを書き出す",
+            defaultextension=".csv",
+            filetypes=(("CSV", "*.csv"),),
+            initialdir=str(self.service.paths.exports),
+            initialfile=f"mdrl-duels-{date.today()}.csv",
+        )
+        if destination:
+            self.csv_status_var.set("戦績CSVを書き出しています")
+            self._run(
+                lambda: self.service.export_duel_csv(Path(destination)),
+                lambda path: (
+                    self.csv_status_var.set(f"戦績CSVを書き出しました: {path}"),
+                    self._activity(f"戦績CSVを書き出しました: {path}"),
+                ),
+            )
+
+    def export_duel_csv_sample(self) -> None:
+        destination = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="サンプルCSVを保存",
+            defaultextension=".csv",
+            filetypes=(("CSV", "*.csv"),),
+            initialdir=str(self.service.paths.exports),
+            initialfile="mdrl-duels-sample.csv",
+        )
+        if destination:
+            self._run(
+                lambda: self.service.export_duel_csv_sample(Path(destination)),
+                lambda path: self.csv_status_var.set(
+                    f"サンプルCSVを保存しました: {path}"
+                ),
+            )
+
+    def import_duel_csv(self) -> None:
+        source = filedialog.askopenfilename(
+            parent=self.root,
+            title="戦績CSVを取り込む",
+            filetypes=(("CSV", "*.csv"), ("すべてのファイル", "*.*")),
+            initialdir=str(self.service.paths.exports),
+        )
+        if not source:
+            return
+        self.csv_status_var.set("戦績CSVを検証しています")
+        self._run(
+            lambda: self.service.preview_duel_csv(Path(source)),
+            self._confirm_duel_csv_import,
+        )
+
+    def _confirm_duel_csv_import(self, preview: object) -> None:
+        if not preview.valid:
+            details = "\n".join(
+                f"{item.row_number or '-'}行目 [{item.column}] {item.message}"
+                for item in preview.issues[:20]
+            )
+            if len(preview.issues) > 20:
+                details += f"\nほか{len(preview.issues) - 20}件"
+            self.csv_status_var.set(
+                f"CSVに{len(preview.issues)}件のエラーがあります。データは変更していません。"
+            )
+            messagebox.showerror(
+                "戦績CSVの検証エラー",
+                details,
+                parent=self.root,
+            )
+            return
+        summary = (
+            f"新規戦績: {preview.create_count}件\n"
+            f"既存戦績の更新: {preview.update_count}件\n"
+            f"未知IDの再附番: {preview.reassigned_id_count}件\n"
+            f"新規デッキ: {len(preview.new_decks)}件\n"
+            f"新規タグ: {len(preview.new_tags)}件\n"
+            f"新規シーズン: {len(preview.new_seasons)}件\n\n"
+            "適用前に保護バックアップを作成します。取り込みますか？"
+        )
+        self.csv_status_var.set(summary.replace("\n", " / "))
+        if not messagebox.askyesno(
+            "戦績CSV取込プレビュー", summary, parent=self.root
+        ):
+            self.csv_status_var.set("戦績CSVの取り込みをキャンセルしました")
+            return
+        self.csv_status_var.set("戦績CSVを取り込んでいます")
+        self._run(
+            lambda: self.service.import_duel_csv(preview),
+            self._duel_csv_imported,
+        )
+
+    def _duel_csv_imported(self, result: object) -> None:
+        summary = (
+            f"新規{len(result.created_ids)}件、更新{len(result.updated_ids)}件、"
+            f"再附番{len(result.reassigned_ids)}件を取り込みました。"
+        )
+        self.csv_status_var.set(
+            f"{summary} バックアップ: {result.backup_path}"
+        )
+        self._activity(summary)
+        self.refresh_all()
+
     def import_managed_data(self) -> None:
         source = filedialog.askopenfilename(
             parent=self.root,
@@ -5139,6 +5316,7 @@ class RecorderGui:
         values = {
             "recorder.ffmpeg_path": config.ffmpeg_path,
             "recorder.audio_input": config.audio_input,
+            "recorder.audio_mode": config.audio_mode,
             "recorder.audio_gain_db": str(config.audio_gain_db),
             "recorder.audio_sample_rate": str(config.audio_sample_rate),
             "recorder.audio_channels": str(config.audio_channels),
@@ -5159,7 +5337,15 @@ class RecorderGui:
         self.visual_detection_var.set(config.visual_detection_enabled)
         self.windows_notifications_var.set(config.windows_notifications_enabled)
         self.settings_status_var.set("設定を読み込みました")
+        self.audio_mode_var.set(
+            next(
+                label
+                for label, mode in self.audio_modes_by_label.items()
+                if mode == config.audio_mode
+            )
+        )
         self.audio_choice_var.set(config.audio_input or "音声なし")
+        self._audio_mode_selected()
         self.refresh_audio_inputs()
 
     def refresh_audio_inputs(self) -> None:
@@ -5194,7 +5380,14 @@ class RecorderGui:
             mapping[selected_label] = current
             self.audio_input_combo.configure(values=tuple(mapping))
         self.audio_choice_var.set(selected_label)
-        if result.errors:
+        mode = self.audio_modes_by_label.get(self.audio_mode_var.get(), "none")
+        if mode == "process":
+            self.audio_status_var.set(
+                "Master Duelプロセスと子プロセスの音声だけを取得します"
+            )
+        elif mode == "none":
+            self.audio_status_var.set("音声は録音しません")
+        elif result.errors:
             self.audio_status_var.set(result.errors[0])
         elif result.warnings:
             self.audio_status_var.set(result.warnings[0])
@@ -5211,7 +5404,30 @@ class RecorderGui:
             else ""
         )
 
+    def _audio_mode_selected(self, _event: object | None = None) -> None:
+        mode = self.audio_modes_by_label.get(self.audio_mode_var.get(), "none")
+        self.setting_vars["recorder.audio_mode"].set(mode)
+        device_state = "readonly" if mode in {"system", "device"} else "disabled"
+        self.audio_input_combo.configure(state=device_state)
+        if mode == "process":
+            self.audio_status_var.set(
+                "Master Duelプロセスと子プロセスの音声だけを取得します"
+            )
+        elif mode == "none":
+            self.audio_status_var.set("音声は録音しません")
+
     def test_selected_audio_input(self) -> None:
+        mode = self.audio_modes_by_label.get(self.audio_mode_var.get(), "none")
+        if mode == "process":
+            self.audio_status_var.set("Master Duel単体音声を3秒間テスト中です")
+            self._run(
+                self.service.test_process_audio,
+                lambda result: self.audio_status_var.set(result.message),
+            )
+            return
+        if mode == "none":
+            self.audio_status_var.set("音声入力は無効です")
+            return
         self._audio_input_selected()
         identifier = self.setting_vars["recorder.audio_input"].get()
         self.audio_status_var.set("音声入力をテスト中です")
@@ -5221,6 +5437,7 @@ class RecorderGui:
         )
 
     def save_settings(self) -> None:
+        self._audio_mode_selected()
         self._audio_input_selected()
         values = {key: value.get() for key, value in self.setting_vars.items()}
         values["detection.auto_start_recording"] = str(

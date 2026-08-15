@@ -38,7 +38,11 @@ class PreflightTest(unittest.TestCase):
             paths = default_runtime_paths(user_data_dir=root / "user_data")
             report = run_preflight(
                 paths=paths,
-                config=AppConfig(ffmpeg_path=str(executable), audio_input="マイク"),
+                config=AppConfig(
+                    ffmpeg_path=str(executable),
+                    audio_input="マイク",
+                    audio_mode="device",
+                ),
                 config_loaded=True,
                 runner=capable_runner,
                 path_lookup=lambda _command: None,
@@ -111,7 +115,11 @@ class PreflightTest(unittest.TestCase):
             paths = default_runtime_paths(user_data_dir=root / "user_data")
             report = run_preflight(
                 paths=paths,
-                config=AppConfig(ffmpeg_path=str(executable), audio_input="存在しないマイク"),
+                config=AppConfig(
+                    ffmpeg_path=str(executable),
+                    audio_input="存在しないマイク",
+                    audio_mode="device",
+                ),
                 config_loaded=True,
                 runner=capable_runner,
                 platform_name="Windows",
@@ -160,7 +168,11 @@ class PreflightTest(unittest.TestCase):
             paths = default_runtime_paths(user_data_dir=root / "user_data")
             report = run_preflight(
                 paths=paths,
-                config=AppConfig(ffmpeg_path=str(executable), audio_input="マイク"),
+                config=AppConfig(
+                    ffmpeg_path=str(executable),
+                    audio_input="マイク",
+                    audio_mode="device",
+                ),
                 config_loaded=True,
                 runner=runner_without_aac,
                 platform_name="Windows",

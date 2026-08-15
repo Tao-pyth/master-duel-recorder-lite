@@ -17,6 +17,7 @@ class RecordingProfile:
     screen_input_format: str = "gdigrab"
     audio_input: str = ""
     audio_input_format: str = "dshow"
+    audio_mode: str = "none"
     audio_gain_db: float = 0.0
     audio_sample_rate: int = 48_000
     audio_channels: int = 2
@@ -33,6 +34,10 @@ class RecordingProfile:
             raise RecordingProfileError("recording_format は mkv または mp4 である必要があります")
         if self.screen_input_format != "gdigrab" or not self.screen_input:
             raise RecordingProfileError("画面入力は空でないgdigrab入力である必要があります")
+        if self.audio_mode not in {"process", "system", "device", "none"}:
+            raise RecordingProfileError("未対応の音声モードです")
+        if self.audio_mode in {"system", "device"} and not self.audio_input:
+            raise RecordingProfileError("選択した音声モードには入力デバイスが必要です")
         if self.audio_input and self.audio_input_format != "dshow":
             raise RecordingProfileError("音声入力を使う場合はdshowである必要があります")
         if isinstance(self.audio_gain_db, bool) or not isinstance(
@@ -79,11 +84,21 @@ class RecordingProfile:
 
     @property
     def has_audio(self) -> bool:
-        return bool(self.audio_input)
+        return self.audio_mode != "none"
 
     @property
     def extension(self) -> str:
         return f".{self.recording_format}"
+
+    @property
+    def audio_label(self) -> str:
+        if self.audio_mode == "process":
+            return "Master Duelのみ"
+        if self.audio_mode == "system":
+            return f"PC全体: {self.audio_input}"
+        if self.audio_mode == "device":
+            return f"入力デバイス: {self.audio_input}"
+        return ""
 
     @classmethod
     def from_config(cls, config: AppConfig) -> RecordingProfile:
@@ -96,6 +111,7 @@ class RecordingProfile:
                 screen_input_format=config.screen_input_format,
                 audio_input=config.audio_input,
                 audio_input_format=config.audio_input_format,
+                audio_mode=config.audio_mode,
                 audio_gain_db=config.audio_gain_db,
                 audio_sample_rate=config.audio_sample_rate,
                 audio_channels=config.audio_channels,

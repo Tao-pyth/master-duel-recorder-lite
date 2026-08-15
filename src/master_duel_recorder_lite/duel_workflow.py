@@ -79,7 +79,7 @@ class DuelFilterCriteria:
     entry_origin: str | None = None
 
     def normalized(self) -> DuelFilterCriteria:
-        if self.entry_origin not in {None, "recording", "manual"}:
+        if self.entry_origin not in {None, "recording", "manual", "import"}:
             raise DuelWorkflowError("登録元のフィルター値が不正です")
         for value in (self.season_id, self.own_deck_id, self.opponent_deck_id):
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
@@ -176,7 +176,8 @@ class DuelWorkflowService:
         items.extend(
             IncompleteDuel(item.duel_id, "draft", item.occurred_at, item)
             for item in records
-            if item.entry_origin == "manual" and item.values.status != "confirmed"
+            if item.entry_origin in {"manual", "import"}
+            and item.values.status != "confirmed"
         )
         return tuple(sorted(items, key=lambda item: (item.occurred_at, item.identifier)))
 

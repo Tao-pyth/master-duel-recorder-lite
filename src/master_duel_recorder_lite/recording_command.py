@@ -17,6 +17,7 @@ def build_recording_command(
     capture_input: CaptureInput | None = None,
     output_path: Path,
     recordings_root: Path,
+    process_audio_pipe: str | None = None,
 ) -> tuple[str, ...]:
     output = output_path.resolve()
     root = recordings_root.resolve()
@@ -51,7 +52,26 @@ def build_recording_command(
     ]
     command.extend(selected_input.options)
     command.extend(["-i", selected_input.input_name])
-    if profile.has_audio:
+    if profile.audio_mode == "process":
+        if not process_audio_pipe or not process_audio_pipe.startswith("\\\\.\\pipe\\"):
+            raise RecordingCommandError("プロセス音声の名前付きパイプが不正です")
+        command.extend(
+            [
+                "-thread_queue_size",
+                "512",
+                "-use_wallclock_as_timestamps",
+                "1",
+                "-f",
+                "s16le",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-i",
+                process_audio_pipe,
+            ]
+        )
+    elif profile.has_audio:
         command.extend(
             [
                 "-thread_queue_size",

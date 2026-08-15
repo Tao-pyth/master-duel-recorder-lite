@@ -822,6 +822,97 @@ class RecorderApplicationServiceTest(unittest.TestCase):
 
         process.assert_not_called()
 
+    def test_watch_prewarms_process_audio_and_stops_reservation(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        service._operation_state.transition(OperationState.WATCH_STARTING, "開始中")
+        config = AppConfig(audio_mode="process")
+        report = PreflightReport(
+            (PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),)
+        )
+        observation = DuelObservation(
+            DetectionSignal.PRESENT,
+            0.9,
+            "候補",
+            datetime.now(timezone.utc),
+            capture_window_handle=42,
+            capture_process_id=100,
+            capture_window_title="Master Duel",
+            capture_left=0,
+            capture_top=0,
+            capture_width=1920,
+            capture_height=1080,
+        )
+        start_monitor = SimpleNamespace(
+            observe=Mock(return_value=observation),
+            status=VisualDetectionStatus("waiting", "待機中", 0, 0, 0),
+            start_candidate=None,
+        )
+        frame_stream = SimpleNamespace(
+            restart_count=0,
+            source_description="test",
+            capture=Mock(),
+            stop=Mock(),
+        )
+        reserved = Mock(process_id=100)
+        reserved.poll.return_value = None
+        controller = SimpleNamespace(current=None)
+
+        def process(observed: DuelObservation) -> AutoRecordingEvent:
+            service._operation_state.transition(OperationState.STOPPING, "停止中")
+            service._watch_stop.set()
+            return AutoRecordingEvent(
+                AutoRecordingEventAction.NONE,
+                "待機",
+                observed,
+                None,
+            )
+
+        controller.process = Mock(side_effect=process)
+        with (
+            patch.object(
+                service,
+                "load_config",
+                return_value=SimpleNamespace(config=config, config_loaded=True),
+            ),
+            patch("master_duel_recorder_lite.application.run_preflight", return_value=report),
+            patch(
+                "master_duel_recorder_lite.application.discover_ffmpeg",
+                return_value=SimpleNamespace(found=True, executable=Path("ffmpeg.exe")),
+            ),
+            patch("master_duel_recorder_lite.application.GameWindowMonitor"),
+            patch("master_duel_recorder_lite.application.MasterDuelWindowDetector"),
+            patch(
+                "master_duel_recorder_lite.application.PersistentFfmpegRegionFrameCapture",
+                return_value=frame_stream,
+            ),
+            patch("master_duel_recorder_lite.application.VisualDiagnosticSession"),
+            patch(
+                "master_duel_recorder_lite.application.MasterDuelStartMonitor",
+                return_value=start_monitor,
+            ),
+            patch(
+                "master_duel_recorder_lite.application.AutoRecordingController",
+                return_value=controller,
+            ),
+            patch(
+                "master_duel_recorder_lite.application.process_loopback_capability",
+                return_value=SimpleNamespace(
+                    supported=True,
+                    helper_path=Path("mdrl-audio-loopback.exe"),
+                ),
+            ),
+            patch(
+                "master_duel_recorder_lite.application.ProcessLoopbackController",
+                return_value=reserved,
+            ) as controller_type,
+        ):
+            service._watch_stop.clear()
+            service._watch_loop(None)
+
+        reserved.start.assert_called_once_with()
+        reserved.stop.assert_called_once_with()
+        controller_type.assert_called_once()
+
     def test_watch_loop_hands_boundary_to_next_recording_without_waiting(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))
         service._operation_state.transition(OperationState.WATCH_STARTING, "開始中")

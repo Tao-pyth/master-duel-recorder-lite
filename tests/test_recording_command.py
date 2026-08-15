@@ -35,6 +35,7 @@ class RecordingCommandTest(unittest.TestCase):
             profile = RecordingProfile(
                 recording_format="mp4",
                 audio_input="マイク (USB Audio)",
+                audio_mode="device",
                 frame_rate=60,
                 width=1920,
                 height=1080,

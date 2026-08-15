@@ -10,6 +10,7 @@ import shutil
 import tempfile
 
 from .config import AppConfig
+from .audio_loopback import process_loopback_capability
 from .ffmpeg import (
     CommandRunner,
     FfmpegDiscoveryResult,
@@ -223,8 +224,10 @@ def _append_capability_and_input_checks(
     platform_name: str,
 ) -> None:
     required_demuxers = [config.screen_input_format]
-    if config.audio_input:
+    if config.audio_mode in {"system", "device"}:
         required_demuxers.append(config.audio_input_format)
+    elif config.audio_mode == "process":
+        required_demuxers.append("s16le")
 
     try:
         capabilities = probe_ffmpeg_capabilities(executable, runner=runner)
@@ -245,11 +248,13 @@ def _append_capability_and_input_checks(
         required_demuxers=required_demuxers,
         required_encoder=config.video_encoder,
         required_muxer=MUXER_BY_RECORDING_FORMAT[config.recording_format],
-        required_audio_encoder="aac" if config.audio_input else None,
+        required_audio_encoder="aac" if config.audio_mode != "none" else None,
     )
     capability_summary = [config.screen_input_format, config.video_encoder]
-    if config.audio_input:
+    if config.audio_mode in {"system", "device"}:
         capability_summary.extend([config.audio_input_format, "aac"])
+    elif config.audio_mode == "process":
+        capability_summary.extend(["process-loopback", "s16le", "aac"])
     capability_summary.append(config.recording_format)
     checks.append(
         PreflightCheck(
@@ -282,12 +287,20 @@ def _append_capability_and_input_checks(
     warnings = list(enumeration.warnings)
     if not screen_matches:
         errors.append(f"画面入力 {config.screen_input} が見つかりません")
-    if config.audio_input and not audio_matches:
+    if config.audio_mode in {"system", "device"} and not audio_matches:
         errors.append(f"音声入力 {config.audio_input} が見つかりません")
-    if not config.audio_input:
+    if config.audio_mode == "process":
+        process_audio = process_loopback_capability()
+        if process_audio.supported:
+            warnings.append(process_audio.message)
+        else:
+            warnings.append(
+                f"Master Duel単体音声は利用できません: {process_audio.message}。映像のみ継続できます"
+            )
+    if config.audio_mode == "none":
         warnings.append("音声入力は無効です")
     if enumeration.errors:
-        if config.audio_input:
+        if config.audio_mode in {"system", "device"}:
             errors.extend(enumeration.errors)
         else:
             warnings.extend(enumeration.errors)

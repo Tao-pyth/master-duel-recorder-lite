@@ -41,6 +41,18 @@ class ProcessHandle(Protocol):
     def kill(self) -> None: ...
 
 
+class AuxiliaryAudioProcess(Protocol):
+    @property
+    def warning(self) -> str | None: ...
+
+    @property
+    def diagnostics(self) -> tuple[str, ...]: ...
+
+    def start(self) -> None: ...
+    def poll(self) -> str | None: ...
+    def stop(self) -> None: ...
+
+
 ProcessFactory = Callable[..., ProcessHandle]
 Clock = Callable[[], datetime]
 MonotonicClock = Callable[[], float]
@@ -87,6 +99,9 @@ class RecordingSession:
         output_stall_timeout_seconds: float = 30.0,
         clock: Clock | None = None,
         monotonic_clock: MonotonicClock | None = None,
+        auxiliary_audio: AuxiliaryAudioProcess | None = None,
+        fallback_command: Sequence[str] | None = None,
+        initial_audio_warning: str | None = None,
     ) -> None:
         if startup_grace_seconds < 0:
             raise ValueError("startup_grace_seconds は0以上である必要があります")
@@ -110,6 +125,15 @@ class RecordingSession:
         self._result: RecordingResult | None = None
         self._last_output_size = 0
         self._last_output_growth_at: float | None = None
+        self._auxiliary_audio = auxiliary_audio
+        self._fallback_command = tuple(fallback_command) if fallback_command else None
+        self._audio_warning = initial_audio_warning
+        if initial_audio_warning:
+            self._append_diagnostic(initial_audio_warning)
+
+    @property
+    def audio_warning(self) -> str | None:
+        return self._audio_warning
 
     @property
     def result(self) -> RecordingResult | None:
@@ -141,6 +165,20 @@ class RecordingSession:
         if self.output_path.exists():
             self._fail("録画保存先が既に存在します", returncode=None)
             return self.state
+
+        if self._auxiliary_audio is not None:
+            try:
+                self._auxiliary_audio.start()
+            except Exception as exc:
+                self._audio_warning = (
+                    f"Master Duel単体音声を開始できません: {exc}。映像のみ録画します"
+                )
+                self._append_diagnostic(self._audio_warning)
+                self._stop_auxiliary_audio()
+                if self._fallback_command is None:
+                    self._fail(self._audio_warning, returncode=None)
+                    return self.state
+                self.command = self._fallback_command
 
         try:
             configure_windows_process_errors()
@@ -190,6 +228,7 @@ class RecordingSession:
         if returncode is not None:
             self._finalize(returncode, early_exit=self.state is RecordingState.STARTING)
         elif self.state is RecordingState.RECORDING:
+            self._poll_auxiliary_audio()
             self._check_output_growth()
         return self.state
 
@@ -291,6 +330,7 @@ class RecordingSession:
         self._fail("FFmpegの出力が停止したため録画を終了しました", returncode=returncode)
 
     def _finalize(self, returncode: int, *, early_exit: bool) -> None:
+        self._stop_auxiliary_audio()
         self._join_stderr_reader()
         self._close_process_streams()
         size_bytes = self.output_path.stat().st_size if self.output_path.is_file() else 0
@@ -316,6 +356,7 @@ class RecordingSession:
         )
 
     def _fail(self, error: str, *, returncode: int | None) -> None:
+        self._stop_auxiliary_audio()
         self._join_stderr_reader()
         self._close_process_streams()
         self.state = RecordingState.FAILED
@@ -345,3 +386,27 @@ class RecordingSession:
                 stream.close()
             except (OSError, ValueError):
                 pass
+
+    def _poll_auxiliary_audio(self) -> None:
+        if self._auxiliary_audio is None or self._audio_warning is not None:
+            return
+        try:
+            warning = self._auxiliary_audio.poll()
+        except Exception as exc:
+            warning = f"Master Duel単体音声の状態確認に失敗しました: {exc}"
+        if warning:
+            self._audio_warning = warning
+            self._append_diagnostic(warning)
+
+    def _stop_auxiliary_audio(self) -> None:
+        auxiliary = self._auxiliary_audio
+        if auxiliary is None:
+            return
+        self._poll_auxiliary_audio()
+        try:
+            auxiliary.stop()
+        except Exception as exc:
+            self._append_diagnostic(f"音声ヘルパーを停止できません: {exc}")
+        for line in auxiliary.diagnostics:
+            self._append_diagnostic(f"音声: {line}")
+        self._auxiliary_audio = None

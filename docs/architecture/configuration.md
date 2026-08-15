@@ -60,7 +60,7 @@ auto_create_user_data = true
 
 初心者向けに言うと、ここでは「録画に使うFFmpegの場所」「録画ファイル形式」「画面と音声の入力元」「映像エンコーダー」「ゲーム監視と自動録画の条件」「アップロード準備時の公開範囲」「必要なフォルダを自動作成するか」を扱います。
 
-`audio_input` が空文字の場合は音声録画を無効として扱います。利用可能な音声入力名はGUIの更新または `python -m master_duel_recorder_lite list-inputs` で確認し、識別子をそのまま設定します。V0.17.0は`dshow`入力を1つだけ使用し、複数入力のミックスは行いません。`audio_gain_db`、`audio_sample_rate`、`audio_channels`で音量、サンプルレート、チャンネル数を検証します。現在は画面入力方式をWindowsの `gdigrab`、音声入力方式を `dshow` に限定します。詳細は[音声入力設計](audio-input.md)を参照してください。
+`audio_mode`は`process`、`system`、`device`、`none`のいずれかです。`process`はMaster DuelのPIDをWindows Process Loopbackへ渡し、`system`と`device`は`audio_input`で指定したDirectShow入力を使用します。旧設定に`audio_input`があり`audio_mode`がない場合は`device`へ移行し、設定を失いません。`audio_gain_db`、`audio_sample_rate`、`audio_channels`で音量、サンプルレート、チャンネル数を検証します。詳細は[音声入力設計](audio-input.md)を参照してください。
 
 GUIでFFmpegを導入した場合、実行ファイルを既定では`%LOCALAPPDATA%\MasterDuelRecorderLite\tools\ffmpeg\bin\ffmpeg.exe`へ置き、その絶対パスを`recorder.ffmpeg_path`へ保存します。導入処理の詳細と保護規則は[FFmpeg初回セットアップ](ffmpeg-setup.md)を参照してください。
 

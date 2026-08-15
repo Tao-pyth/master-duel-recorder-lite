@@ -6,12 +6,12 @@ V0.12.0ではPythonを導入していない利用者向けに、Windows 10/11 x6
 
 ## 同梱範囲
 
-EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lite`パッケージをPyInstallerで単一ファイルへまとめます。FFmpegとffprobeは同梱しません。理由は配布サイズ、ライセンス表示、脆弱性修正、利用者ごとのエンコーダー要件をPythonアプリと分離するためです。
+EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lite`パッケージをPyInstallerで単一ファイルへまとめます。V0.26.0からx64 Releaseの`mdrl-audio-loopback.exe`と`THIRD_PARTY_NOTICES.md`も同梱します。ヘルパーはVisual C++静的ランタイムを使用し、追加ランタイム導入を要求しません。FFmpegとffprobeは同梱しません。理由は配布サイズ、ライセンス表示、脆弱性修正、利用者ごとのエンコーダー要件をPythonアプリと分離するためです。
 
 ビルド依存はPyInstaller 6.21.0とpyinstaller-hooks-contrib 2026.6へ固定します。Windows実行ファイルはWindows上でのみ生成し、UPXは使用しません。EXEには次のWindowsリソースを埋め込みます。
 
-- FileVersion: `0.18.0.0`
-- ProductVersion: `0.18.0`
+- FileVersion: ビルド対象の`X.Y.Z.0`
+- ProductVersion: ビルド対象の`X.Y.Z`
 - ProductName: `master-duel-recorder-lite`
 - OriginalFilename: `master-duel-recorder-lite.exe`
 
@@ -35,8 +35,8 @@ V0.16.0以前のEXE隣接`user_data/`は自動で移動、削除、上書きし�
 python -m pip install -e ".[build,dev]"
 python -W error::ResourceWarning -m unittest discover -s tests
 python scripts/build_windows_exe.py
-.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.22.0
-.\scripts\smoke_windows_gui.ps1 -ExePath .\dist\master-duel-recorder-lite-gui.exe -ExpectedVersion 0.22.0
+.\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 0.26.0
+.\scripts\smoke_windows_gui.ps1 -ExePath .\dist\master-duel-recorder-lite-gui.exe -ExpectedVersion 0.26.0
 ```
 
 CLIスモークは`--version`、`--help`、`config show --json`を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。両EXEを一時フォルダへコピーして起動し、EXE隣接`user_data/`を作成せず、既定パスが分離した`LOCALAPPDATA`配下になることを確認します。読取操作だけではその既定パスも作成しません。
@@ -46,8 +46,8 @@ CLIスモークは`--version`、`--help`、`config show --json`を検証しま�
 `vX.Y.Z`タグをpushするとWindows runnerで次を順に実行します。
 
 1. タグ、`pyproject.toml`、`__version__`の一致検証
-2. Ruffと全単体テスト
-3. one-file EXEビルドと実EXEスモーク
+2. Ruff、ネイティブ音声ヘルパーのx64ビルド・probe、全単体テスト
+3. ヘルパーと第三者ライセンス表示を含むone-file EXEビルドと実EXEスモーク
 4. SHA-256ファイル生成
 5. GitHub artifact attestationによるbuild provenance作成
 6. EXEとSHA-256をGitHub Releaseへ公開

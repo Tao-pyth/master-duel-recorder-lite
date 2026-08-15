@@ -9,6 +9,8 @@ venv/
 build/
 dist/
 *.egg-info/
+native/**/bin/
+native/**/obj/
 
 # Local runtime data
 user_data/

@@ -66,7 +66,102 @@ class FakeProcess:
         self.killed = True
 
 
+class FakeAuxiliaryAudio:
+    def __init__(self, *, start_error: Exception | None = None, warning: str | None = None) -> None:
+        self.start_error = start_error
+        self.warning = warning
+        self.diagnostics = ("event=ready",)
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        self.started = True
+        if self.start_error is not None:
+            raise self.start_error
+
+    def poll(self) -> str | None:
+        return self.warning
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
 class RecordingSessionTest(unittest.TestCase):
+    def test_auxiliary_audio_starts_before_ffmpeg_and_stops_with_recording(self) -> None:
+        events: list[str] = []
+        auxiliary = FakeAuxiliaryAudio()
+        original_start = auxiliary.start
+
+        def start_audio() -> None:
+            events.append("audio")
+            original_start()
+
+        auxiliary.start = start_audio  # type: ignore[method-assign]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = Path(tmp_dir) / "recording.mkv"
+            process = FakeProcess(output_path=output)
+
+            def process_factory(*_args: object, **_kwargs: object) -> FakeProcess:
+                events.append("ffmpeg")
+                return process
+
+            session = RecordingSession(
+                command=("ffmpeg", "with-audio"),
+                output_path=output,
+                process_factory=process_factory,
+                startup_grace_seconds=0,
+                auxiliary_audio=auxiliary,
+            )
+            session.start()
+            session.stop()
+
+        self.assertEqual(events, ["audio", "ffmpeg"])
+        self.assertTrue(auxiliary.stopped)
+        self.assertIn("音声: event=ready", session.diagnostics)
+
+    def test_audio_start_failure_uses_video_only_fallback(self) -> None:
+        commands: list[tuple[str, ...]] = []
+        auxiliary = FakeAuxiliaryAudio(start_error=RuntimeError("activation failed"))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = Path(tmp_dir) / "recording.mkv"
+
+            def process_factory(command: tuple[str, ...], **_kwargs: object) -> FakeProcess:
+                commands.append(tuple(command))
+                return FakeProcess(output_path=output)
+
+            session = RecordingSession(
+                command=("ffmpeg", "with-audio"),
+                fallback_command=("ffmpeg", "video-only"),
+                output_path=output,
+                process_factory=process_factory,
+                startup_grace_seconds=0,
+                auxiliary_audio=auxiliary,
+            )
+            self.assertIs(session.start(), RecordingState.RECORDING)
+            result = session.stop()
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(commands, [("ffmpeg", "video-only")])
+        self.assertIn("映像のみ録画", session.audio_warning or "")
+
+    def test_audio_runtime_failure_is_warning_and_video_continues(self) -> None:
+        auxiliary = FakeAuxiliaryAudio(warning="音声が停止しました。映像録画は継続します")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = Path(tmp_dir) / "recording.mkv"
+            process = FakeProcess(output_path=output)
+            session = RecordingSession(
+                command=("ffmpeg",),
+                output_path=output,
+                process_factory=lambda *_args, **_kwargs: process,
+                startup_grace_seconds=0,
+                auxiliary_audio=auxiliary,
+            )
+            session.start()
+            self.assertIs(session.poll(), RecordingState.RECORDING)
+            result = session.stop()
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(session.audio_warning, auxiliary.warning)
     def test_start_uses_hidden_windows_process_settings(self) -> None:
         captured_kwargs: dict[str, object] = {}
 
