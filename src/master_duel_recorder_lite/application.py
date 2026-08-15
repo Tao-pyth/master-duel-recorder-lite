@@ -155,7 +155,6 @@ class DuelManagementQuery:
     opponent_deck_id: int | None = None
     tag_entry_ids: tuple[int, ...] = ()
     coin_face: str | None = None
-    coin_toss_outcome: str | None = None
     entry_origin: str | None = None
 
     def __post_init__(self) -> None:
@@ -221,14 +220,6 @@ class RecordingHistoryView:
     def coin_face(self) -> str:
         return (
             self.duel_record.values.coin_face
-            if self.duel_record is not None
-            else "unknown"
-        )
-
-    @property
-    def coin_toss_outcome(self) -> str:
-        return (
-            self.duel_record.values.coin_toss_outcome
             if self.duel_record is not None
             else "unknown"
         )
@@ -665,7 +656,6 @@ class RecorderApplicationService:
                     selected.own_deck_id,
                     selected.opponent_deck_id,
                     selected.coin_face,
-                    selected.coin_toss_outcome,
                 )
             ) or selected.tag_entry_ids:
                 if record is None:
@@ -688,8 +678,6 @@ class RecorderApplicationService:
             ):
                 return False
             if selected.coin_face is not None and values.coin_face != selected.coin_face:
-                return False
-            if selected.coin_toss_outcome is not None and values.coin_toss_outcome != selected.coin_toss_outcome:
                 return False
             if selected.tag_entry_ids:
                 wanted = {tag_names[item] for item in selected.tag_entry_ids if item in tag_names}

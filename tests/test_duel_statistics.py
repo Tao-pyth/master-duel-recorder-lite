@@ -55,7 +55,6 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         state: str = "completed",
         season_id: int | None = None,
         coin_face: str = "unknown",
-        coin_toss_outcome: str = "unknown",
     ) -> None:
         self.history.register_starting(
             recording_id=recording_id,
@@ -76,7 +75,6 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
                 result=result,
                 play_order=play_order,
                 coin_face=coin_face,
-                coin_toss_outcome=coin_toss_outcome,
                 own_deck=deck,
                 opponent_deck=opponent_deck,
                 tags=tags,
@@ -237,27 +235,22 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
             [item.label for item in dashboard.by_deck_play_order], ["青眼 後攻時"]
         )
 
-    def test_coin_filters_and_breakdowns_are_independent(self) -> None:
+    def test_coin_face_filter_and_breakdown(self) -> None:
         base = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
         self._record(
             "heads-loss-second", occurred_at=base, result="win", play_order="second",
-            deck="青眼", coin_face="heads", coin_toss_outcome="loss",
+            deck="青眼", coin_face="heads",
         )
         self._record(
             "tails-win-first", occurred_at=base, result="loss", play_order="first",
-            deck="青眼", coin_face="tails", coin_toss_outcome="win",
+            deck="青眼", coin_face="tails",
         )
 
-        dashboard = self.statistics.dashboard(
-            StatisticsFilter(coin_face="heads", coin_toss_outcome="loss")
-        )
+        dashboard = self.statistics.dashboard(StatisticsFilter(coin_face="heads"))
 
         self.assertEqual(dashboard.filtered.matches, 1)
         self.assertEqual(dashboard.filtered.wins, 1)
         self.assertEqual([item.label for item in dashboard.by_coin_face], ["表"])
-        self.assertEqual(
-            [item.label for item in dashboard.by_coin_toss_outcome], ["コイントス負け"]
-        )
 
     def test_filter_validation_rejects_invalid_ranges_and_choices(self) -> None:
         with self.assertRaises(ValueError):

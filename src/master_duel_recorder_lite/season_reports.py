@@ -232,11 +232,6 @@ def _deck_orders(
 def _axes(rows: tuple[StatisticsRow, ...]) -> tuple[ReportAxisBreakdown, ...]:
     definitions = (
         ("coin_face", "コイン", (("heads", "表"), ("tails", "裏"), ("unknown", "未設定"))),
-        (
-            "coin_toss_outcome",
-            "コイントス勝敗",
-            (("win", "勝ち"), ("loss", "負け"), ("unknown", "未設定")),
-        ),
         ("play_order", "先後", (("first", "先攻"), ("second", "後攻"), ("unknown", "未設定"))),
         ("result", "最終勝敗", (("win", "勝ち"), ("loss", "負け"), ("draw", "引分"))),
     )

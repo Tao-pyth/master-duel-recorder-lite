@@ -42,7 +42,6 @@ RESET_SCOPES = {"history", "decks", "tags", "seasons", "all"}
 LEGACY_DEFAULTS = {
     "duel_records": {
         "coin_face": "unknown",
-        "coin_toss_outcome": "unknown",
     },
     "seasons": {
         "report_goal": "",
@@ -56,6 +55,21 @@ LEGACY_DEFAULTS = {
 
 class ManagedDataError(RuntimeError):
     """管理データを安全に入出力または初期化できない場合のエラーです。"""
+
+
+def _without_legacy_coin_outcome(raw: object) -> str:
+    try:
+        document = json.loads(str(raw))
+    except json.JSONDecodeError as exc:
+        raise ManagedDataError("管理データ内のJSON列が不正です") from exc
+    if isinstance(document, dict):
+        document.pop("coin_toss_outcome", None)
+    return json.dumps(
+        document,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 @dataclass(frozen=True)
@@ -225,6 +239,15 @@ class ManagedDataService:
                 if any(not isinstance(key, str) for key in row):
                     raise ManagedDataError(f"{table}の列名が不正です")
                 item = dict(row)
+                if table == "duel_records":
+                    item.pop("coin_toss_outcome", None)
+                if table == "duel_record_changes":
+                    for column in ("before_json", "after_json"):
+                        item[column] = _without_legacy_coin_outcome(item[column])
+                if table == "saved_duel_filters":
+                    item["criteria_json"] = _without_legacy_coin_outcome(
+                        item["criteria_json"]
+                    )
                 if table == "duel_records" and "duel_id" not in item:
                     recording_id = str(item.get("recording_id") or "")
                     item["duel_id"] = recording_id

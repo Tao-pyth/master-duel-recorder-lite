@@ -27,7 +27,6 @@ class DuelRecordRepositoryTest(unittest.TestCase):
         self.assertEqual(duel_choice_label("result", "win"), "勝ち")
         self.assertEqual(duel_choice_label("play_order", "first"), "先攻")
         self.assertEqual(duel_choice_label("coin_face", "heads"), "表")
-        self.assertEqual(duel_choice_label("coin_toss_outcome", "loss"), "負け")
         self.assertEqual(duel_choice_label("duel_type", "ranked"), "ランク戦")
         self.assertEqual(duel_choice_value("result", "負け"), "loss")
         self.assertEqual(
@@ -136,21 +135,19 @@ class DuelRecordRepositoryTest(unittest.TestCase):
         self.assertEqual(edited.values.notes, "修正済み")
         self.assertEqual(edited.revision, 3)
 
-    def test_coin_face_outcome_and_play_order_are_independent_and_audited(self) -> None:
+    def test_coin_face_and_play_order_are_independent_and_audited(self) -> None:
         saved = self.repository.save(
             "recording-1",
             DuelRecordValues(
                 status="confirmed",
                 play_order="second",
                 coin_face="heads",
-                coin_toss_outcome="loss",
             ),
             expected_revision=0,
         )
 
         self.assertEqual(saved.values.play_order, "second")
         self.assertEqual(saved.values.coin_face, "heads")
-        self.assertEqual(saved.values.coin_toss_outcome, "loss")
         self.assertEqual(self.repository.changes("recording-1")[0].after["coin_face"], "heads")
 
     def test_manual_record_has_duel_id_without_recording_row_and_can_change_date(self) -> None:

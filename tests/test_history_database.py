@@ -1,4 +1,5 @@
 from contextlib import closing
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -199,6 +200,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                         10: lambda _connection: None,
                         11: lambda _connection: None,
                         12: lambda _connection: None,
+                        13: lambda _connection: None,
                     },
                 )
 
@@ -414,7 +416,7 @@ class HistoryDatabaseTest(unittest.TestCase):
         self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(entries, [("deck", "烙印"), ("deck", "青眼"), ("tag", "大会")])
 
-    def test_version_eight_adds_unknown_coin_fields_without_changing_records(self) -> None:
+    def test_version_eight_adds_unknown_coin_face_without_changing_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "history.sqlite3"
             with closing(sqlite3.connect(path)) as connection, connection:
@@ -452,7 +454,7 @@ class HistoryDatabaseTest(unittest.TestCase):
             with closing(sqlite3.connect(path)) as connection:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_records)")}
                 migrated = connection.execute(
-                    "SELECT result, play_order, coin_face, coin_toss_outcome "
+                    "SELECT result, play_order, coin_face "
                     "FROM duel_records WHERE recording_id = 'legacy'"
                 ).fetchone()
             assert info.backup_path is not None
@@ -462,8 +464,9 @@ class HistoryDatabaseTest(unittest.TestCase):
                 ).fetchone()[0]
 
         self.assertEqual(info.version, CURRENT_SCHEMA_VERSION)
-        self.assertTrue({"duel_id", "coin_face", "coin_toss_outcome"}.issubset(columns))
-        self.assertEqual(migrated, ("win", "first", "unknown", "unknown"))
+        self.assertTrue({"duel_id", "coin_face"}.issubset(columns))
+        self.assertNotIn("coin_toss_outcome", columns)
+        self.assertEqual(migrated, ("win", "first", "unknown"))
         self.assertEqual(backup_version, 8)
 
     def test_version_five_adds_catalog_attributes_and_stable_tag_links(self) -> None:
@@ -518,3 +521,46 @@ class HistoryDatabaseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+    def test_version_thirteen_removes_redundant_outcome_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "history.sqlite3"
+            initialize_history_database(path)
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "ALTER TABLE duel_records ADD COLUMN coin_toss_outcome TEXT NOT NULL DEFAULT 'unknown'"
+                )
+                connection.execute(
+                    "CREATE INDEX duel_records_coin_toss_outcome_idx "
+                    "ON duel_records(coin_toss_outcome)"
+                )
+                connection.execute(
+                    "INSERT INTO saved_duel_filters "
+                    "(filter_id, name, normalized_name, criteria_json, created_at, updated_at) "
+                    "VALUES ('legacy', 'legacy', 'legacy', ?, 'now', 'now')",
+                    (json.dumps({"coin_toss_outcome": "win", "coin_face": "heads"}),),
+                )
+                connection.execute(
+                    "UPDATE schema_version SET version = 12 WHERE singleton = 1"
+                )
+                connection.execute("PRAGMA user_version = 12")
+
+            info = initialize_history_database(path)
+            with closing(sqlite3.connect(path)) as connection:
+                columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(duel_records)")
+                }
+                indexes = {
+                    row[1]
+                    for row in connection.execute("PRAGMA index_list(duel_records)")
+                }
+                criteria = json.loads(
+                    connection.execute(
+                        "SELECT criteria_json FROM saved_duel_filters WHERE filter_id = 'legacy'"
+                    ).fetchone()[0]
+                )
+
+        self.assertEqual(info.version, 13)
+        self.assertNotIn("coin_toss_outcome", columns)
+        self.assertNotIn("duel_records_coin_toss_outcome_idx", indexes)
+        self.assertEqual(criteria, {"coin_face": "heads"})

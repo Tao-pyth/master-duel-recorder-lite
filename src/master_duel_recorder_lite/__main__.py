@@ -26,7 +26,6 @@ from .config_management import (
 )
 from .duel_records import (
     COIN_FACES,
-    COIN_TOSS_OUTCOMES,
     DUEL_TYPES,
     PLAY_ORDERS,
     RESULTS,
@@ -306,11 +305,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--play-order", choices=sorted(PLAY_ORDERS), default="unknown"
     )
     duel_create.add_argument("--coin-face", choices=sorted(COIN_FACES), default="unknown")
-    duel_create.add_argument(
-        "--coin-toss-outcome",
-        choices=sorted(COIN_TOSS_OUTCOMES),
-        default="unknown",
-    )
     duel_create.add_argument("--own-deck", default="")
     duel_create.add_argument("--opponent-deck", default="")
     duel_create.add_argument("--duel-type", choices=sorted(DUEL_TYPES), default="other")
@@ -328,9 +322,6 @@ def build_parser() -> argparse.ArgumentParser:
     duel_set.add_argument("--result", choices=sorted(RESULTS), default=None)
     duel_set.add_argument("--play-order", choices=sorted(PLAY_ORDERS), default=None)
     duel_set.add_argument("--coin-face", choices=sorted(COIN_FACES), default=None)
-    duel_set.add_argument(
-        "--coin-toss-outcome", choices=sorted(COIN_TOSS_OUTCOMES), default=None
-    )
     duel_set.add_argument("--own-deck", default=None)
     duel_set.add_argument("--opponent-deck", default=None)
     duel_set.add_argument("--duel-type", choices=sorted(DUEL_TYPES), default=None)
@@ -1093,7 +1084,6 @@ def _run_duel_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
                     result=args.result,
                     play_order=args.play_order,
                     coin_face=args.coin_face,
-                    coin_toss_outcome=args.coin_toss_outcome,
                     own_deck=args.own_deck,
                     opponent_deck=args.opponent_deck,
                     duel_type=args.duel_type,
@@ -1128,9 +1118,6 @@ def _run_duel_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
                 coin_face=args.coin_face
                 if args.coin_face is not None
                 else base.coin_face,
-                coin_toss_outcome=args.coin_toss_outcome
-                if args.coin_toss_outcome is not None
-                else base.coin_toss_outcome,
                 own_deck=args.own_deck if args.own_deck is not None else base.own_deck,
                 opponent_deck=(
                     args.opponent_deck
@@ -1208,7 +1195,6 @@ def _print_duel_record(record: object, *, as_json: bool) -> None:
     print(f"result: {document['result']}")
     print(f"play order: {document['play_order']}")
     print(f"coin face: {document['coin_face']}")
-    print(f"coin toss outcome: {document['coin_toss_outcome']}")
     print(f"own deck: {document['own_deck'] or '-'}")
     print(f"opponent deck: {document['opponent_deck'] or '-'}")
     print(f"duel type: {document['duel_type']}")

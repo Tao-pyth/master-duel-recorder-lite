@@ -14,7 +14,6 @@ from .runtime_paths import RuntimePaths
 GRANULARITIES = {"day", "week", "month"}
 PLAY_ORDER_FILTERS = {"first", "second"}
 COIN_FACE_FILTERS = {"heads", "tails", "unknown"}
-COIN_TOSS_OUTCOME_FILTERS = {"win", "loss", "unknown"}
 
 
 @dataclass(frozen=True)
@@ -25,7 +24,6 @@ class StatisticsFilter:
     tag_entry_id: int | None = None
     play_order: str | None = None
     coin_face: str | None = None
-    coin_toss_outcome: str | None = None
     season_id: int | None = None
     season_unassigned: bool = False
 
@@ -48,13 +46,6 @@ class StatisticsFilter:
             raise ValueError(f"未対応の先後条件です: {self.play_order}")
         if self.coin_face is not None and self.coin_face not in COIN_FACE_FILTERS:
             raise ValueError(f"未対応のコインの面です: {self.coin_face}")
-        if (
-            self.coin_toss_outcome is not None
-            and self.coin_toss_outcome not in COIN_TOSS_OUTCOME_FILTERS
-        ):
-            raise ValueError(
-                f"未対応のコイントス勝敗です: {self.coin_toss_outcome}"
-            )
         if self.season_id is not None and (
             isinstance(self.season_id, bool)
             or not isinstance(self.season_id, int)
@@ -101,7 +92,6 @@ class StatisticsDashboard:
     by_play_order: tuple[StatisticsBreakdown, ...]
     by_deck_play_order: tuple[StatisticsBreakdown, ...]
     by_coin_face: tuple[StatisticsBreakdown, ...]
-    by_coin_toss_outcome: tuple[StatisticsBreakdown, ...]
     trend: tuple[StatisticsTrendPoint, ...]
     filters: StatisticsFilter
     granularity: str
@@ -113,7 +103,6 @@ class _StatisticsRow:
     result: str
     play_order: str
     coin_face: str
-    coin_toss_outcome: str
     own_deck: str
     own_deck_id: int | None
     season_id: int | None
@@ -155,7 +144,6 @@ class DuelStatisticsRepository:
             by_play_order=_breakdown_by_play_order(filtered_rows),
             by_deck_play_order=_breakdown_by_deck_play_order(filtered_rows),
             by_coin_face=_breakdown_by_coin_face(filtered_rows),
-            by_coin_toss_outcome=_breakdown_by_coin_toss_outcome(filtered_rows),
             trend=_trend(filtered_rows, selected, granularity),
             filters=selected,
             granularity=granularity,
@@ -191,7 +179,6 @@ class DuelStatisticsRepository:
                     duel.result,
                     duel.play_order,
                     duel.coin_face,
-                    duel.coin_toss_outcome,
                     duel.own_deck,
                     duel.own_deck_id,
                     duel.season_id
@@ -220,7 +207,6 @@ class DuelStatisticsRepository:
                 result=str(row["result"]),
                 play_order=str(row["play_order"]),
                 coin_face=str(row["coin_face"]),
-                coin_toss_outcome=str(row["coin_toss_outcome"]),
                 own_deck=str(row["own_deck"]),
                 own_deck_id=row["own_deck_id"],
                 season_id=row["season_id"],
@@ -240,11 +226,6 @@ def _matches(row: _StatisticsRow, filters: StatisticsFilter) -> bool:
     if filters.play_order is not None and row.play_order != filters.play_order:
         return False
     if filters.coin_face is not None and row.coin_face != filters.coin_face:
-        return False
-    if (
-        filters.coin_toss_outcome is not None
-        and row.coin_toss_outcome != filters.coin_toss_outcome
-    ):
         return False
     if filters.season_id is not None and row.season_id != filters.season_id:
         return False
@@ -323,13 +304,6 @@ def _breakdown_by_coin_face(
 ) -> tuple[StatisticsBreakdown, ...]:
     labels = {"heads": "表", "tails": "裏", "unknown": "未設定"}
     return _breakdown_by_choice(rows, "coin_face", labels)
-
-
-def _breakdown_by_coin_toss_outcome(
-    rows: tuple[_StatisticsRow, ...],
-) -> tuple[StatisticsBreakdown, ...]:
-    labels = {"win": "コイントス勝ち", "loss": "コイントス負け", "unknown": "未設定"}
-    return _breakdown_by_choice(rows, "coin_toss_outcome", labels)
 
 
 def _breakdown_by_choice(

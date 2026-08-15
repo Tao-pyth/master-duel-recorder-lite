@@ -17,7 +17,6 @@ STATUSES = {"draft", "confirmed"}
 RESULTS = {"win", "loss", "draw", "unknown"}
 PLAY_ORDERS = {"first", "second", "unknown"}
 COIN_FACES = {"heads", "tails", "unknown"}
-COIN_TOSS_OUTCOMES = {"win", "loss", "unknown"}
 DUEL_TYPES = {"ranked", "event", "room", "solo", "other"}
 SOURCES = {"user", "system", "detected"}
 DUEL_CHOICE_LABELS = {
@@ -40,11 +39,6 @@ DUEL_CHOICE_LABELS = {
         "unknown": "未設定",
         "heads": "表",
         "tails": "裏",
-    },
-    "coin_toss_outcome": {
-        "unknown": "未設定",
-        "win": "勝ち",
-        "loss": "負け",
     },
     "duel_type": {
         "ranked": "ランク戦",
@@ -74,7 +68,6 @@ class DuelRecordValues:
     result: str = "unknown"
     play_order: str = "unknown"
     coin_face: str = "unknown"
-    coin_toss_outcome: str = "unknown"
     own_deck: str = ""
     opponent_deck: str = ""
     duel_type: str = "other"
@@ -88,9 +81,6 @@ class DuelRecordValues:
             result=_choice(self.result, RESULTS, "result"),
             play_order=_choice(self.play_order, PLAY_ORDERS, "play_order"),
             coin_face=_choice(self.coin_face, COIN_FACES, "coin_face"),
-            coin_toss_outcome=_choice(
-                self.coin_toss_outcome, COIN_TOSS_OUTCOMES, "coin_toss_outcome"
-            ),
             own_deck=_text(self.own_deck, MAX_DECK_LENGTH, "own_deck"),
             opponent_deck=_text(self.opponent_deck, MAX_DECK_LENGTH, "opponent_deck"),
             duel_type=_choice(self.duel_type, DUEL_TYPES, "duel_type"),
@@ -121,7 +111,6 @@ class DuelRecord:
             "result": self.values.result,
             "play_order": self.values.play_order,
             "coin_face": self.values.coin_face,
-            "coin_toss_outcome": self.values.coin_toss_outcome,
             "own_deck": self.values.own_deck,
             "opponent_deck": self.values.opponent_deck,
             "duel_type": self.values.duel_type,
@@ -379,11 +368,10 @@ class DuelRecordRepository:
                         """
                         INSERT INTO duel_records (
                             duel_id, recording_id, entry_origin, occurred_at,
-                            status, result, play_order, coin_face,
-                            coin_toss_outcome, own_deck,
+                            status, result, play_order, coin_face, own_deck,
                             opponent_deck, duel_type, notes, revision, created_at, updated_at,
                             season_id, own_deck_id, opponent_deck_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             identifier,
@@ -394,7 +382,6 @@ class DuelRecordRepository:
                             normalized.result,
                             normalized.play_order,
                             normalized.coin_face,
-                            normalized.coin_toss_outcome,
                             normalized.own_deck,
                             normalized.opponent_deck,
                             normalized.duel_type,
@@ -413,7 +400,7 @@ class DuelRecordRepository:
                         """
                         UPDATE duel_records
                         SET occurred_at = ?, status = ?, result = ?, play_order = ?, coin_face = ?,
-                            coin_toss_outcome = ?, own_deck = ?,
+                            own_deck = ?,
                             opponent_deck = ?, duel_type = ?, notes = ?, revision = ?, updated_at = ?,
                             season_id = ?, own_deck_id = ?, opponent_deck_id = ?
                         WHERE duel_id = ? AND revision = ?
@@ -424,7 +411,6 @@ class DuelRecordRepository:
                             normalized.result,
                             normalized.play_order,
                             normalized.coin_face,
-                            normalized.coin_toss_outcome,
                             normalized.own_deck,
                             normalized.opponent_deck,
                             normalized.duel_type,
@@ -608,7 +594,6 @@ def _record(row: sqlite3.Row, tags: tuple[str, ...]) -> DuelRecord:
             result=row["result"],
             play_order=row["play_order"],
             coin_face=row["coin_face"],
-            coin_toss_outcome=row["coin_toss_outcome"],
             own_deck=row["own_deck"],
             opponent_deck=row["opponent_deck"],
             duel_type=row["duel_type"],
@@ -702,7 +687,6 @@ def _audit_json(value: dict[str, object]) -> str:
         "result",
         "play_order",
         "coin_face",
-        "coin_toss_outcome",
         "own_deck",
         "opponent_deck",
         "duel_type",

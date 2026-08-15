@@ -68,7 +68,6 @@ class HistoryQuery:
     opponent_deck_id: int | None = None
     tag_entry_ids: tuple[int, ...] = ()
     coin_face: str | None = None
-    coin_toss_outcome: str | None = None
     limit: int = 50
     offset: int = 0
 
@@ -77,10 +76,6 @@ class HistoryQuery:
             raise ValueError(f"未対応の録画状態です: {self.state}")
         if self.coin_face is not None and self.coin_face not in {"heads", "tails", "unknown"}:
             raise ValueError(f"未対応のコインの面です: {self.coin_face}")
-        if self.coin_toss_outcome is not None and self.coin_toss_outcome not in {
-            "win", "loss", "unknown"
-        }:
-            raise ValueError(f"未対応のコイントス勝敗です: {self.coin_toss_outcome}")
         _optional_aware_datetime(self.since, "since")
         _optional_aware_datetime(self.until, "until")
         if (
@@ -428,11 +423,6 @@ class RecordingHistoryRepository:
                 "EXISTS (SELECT 1 FROM duel_records duel WHERE duel.recording_id = recordings.recording_id AND duel.coin_face = ?)"
             )
             parameters.append(selected.coin_face)
-        if selected.coin_toss_outcome is not None:
-            clauses.append(
-                "EXISTS (SELECT 1 FROM duel_records duel WHERE duel.recording_id = recordings.recording_id AND duel.coin_toss_outcome = ?)"
-            )
-            parameters.append(selected.coin_toss_outcome)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         parameters.extend((selected.limit, selected.offset))
         sql = (

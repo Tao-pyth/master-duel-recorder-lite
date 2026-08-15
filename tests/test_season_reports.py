@@ -50,7 +50,6 @@ class SeasonReportServiceTest(unittest.TestCase):
         result: str,
         order: str,
         face: str,
-        toss: str,
         deck: str = "青眼",
     ) -> None:
         self.records.create_manual(
@@ -59,7 +58,6 @@ class SeasonReportServiceTest(unittest.TestCase):
                 result=result,
                 play_order=order,
                 coin_face=face,
-                coin_toss_outcome=toss,
                 own_deck=deck,
                 duel_type="ranked",
                 season_id=season_id,
@@ -74,7 +72,6 @@ class SeasonReportServiceTest(unittest.TestCase):
             result="win",
             order="first",
             face="heads",
-            toss="win",
         )
         self._record(
             season_id=self.current.season_id,
@@ -82,7 +79,6 @@ class SeasonReportServiceTest(unittest.TestCase):
             result="loss",
             order="second",
             face="tails",
-            toss="loss",
         )
         self._record(
             season_id=self.current.season_id,
@@ -90,7 +86,6 @@ class SeasonReportServiceTest(unittest.TestCase):
             result="draw",
             order="unknown",
             face="unknown",
-            toss="unknown",
         )
 
         report = SeasonReportService(self.paths).build(self.current.season_id)
@@ -117,7 +112,6 @@ class SeasonReportServiceTest(unittest.TestCase):
             result="loss",
             order="second",
             face="tails",
-            toss="loss",
         )
         self._record(
             season_id=self.current.season_id,
@@ -125,7 +119,6 @@ class SeasonReportServiceTest(unittest.TestCase):
             result="win",
             order="first",
             face="heads",
-            toss="win",
         )
 
         report = SeasonReportService(self.paths).build(self.current.season_id)
@@ -141,7 +134,6 @@ class SeasonReportServiceTest(unittest.TestCase):
             result="win",
             order="first",
             face="unknown",
-            toss="unknown",
         )
 
         report = SeasonReportService(self.paths).build(
@@ -154,7 +146,6 @@ class SeasonReportServiceTest(unittest.TestCase):
         self.assertTrue(all(item.color == "#3366AA" for item in deck_rows))
         unknown_axes = {(item.axis, item.key): item.metric.matches for item in report.axes}
         self.assertEqual(unknown_axes[("coin_face", "unknown")], 1)
-        self.assertEqual(unknown_axes[("coin_toss_outcome", "unknown")], 1)
 
     def test_report_sections_use_revision_and_archive_is_explicit(self) -> None:
         saved = self.seasons.update_report(

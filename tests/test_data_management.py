@@ -55,7 +55,6 @@ class ManagedDataServiceTest(unittest.TestCase):
                 status="confirmed",
                 result="win",
                 coin_face="heads",
-                coin_toss_outcome="win",
                 own_deck=deck.name,
                 tags=(tag.name,),
                 season_id=season.season_id,
@@ -84,7 +83,6 @@ class ManagedDataServiceTest(unittest.TestCase):
         self.assertEqual(record.values.own_deck, "テストデッキ")
         self.assertEqual(record.values.tags, ("大会",))
         self.assertEqual(record.values.coin_face, "heads")
-        self.assertEqual(record.values.coin_toss_outcome, "win")
 
     def test_import_accepts_v019_export_without_coin_columns(self) -> None:
         self._seed()
@@ -93,7 +91,6 @@ class ManagedDataServiceTest(unittest.TestCase):
         payload = json.loads(exported.read_text(encoding="utf-8"))
         for row in payload["tables"]["duel_records"]:
             row.pop("coin_face")
-            row.pop("coin_toss_outcome")
         exported.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
         self.service.reset("all")
@@ -102,7 +99,25 @@ class ManagedDataServiceTest(unittest.TestCase):
 
         assert record is not None
         self.assertEqual(record.values.coin_face, "unknown")
-        self.assertEqual(record.values.coin_toss_outcome, "unknown")
+
+    def test_import_ignores_removed_coin_toss_outcome_column(self) -> None:
+        self._seed()
+        exported = self.paths.exports / "legacy-outcome.json"
+        self.service.export_to(exported)
+        payload = json.loads(exported.read_text(encoding="utf-8"))
+        for row in payload["tables"]["duel_records"]:
+            row["coin_toss_outcome"] = "win"
+        exported.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        self.service.import_from(exported)
+
+        record = DuelRecordRepository.from_runtime_paths(self.paths).get("duel")
+        assert record is not None
+        self.assertEqual(record.values.coin_face, "heads")
+        current = self.paths.exports / "current.json"
+        self.service.export_to(current)
+        payload = json.loads(current.read_text(encoding="utf-8"))
+        self.assertNotIn("coin_toss_outcome", payload["tables"]["duel_records"][0])
 
     def test_export_import_preserves_saved_filters_and_accepts_legacy_without_them(self) -> None:
         workflow = DuelWorkflowService.from_runtime_paths(self.paths)

@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import shutil
 import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -401,14 +402,7 @@ def _migrate_to_v9(connection: sqlite3.Connection) -> None:
         "CHECK (coin_face IN ('heads', 'tails', 'unknown'))"
     )
     connection.execute(
-        "ALTER TABLE duel_records ADD COLUMN coin_toss_outcome TEXT NOT NULL DEFAULT 'unknown' "
-        "CHECK (coin_toss_outcome IN ('win', 'loss', 'unknown'))"
-    )
-    connection.execute(
         "CREATE INDEX duel_records_coin_face_idx ON duel_records(coin_face)"
-    )
-    connection.execute(
-        "CREATE INDEX duel_records_coin_toss_outcome_idx ON duel_records(coin_toss_outcome)"
     )
 
 
@@ -424,7 +418,6 @@ def _migrate_to_v10(connection: sqlite3.Connection) -> None:
             result TEXT NOT NULL CHECK (result IN ('win', 'loss', 'draw', 'unknown')),
             play_order TEXT NOT NULL CHECK (play_order IN ('first', 'second', 'unknown')),
             coin_face TEXT NOT NULL CHECK (coin_face IN ('heads', 'tails', 'unknown')),
-            coin_toss_outcome TEXT NOT NULL CHECK (coin_toss_outcome IN ('win', 'loss', 'unknown')),
             own_deck TEXT NOT NULL DEFAULT '',
             opponent_deck TEXT NOT NULL DEFAULT '',
             duel_type TEXT NOT NULL CHECK (duel_type IN ('ranked', 'event', 'room', 'solo', 'other')),
@@ -446,14 +439,14 @@ def _migrate_to_v10(connection: sqlite3.Connection) -> None:
         """
         INSERT INTO duel_records_v10 (
             duel_id, recording_id, entry_origin, occurred_at, status, result,
-            play_order, coin_face, coin_toss_outcome, own_deck, opponent_deck,
+            play_order, coin_face, own_deck, opponent_deck,
             duel_type, notes, revision, created_at, updated_at, season_id,
             own_deck_id, opponent_deck_id
         )
         SELECT
             duel.recording_id, duel.recording_id, 'recording',
             COALESCE(recording.started_at, recording.created_at), duel.status,
-            duel.result, duel.play_order, duel.coin_face, duel.coin_toss_outcome,
+            duel.result, duel.play_order, duel.coin_face,
             duel.own_deck, duel.opponent_deck, duel.duel_type, duel.notes,
             duel.revision, duel.created_at, duel.updated_at, duel.season_id,
             duel.own_deck_id, duel.opponent_deck_id
@@ -524,7 +517,6 @@ def _migrate_to_v10(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX duel_records_own_deck_idx ON duel_records(own_deck_id)")
     connection.execute("CREATE INDEX duel_records_opponent_deck_idx ON duel_records(opponent_deck_id)")
     connection.execute("CREATE INDEX duel_records_coin_face_idx ON duel_records(coin_face)")
-    connection.execute("CREATE INDEX duel_records_coin_toss_outcome_idx ON duel_records(coin_toss_outcome)")
     connection.execute(
         "CREATE INDEX duel_record_changes_duel_idx ON duel_record_changes(duel_id, revision DESC)"
     )
@@ -568,6 +560,54 @@ def _migrate_to_v12(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v13(connection: sqlite3.Connection) -> None:
+    legacy_column = "coin_toss_outcome"
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(duel_records)")}
+    if legacy_column in columns:
+        connection.execute("DROP INDEX IF EXISTS duel_records_coin_toss_outcome_idx")
+        connection.execute(f"ALTER TABLE duel_records DROP COLUMN {legacy_column}")
+
+    for row in connection.execute(
+        "SELECT change_id, before_json, after_json FROM duel_record_changes"
+    ).fetchall():
+        documents: list[str] = []
+        for raw in (row[1], row[2]):
+            document = json.loads(raw)
+            if isinstance(document, dict):
+                document.pop(legacy_column, None)
+            documents.append(
+                json.dumps(
+                    document,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        connection.execute(
+            "UPDATE duel_record_changes SET before_json = ?, after_json = ? WHERE change_id = ?",
+            (documents[0], documents[1], row[0]),
+        )
+
+    for row in connection.execute(
+        "SELECT filter_id, criteria_json FROM saved_duel_filters"
+    ).fetchall():
+        criteria = json.loads(row[1])
+        if isinstance(criteria, dict) and legacy_column in criteria:
+            criteria.pop(legacy_column)
+            connection.execute(
+                "UPDATE saved_duel_filters SET criteria_json = ? WHERE filter_id = ?",
+                (
+                    json.dumps(
+                        criteria,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    row[0],
+                ),
+            )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -581,6 +621,7 @@ _MIGRATIONS: dict[int, Migration] = {
     10: _migrate_to_v10,
     11: _migrate_to_v11,
     12: _migrate_to_v12,
+    13: _migrate_to_v13,
 }
 
 
@@ -816,9 +857,10 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "own_deck_id",
         "opponent_deck_id",
         "coin_face",
-        "coin_toss_outcome",
     }.issubset(duel_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のduel_recordsスキーマがありません")
+    if "coin_toss_outcome" in duel_columns:
+        raise HistoryDatabaseError("録画履歴DBに廃止済みのコイントス勝敗列が残っています")
     filter_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(saved_duel_filters)")
     }

@@ -1086,7 +1086,6 @@ class RecorderGui:
             "result",
             "order",
             "coin_face",
-            "coin_outcome",
             "duel_type",
             "duration",
             "size",
@@ -1105,7 +1104,6 @@ class RecorderGui:
             ("result", "勝敗", 90),
             ("order", "先後", 75),
             ("coin_face", "コイン", 65),
-            ("coin_outcome", "トス勝敗", 80),
             ("duel_type", "対戦種別", 105),
             ("duration", "時間", 85),
             ("size", "サイズ", 100),
@@ -1206,7 +1204,6 @@ class RecorderGui:
         self.statistics_tag_var = tk.StringVar(value="すべて")
         self.statistics_order_var = tk.StringVar(value="すべて")
         self.statistics_coin_face_var = tk.StringVar(value="すべて")
-        self.statistics_coin_outcome_var = tk.StringVar(value="すべて")
         self.statistics_granularity_var = tk.StringVar(value="月")
         fields = (
             ("開始日", self.statistics_date_from_var),
@@ -1300,15 +1297,6 @@ class RecorderGui:
             state="readonly",
             values=("すべて", "表", "裏", "未設定"),
         ).grid(row=4, column=0, sticky="ew", padx=(0, 8))
-        ttk.Label(filters, text="コイントス勝敗", style="Muted.TLabel").grid(
-            row=3, column=1, sticky="w", pady=(8, 0)
-        )
-        ttk.Combobox(
-            filters,
-            textvariable=self.statistics_coin_outcome_var,
-            state="readonly",
-            values=("すべて", "勝ち", "負け", "未設定"),
-        ).grid(row=4, column=1, sticky="ew", padx=(0, 8))
         self.statistics_filter_status_var = tk.StringVar(value="すべての確定済み対戦")
         ttk.Label(
             filters,
@@ -1970,7 +1958,6 @@ class RecorderGui:
         self.statistics_tag_var.set("すべて")
         self.statistics_order_var.set("すべて")
         self.statistics_coin_face_var.set("すべて")
-        self.statistics_coin_outcome_var.set("すべて")
         self.statistics_season_var.set("すべて")
         self.statistics_granularity_var.set("月")
         self.refresh_statistics()
@@ -1984,9 +1971,6 @@ class RecorderGui:
         coin_face = {"すべて": None, "表": "heads", "裏": "tails", "未設定": "unknown"}[
             self.statistics_coin_face_var.get()
         ]
-        coin_outcome = {"すべて": None, "勝ち": "win", "負け": "loss", "未設定": "unknown"}[
-            self.statistics_coin_outcome_var.get()
-        ]
         return StatisticsFilter(
             date_from=date_from,
             date_to=date_to,
@@ -1996,7 +1980,6 @@ class RecorderGui:
             ),
             play_order=order,
             coin_face=coin_face,
-            coin_toss_outcome=coin_outcome,
             season_id=self.statistics_seasons_by_label.get(
                 self.statistics_season_var.get()
             ),
@@ -2083,10 +2066,6 @@ class RecorderGui:
             active_conditions.append(
                 f"コイン {'表' if dashboard.filters.coin_face == 'heads' else '裏' if dashboard.filters.coin_face == 'tails' else '未設定'}"
             )
-        if dashboard.filters.coin_toss_outcome is not None:
-            active_conditions.append(
-                f"コイントス {'勝ち' if dashboard.filters.coin_toss_outcome == 'win' else '負け' if dashboard.filters.coin_toss_outcome == 'loss' else '未設定'}"
-            )
         if dashboard.filters.season_id:
             active_conditions.append(f"シーズン {selected_season}")
         elif dashboard.filters.season_unassigned:
@@ -2106,7 +2085,7 @@ class RecorderGui:
             self.statistics_order_tree.insert(
                 "", "end", values=_statistics_breakdown_values(item.label, item.metric)
             )
-        for item in (*dashboard.by_coin_face, *dashboard.by_coin_toss_outcome):
+        for item in dashboard.by_coin_face:
             self.statistics_coin_tree.insert(
                 "", "end", values=_statistics_breakdown_values(item.label, item.metric)
             )
@@ -2772,7 +2751,6 @@ class RecorderGui:
             opponent_deck_id=query.opponent_deck_id,
             tag_entry_ids=query.tag_entry_ids,
             coin_face=query.coin_face,
-            coin_toss_outcome=query.coin_toss_outcome,
             entry_origin=query.entry_origin,
         )
 
@@ -2785,7 +2763,6 @@ class RecorderGui:
             opponent_deck_id=criteria.opponent_deck_id,
             tag_entry_ids=criteria.tag_entry_ids,
             coin_face=criteria.coin_face,
-            coin_toss_outcome=criteria.coin_toss_outcome,
             entry_origin=criteria.entry_origin,
         )
 
@@ -2813,7 +2790,6 @@ class RecorderGui:
         own_var = tk.StringVar(value="すべて")
         opponent_var = tk.StringVar(value="すべて")
         coin_face_var = tk.StringVar(value="すべて")
-        coin_outcome_var = tk.StringVar(value="すべて")
         origin_var = tk.StringVar(value="すべて")
         saved_var = tk.StringVar(value="")
         ttk.Label(frame, text="保存済み").grid(row=0, column=0, sticky="w", pady=6)
@@ -2830,7 +2806,6 @@ class RecorderGui:
                 ("自分デッキ", own_var, tuple(deck_map)),
                 ("相手デッキ", opponent_var, tuple(deck_map)),
                 ("コインの面", coin_face_var, ("すべて", "表", "裏", "未設定")),
-                ("コイントス勝敗", coin_outcome_var, ("すべて", "勝ち", "負け", "未設定")),
                 ("登録元", origin_var, ("すべて", "録画", "手動")),
             ),
             start=1,
@@ -2840,10 +2815,10 @@ class RecorderGui:
                 frame, textvariable=variable, values=values, state="readonly"
             ).grid(row=row, column=1, sticky="ew", pady=6)
         ttk.Label(frame, text="タグ（複数可）").grid(
-            row=7, column=0, sticky="nw", pady=6
+            row=6, column=0, sticky="nw", pady=6
         )
         tag_list = tk.Listbox(frame, selectmode="multiple", exportselection=False)
-        tag_list.grid(row=7, column=1, sticky="nsew", pady=6)
+        tag_list.grid(row=6, column=1, sticky="nsew", pady=6)
         for item in tags:
             tag_list.insert("end", item.name)
 
@@ -2860,9 +2835,6 @@ class RecorderGui:
                 coin_face={"すべて": None, "表": "heads", "裏": "tails", "未設定": "unknown"}[
                     coin_face_var.get()
                 ],
-                coin_toss_outcome={"すべて": None, "勝ち": "win", "負け": "loss", "未設定": "unknown"}[
-                    coin_outcome_var.get()
-                ],
                 entry_origin={"すべて": None, "録画": "recording", "手動": "manual"}[
                     origin_var.get()
                 ],
@@ -2877,7 +2849,6 @@ class RecorderGui:
                     self.history_query.own_deck_id,
                     self.history_query.opponent_deck_id,
                     self.history_query.coin_face,
-                    self.history_query.coin_toss_outcome,
                     self.history_query.entry_origin,
                 )
             ) + len(query.tag_entry_ids)
@@ -2950,7 +2921,7 @@ class RecorderGui:
         )
         saved_combo.bind("<<ComboboxSelected>>", load_saved)
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(7, weight=1)
+        frame.rowconfigure(6, weight=1)
         dialog.grab_set()
 
     def _history_loaded(self, dashboard: RecordingHistoryDashboard) -> None:
@@ -2970,17 +2941,16 @@ class RecorderGui:
             )
             size = _format_bytes(entry.size_bytes) if entry is not None else "-"
             if entry is not None and entry.state == "failed":
-                result, play_order, coin_face, coin_outcome, duel_type = "録画失敗", "-", "-", "-", "-"
+                result, play_order, coin_face, duel_type = "録画失敗", "-", "-", "-"
             elif entry is not None and entry.state in {"starting", "recording"}:
                 result = "開始中" if entry.state == "starting" else "録画中"
-                play_order, coin_face, coin_outcome, duel_type = "-", "-", "-", "-"
+                play_order, coin_face, duel_type = "-", "-", "-"
             elif view.duel_record is None:
-                result = play_order = coin_face = coin_outcome = duel_type = "未入力"
+                result = play_order = coin_face = duel_type = "未入力"
             else:
                 result = duel_choice_label("result", view.result)
                 play_order = duel_choice_label("play_order", view.play_order)
                 coin_face = duel_choice_label("coin_face", view.coin_face)
-                coin_outcome = duel_choice_label("coin_toss_outcome", view.coin_toss_outcome)
                 duel_type = duel_choice_label("duel_type", view.duel_type)
             own_deck = view.own_deck or "未設定"
             self.history_tree.insert(
@@ -2993,7 +2963,6 @@ class RecorderGui:
                     result,
                     play_order,
                     coin_face,
-                    coin_outcome,
                     duel_type,
                     duration,
                     size,
@@ -3925,7 +3894,6 @@ class RecorderGui:
             ("勝敗", "result", values.result),
             ("先後", "play_order", values.play_order),
             ("コインの面", "coin_face", values.coin_face),
-            ("コイントス勝敗", "coin_toss_outcome", values.coin_toss_outcome),
             ("対戦種別", "duel_type", values.duel_type),
         )
         variables: dict[str, tk.StringVar] = {}
@@ -4087,9 +4055,6 @@ class RecorderGui:
                     "play_order", variables["play_order"].get()
                 ),
                 coin_face=duel_choice_value("coin_face", variables["coin_face"].get()),
-                coin_toss_outcome=duel_choice_value(
-                    "coin_toss_outcome", variables["coin_toss_outcome"].get()
-                ),
                 own_deck=variables["own_deck"].get(),
                 opponent_deck=variables["opponent_deck"].get(),
                 duel_type=duel_choice_value("duel_type", variables["duel_type"].get()),
@@ -5463,7 +5428,6 @@ class RecorderGui:
             by_play_order=(),
             by_deck_play_order=(),
             by_coin_face=(),
-            by_coin_toss_outcome=(),
             trend=smoke_points,
             filters=StatisticsFilter(),
             granularity="month",

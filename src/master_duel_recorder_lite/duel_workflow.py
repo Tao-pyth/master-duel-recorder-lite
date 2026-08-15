@@ -76,7 +76,6 @@ class DuelFilterCriteria:
     opponent_deck_id: int | None = None
     tag_entry_ids: tuple[int, ...] = ()
     coin_face: str | None = None
-    coin_toss_outcome: str | None = None
     entry_origin: str | None = None
 
     def normalized(self) -> DuelFilterCriteria:
@@ -94,7 +93,6 @@ class DuelFilterCriteria:
             self.opponent_deck_id,
             tag_ids,
             self.coin_face,
-            self.coin_toss_outcome,
             self.entry_origin,
         )
 
