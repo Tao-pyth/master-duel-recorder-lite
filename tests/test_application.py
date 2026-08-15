@@ -107,7 +107,7 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertTrue(all(name.endswith(".json") for name in names))
         self.assertNotIn("capture.bmp", names)
 
-    def test_next_duel_boundary_stops_recording_after_one_second(self) -> None:
+    def test_next_duel_boundary_stops_and_hands_off_without_extra_delay(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))
         event = AutoRecordingEvent(
             AutoRecordingEventAction.STOPPED,
@@ -139,7 +139,7 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         )
         start_monitor = Mock()
 
-        with patch("master_duel_recorder_lite.application.time.monotonic", return_value=101.1):
+        with patch("master_duel_recorder_lite.application.time.monotonic", return_value=100.0):
             stopped = service._apply_automatic_visual_lifecycle(
                 controller,
                 start_monitor,

@@ -1557,10 +1557,7 @@ class RecorderApplicationService:
         boundary_detected = prepared.boundary_detected_monotonic
         post_roll_complete = (
             result_detected is not None and time.monotonic() - result_detected >= 3.0
-        ) or (
-            boundary_detected is not None
-            and time.monotonic() - boundary_detected >= 1.0
-        )
+        ) or boundary_detected is not None
         if abort_reason is None and not timed_out and not post_roll_complete:
             return None
 
