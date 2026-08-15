@@ -53,7 +53,9 @@ class RecordingVisualLifecycleTest(unittest.TestCase):
         with patch("master_duel_recorder_lite.recorder.time.monotonic", return_value=456.0):
             lifecycle.handle(candidate("duel_boundary"))
 
-        self.assertEqual(lifecycle.boundary_snapshot(), 456.0)
+        detected_at, boundary = lifecycle.boundary_snapshot()
+        self.assertEqual(detected_at, 456.0)
+        self.assertEqual(boundary, candidate("duel_boundary"))
         self.assertEqual(lifecycle.outcome, "unknown")
         self.assertIsNone(lifecycle.result_detected_monotonic)
 

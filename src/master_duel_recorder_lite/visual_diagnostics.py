@@ -118,17 +118,24 @@ class VisualDiagnosticSession:
             self._write()
             return True
 
-    def transition(self, event: str, *, elapsed_ms: int | None = None) -> None:
+    def transition(
+        self,
+        event: str,
+        *,
+        elapsed_ms: int | None = None,
+        details: dict[str, object] | None = None,
+    ) -> None:
         with self._lock:
             if self._closed:
                 return
-            self.transitions.append(
-                {
-                    "at": self.clock().astimezone(timezone.utc).isoformat(),
-                    "event": event,
-                    "elapsed_ms": elapsed_ms,
-                }
-            )
+            transition: dict[str, object] = {
+                "at": self.clock().astimezone(timezone.utc).isoformat(),
+                "event": event,
+                "elapsed_ms": elapsed_ms,
+            }
+            if details:
+                transition["details"] = details
+            self.transitions.append(transition)
             self._write()
 
     def close(self) -> None:

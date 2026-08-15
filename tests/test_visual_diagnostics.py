@@ -124,6 +124,30 @@ class VisualDiagnosticSessionTest(unittest.TestCase):
 
         self.assertEqual(len(files), 10)
 
+    def test_transition_keeps_boundary_snapshot_outside_sample_ring(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            session = VisualDiagnosticSession(
+                Path(temporary),
+                clock=lambda: datetime(2026, 8, 15, tzinfo=timezone.utc),
+            )
+            session.transition(
+                "boundary_handoff_started",
+                elapsed_ms=12000,
+                details={
+                    "handoff_ms": 42,
+                    "scores": {"coin": 0.91, "result": 0.12},
+                    "agreement": "duel_boundary:2/4",
+                },
+            )
+            session.close()
+
+            report = json.loads(session.path.read_text(encoding="utf-8"))
+
+        transition = report["transitions"][0]
+        self.assertEqual(transition["elapsed_ms"], 12000)
+        self.assertEqual(transition["details"]["handoff_ms"], 42)
+        self.assertEqual(transition["details"]["scores"]["coin"], 0.91)
+
     def test_export_contains_only_numeric_json(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

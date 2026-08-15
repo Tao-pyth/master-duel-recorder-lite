@@ -16,6 +16,7 @@ from master_duel_recorder_lite.detection import (
 )
 from master_duel_recorder_lite.recorder import RecordingPreparationError
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
+from master_duel_recorder_lite.visual_detection import DetectionCandidate
 
 
 BASE_TIME = datetime(2026, 8, 8, tzinfo=timezone.utc)
@@ -167,6 +168,35 @@ class AutoRecordingControllerTest(unittest.TestCase):
         self.assertIs(started.action, AutoRecordingEventAction.STARTED)
         self.assertIs(stopped.action, AutoRecordingEventAction.STOPPED)
         self.assertEqual(prepared.release_count, 1)
+
+    def test_boundary_starts_next_automatic_recording_without_new_detection(self) -> None:
+        machine = DuelDetectionStateMachine(DetectionPolicy(start_confirmations=10))
+        prepared = [FakePrepared("previous"), FakePrepared("next")]
+        controller = AutoRecordingController(
+            state_machine=machine,
+            recording_factory=lambda _observation: prepared.pop(0),
+        )
+        controller.manual_start(BASE_TIME)
+        controller.manual_stop(BASE_TIME + timedelta(seconds=10))
+        boundary = DetectionCandidate(
+            "duel_boundary",
+            9000,
+            0.91,
+            "次対戦のコイントスを検出",
+            "test",
+            "1",
+            evidence="next_duel",
+        )
+
+        event = controller.start_from_boundary(
+            observation(DetectionSignal.PRESENT, 10),
+            boundary,
+        )
+
+        self.assertIs(event.action, AutoRecordingEventAction.STARTED)
+        self.assertEqual(event.recording_id, "next")
+        self.assertIn("次対戦境界", event.message)
+        self.assertTrue(machine.recording_active)
 
     def test_consecutive_failures_use_backoff_and_eventually_block(self) -> None:
         machine = DuelDetectionStateMachine(

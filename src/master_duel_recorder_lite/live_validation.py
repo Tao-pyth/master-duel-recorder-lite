@@ -10,6 +10,7 @@ from typing import Any
 RESULT_STOP_EVENT = "result_stopped"
 INTERRUPTED_STOP_EVENT = "watch_stopped_with_active_recording"
 FAILED_STOP_EVENTS = frozenset({"boundary_stopped", "recording_stopped"})
+START_EVENTS = frozenset({"candidate_started", "boundary_handoff_started"})
 RECOVERY_GRACE = timedelta(seconds=3)
 POST_STOP_ACTIVITY_WINDOW = timedelta(seconds=120)
 POST_STOP_BOARD_THRESHOLD = 0.35
@@ -204,7 +205,7 @@ def evaluate_live_diagnostics(
         for transition_index, transition in enumerate(transitions):
             event = transition["event"]
             at = transition["at"]
-            if event == "candidate_started":
+            if event in START_EVENTS:
                 if current is not None:
                     attempts.append(_finish(current, latest_sample, samples))
                 attempt_number += 1
@@ -226,7 +227,7 @@ def evaluate_live_diagnostics(
                         (
                             item["at"]
                             for item in transitions[transition_index + 1 :]
-                            if item["event"] == "candidate_started"
+                            if item["event"] in START_EVENTS
                         ),
                         None,
                     )

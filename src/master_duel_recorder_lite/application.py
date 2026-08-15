@@ -1367,6 +1367,7 @@ class RecorderApplicationService:
                 )
                 if lifecycle_event is not None:
                     transition = "result_stopped"
+                    boundary_candidate = None
                     if lifecycle_prepared is not None:
                         if (
                             lifecycle_prepared.visual_abort_reason is not None
@@ -1375,8 +1376,64 @@ class RecorderApplicationService:
                             transition = "candidate_discarded"
                         elif lifecycle_prepared.boundary_detected_monotonic is not None:
                             transition = "boundary_stopped"
-                    diagnostics.transition(transition)
+                            boundary_candidate = lifecycle_prepared.boundary_candidate
+                    diagnostics.transition(
+                        transition,
+                        elapsed_ms=(
+                            boundary_candidate.elapsed_ms
+                            if boundary_candidate is not None
+                            else None
+                        ),
+                        details=(
+                            _boundary_diagnostic_details(lifecycle_prepared, boundary_candidate)
+                            if lifecycle_prepared is not None
+                            and boundary_candidate is not None
+                            else None
+                        ),
+                    )
                     event = lifecycle_event
+                    if (
+                        transition == "boundary_stopped"
+                        and lifecycle_event.action is AutoRecordingEventAction.STOPPED
+                        and boundary_candidate is not None
+                    ):
+                        self._emit(callback, _application_event(lifecycle_event))
+                        handoff_started = time.monotonic()
+                        event = controller.start_from_boundary(observation, boundary_candidate)
+                        if event.action is AutoRecordingEventAction.STARTED:
+                            confirmed_recording_id = None
+                            self._transition_operation(
+                                OperationState.CANDIDATE_RECORDING,
+                                "次の対戦候補を録画しています",
+                            )
+                            diagnostics.transition(
+                                "boundary_handoff_started",
+                                elapsed_ms=0,
+                                details={
+                                    "source_elapsed_ms": boundary_candidate.elapsed_ms,
+                                    "handoff_ms": round(
+                                        max(0.0, time.monotonic() - handoff_started) * 1000
+                                    ),
+                                    "confidence": round(boundary_candidate.confidence, 4),
+                                    "evidence": boundary_candidate.evidence,
+                                },
+                            )
+                            self._save_automatic_start_candidate(
+                                event.recording_id,
+                                boundary_candidate,
+                                callback,
+                            )
+                            self._notify(
+                                "boundary_handoff_started",
+                                "次の対戦へ録画を引き継ぎました",
+                                f"{event.recording_id}:boundary-handoff",
+                            )
+                        else:
+                            confirmed_recording_id = None
+                            self._transition_operation(
+                                OperationState.WATCH_WAITING,
+                                "次の対戦録画を開始できませんでした",
+                            )
                 if controller.current is not None:
                     self._publish_automatic_snapshot(controller.current)
                     if (
@@ -1689,6 +1746,29 @@ def _application_event(event: AutoRecordingEvent) -> ApplicationEvent:
         if event.result is not None
         else event.action.value,
     )
+
+
+def _boundary_diagnostic_details(
+    prepared: PreparedRecording,
+    candidate: DetectionCandidate,
+) -> dict[str, object]:
+    status = prepared.visual_detection_status
+    return {
+        "confidence": round(candidate.confidence, 4),
+        "evidence": candidate.evidence,
+        "profile": status.profile,
+        "resolution": status.resolution,
+        "agreement": status.agreement,
+        "scores": {
+            "coin": round(status.coin_score, 4),
+            "board": round(status.board_score, 4),
+            "turn": round(status.turn_score, 4),
+            "result": round(status.result_score, 4),
+            "error": round(status.error_score, 4),
+            "replay": round(status.replay_score, 4),
+            "overlay": round(status.overlay_score, 4),
+        },
+    }
 
 
 def _automatic_capture_input(observation: DuelObservation) -> CaptureInput:

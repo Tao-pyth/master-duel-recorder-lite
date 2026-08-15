@@ -14,6 +14,7 @@ from .detection import (
 )
 from .recorder import PreparedRecording, RecordingPreparationError, RecordingTrackingError
 from .recording_session import RecordingResult, RecordingState
+from .visual_detection import DetectionCandidate
 
 
 RecordingFactory = Callable[[DuelObservation], PreparedRecording]
@@ -116,6 +117,29 @@ class AutoRecordingController:
         self.state_machine.mark_manual_stopped(observation.observed_at)
         decision = DetectionDecision(DetectionAction.STOP, observation.reason, 0, 0)
         return self._stop(observation, decision)
+
+    def start_from_boundary(
+        self,
+        observation: DuelObservation,
+        candidate: DetectionCandidate,
+    ) -> AutoRecordingEvent:
+        """前録画で検出した次対戦境界を、次録画の開始根拠として引き継ぎます。"""
+        if self.current is not None:
+            return AutoRecordingEvent(
+                AutoRecordingEventAction.SKIPPED,
+                "前の録画が停止していないため次対戦へ引き継げません",
+                observation,
+                None,
+                recording_id=self.current.target.recording_id,
+            )
+        self.state_machine.mark_manual_started()
+        decision = DetectionDecision(
+            DetectionAction.START,
+            f"次対戦境界から録画を引き継ぎました: {candidate.reason}",
+            1,
+            1,
+        )
+        return self._start(observation, decision, source="automatic")
 
     def set_automatic_start(self, enabled: bool) -> None:
         self.state_machine.set_automatic_start(enabled)

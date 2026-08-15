@@ -53,6 +53,7 @@ class RecordingVisualLifecycle:
     abort_reason: str | None = None
     result_detected_monotonic: float | None = None
     boundary_detected_monotonic: float | None = None
+    boundary_candidate: DetectionCandidate | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def handle(self, candidate: DetectionCandidate) -> None:
@@ -67,6 +68,7 @@ class RecordingVisualLifecycle:
                 self.result_detected_monotonic = time.monotonic()
             elif candidate.event_type == "duel_boundary":
                 self.boundary_detected_monotonic = time.monotonic()
+                self.boundary_candidate = candidate
             elif candidate.event_type == "match_error":
                 self.abort_reason = "マッチング失敗またはゲームサーバーエラーを検出しました"
             elif candidate.event_type == "replay_detected":
@@ -82,9 +84,9 @@ class RecordingVisualLifecycle:
                 self.result_detected_monotonic,
             )
 
-    def boundary_snapshot(self) -> float | None:
+    def boundary_snapshot(self) -> tuple[float | None, DetectionCandidate | None]:
         with self._lock:
-            return self.boundary_detected_monotonic
+            return self.boundary_detected_monotonic, self.boundary_candidate
 
 
 @dataclass
@@ -243,7 +245,11 @@ class PreparedRecording:
 
     @property
     def boundary_detected_monotonic(self) -> float | None:
-        return self.visual_lifecycle.boundary_snapshot()
+        return self.visual_lifecycle.boundary_snapshot()[0]
+
+    @property
+    def boundary_candidate(self) -> DetectionCandidate | None:
+        return self.visual_lifecycle.boundary_snapshot()[1]
 
     def _start_visual_detection(self) -> None:
         if self.visual_worker_builder is None or self.session.started_at is None:

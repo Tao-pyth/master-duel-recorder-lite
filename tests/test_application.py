@@ -122,6 +122,15 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             duel_confirmed=True,
             result_detected_monotonic=None,
             boundary_detected_monotonic=100.0,
+            boundary_candidate=DetectionCandidate(
+                "duel_boundary",
+                5000,
+                0.9,
+                "次対戦",
+                "test",
+                "1",
+                evidence="next_duel",
+            ),
             target=SimpleNamespace(recording_id="recording"),
         )
         controller = SimpleNamespace(

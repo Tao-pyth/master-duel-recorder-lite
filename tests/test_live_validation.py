@@ -156,6 +156,30 @@ class LiveValidationTest(unittest.TestCase):
         self.assertEqual(report.failed_attempts, 1)
         self.assertIn("結果以外で停止", report.attempts[0].failure_reasons)
 
+    def test_boundary_handoff_is_next_attempt_without_recovery_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_session(
+                root,
+                "handoff",
+                [
+                    transition("candidate_started", 0),
+                    transition("duel_confirmed", 5),
+                    transition("boundary_stopped", 50),
+                    transition("boundary_handoff_started", 51),
+                    transition("duel_confirmed", 55),
+                    transition("result_stopped", 100),
+                ],
+                sample_at=105,
+            )
+
+            report = evaluate_live_diagnostics(root, since=START)
+
+        self.assertEqual(len(report.attempts), 2)
+        self.assertFalse(report.attempts[0].passed)
+        self.assertTrue(report.attempts[0].monitoring_recovered)
+        self.assertTrue(report.attempts[1].passed)
+
     def test_result_without_recovery_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
