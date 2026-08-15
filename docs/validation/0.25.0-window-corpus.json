@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "dataset_id": "v0.25-standard-window-regression-2026-08-15",
+  "captured_at": "2026-08-15",
+  "ui_language": "ja",
+  "display_profile": "standard-16:9-window",
+  "frame_rate": 2.0,
+  "privacy": "Videos remain local; this manifest contains no file paths or images.",
+  "entries": [
+    {
+      "id": "window-c1296594",
+      "role": "positive-board-fallback-win",
+      "size_bytes": 213759887,
+      "sha256": "25b4593d8cbde181ce479ac52737604c8ba604c61fe024eddd41e2bd74e444ed",
+      "events": [
+        {"event_type": "duel_start", "window_start_ms": 0, "window_end_ms": 2000},
+        {"event_type": "duel_confirmed", "window_start_ms": 0, "window_end_ms": 3000},
+        {"event_type": "duel_result", "window_start_ms": 281000, "window_end_ms": 283500, "outcome": "win"}
+      ]
+    },
+    {
+      "id": "window-6bb0485d",
+      "role": "positive-board-fallback-loss",
+      "size_bytes": 379436843,
+      "sha256": "e52b2e2e18b5fff6e03546871efbeb27929e2ea1d53c1ef651e15385daf96a93",
+      "events": [
+        {"event_type": "duel_start", "window_start_ms": 0, "window_end_ms": 2000},
+        {"event_type": "duel_confirmed", "window_start_ms": 0, "window_end_ms": 3000},
+        {"event_type": "duel_result", "window_start_ms": 478000, "window_end_ms": 482000, "outcome": "loss"}
+      ]
+    },
+    {
+      "id": "window-fddba329",
+      "role": "negative-event-menu",
+      "size_bytes": 17343769,
+      "sha256": "d6e181b837dc64370ed588bfd2c9cfc29f2ec9fe1abbef7364857361ed04bfc6",
+      "events": []
+    },
+    {
+      "id": "window-a8af4a69",
+      "role": "negative-event-menu",
+      "size_bytes": 44521985,
+      "sha256": "de4b20befa239626df6acd67f1ce6a34994818115062d8376e3e6fae06d9f282",
+      "events": []
+    }
+  ]
+}

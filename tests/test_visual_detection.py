@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from master_duel_recorder_lite.frame_capture import FrameSample
 from master_duel_recorder_lite.visual_detection import (
+    _standard_center_loss_score,
     _ultrawide_lower_loss_score,
     DetectionCandidate,
     DuelConfirmationDetector,
@@ -126,6 +127,15 @@ class VisualDetectorTest(unittest.TestCase):
         self.assertGreaterEqual(_ultrawide_lower_loss_score(actual_loss), 0.95)
         self.assertEqual(_ultrawide_lower_loss_score(dense_attack), 0.0)
         self.assertLess(_ultrawide_lower_loss_score(fading_attack), 0.70)
+
+    def test_standard_center_loss_score_accepts_persistent_window_loss(self) -> None:
+        actual_loss = WhiteSpan(ratio=0.42, pixel_ratio=0.121, center_x=0.497)
+        wide_flash = WhiteSpan(ratio=0.97, pixel_ratio=0.216, center_x=0.481)
+        sparse_board = WhiteSpan(ratio=0.40, pixel_ratio=0.050, center_x=0.50)
+
+        self.assertGreaterEqual(_standard_center_loss_score(actual_loss), 0.95)
+        self.assertEqual(_standard_center_loss_score(wide_flash), 0.0)
+        self.assertEqual(_standard_center_loss_score(sparse_board), 0.0)
 
     def test_result_near_board_requires_four_of_five_frames(self) -> None:
         consensus = TemporalEventConsensus(assume_started=True)

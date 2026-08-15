@@ -330,7 +330,12 @@ class MasterDuelUiCueExtractor:
             if image.profile_name == ULTRAWIDE_PROFILE.name
             else 0.0
         )
-        result_score = max(result_score, lower_loss_score)
+        standard_loss_score = (
+            _standard_center_loss_score(result_span)
+            if image.profile_name == STANDARD_PROFILE.name
+            else 0.0
+        )
+        result_score = max(result_score, lower_loss_score, standard_loss_score)
         if board_score >= 0.35:
             result_score = 0.0
         outcome = "unknown"
@@ -338,6 +343,9 @@ class MasterDuelUiCueExtractor:
         if lower_loss_score >= 0.95 and result_score >= 0.95:
             outcome = "loss"
             result_evidence = "ultrawide-lower-loss"
+        elif standard_loss_score >= 0.70 and result_score >= 0.70:
+            outcome = "loss"
+            result_evidence = "standard-center-loss"
         elif result_score >= 0.5:
             outcome = "win" if result_span.ratio >= 0.60 else "loss"
 
@@ -1069,4 +1077,14 @@ def _ultrawide_lower_loss_score(span: WhiteSpan) -> float:
         _scaled(span.ratio, 0.28, 0.36),
         _inverse_scaled(span.ratio, 0.55, 0.48),
         _inverse_scaled(abs(span.center_x - 0.5), 0.10, 0.05),
+    )
+
+
+def _standard_center_loss_score(span: WhiteSpan) -> float:
+    return min(
+        _scaled(span.pixel_ratio, 0.085, 0.110),
+        _inverse_scaled(span.pixel_ratio, 0.160, 0.135),
+        _scaled(span.ratio, 0.34, 0.39),
+        _inverse_scaled(span.ratio, 0.50, 0.45),
+        _inverse_scaled(abs(span.center_x - 0.5), 0.10, 0.06),
     )
