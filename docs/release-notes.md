@@ -23,7 +23,7 @@
 - 外部画像・CDN・JavaScript・秘密情報・絶対パスを追加しない印刷可能な単一HTML出力を実装した
 - HTMLのエスケープ、上書き確認、Windows予約名拒否、fsync後の原子的保存、出力後に開くGUIを追加した
 - 未参照シーズンの削除前にも検証済みバックアップを作成するようにした
-- V0.23.0の結果判定回帰修正と実戦集計CLIを含め、Ruff、単体・統合テスト430件（skip 2件）、CLI/GUI EXEビルドと両EXEのV0.25.0隔離スモークを通過した
+- V0.23.0の結果判定回帰修正と実戦集計CLIを含め、Ruff、単体・統合テスト431件（skip 2件）、CLI/GUI EXEビルドと両EXEのV0.25.0隔離スモークを通過した
 - 最新候補GUIの初期3戦で、勝利した第3戦を決着前の攻撃演出で敗北と誤確定する早期停止を検出し、敗北を4/5フレーム合意へ変更した
 - 一律4/5合意で2fps時に1フレームだけ現れる正規LOSEを見逃す回帰を修正し、高特異度のウルトラワイド下段LOSE形状0.95以上だけを1フレーム確定可能にした
 - 補足有効11戦の2fps全区間再評価で開始11/11、盤面11/11、結果11/11、各Precision/Recall 1.000、負例3本で厳格イベント誤検出0を確認した
@@ -34,7 +34,7 @@
 - ローカルGUI EXE SHA-256: `7E6680ECEA8322E2E28E4C454F6A09D47628390C9C203EBE972CD5AC0457A78E`
 - fix338 GUIによる初期3戦・10戦連続試験と、その後のWindows CIが未完了のため、タグ・Release・`main` pushは保留する
 
-追跡: [V0.25.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/47)、Issue #315 - #327、#333 - #338
+追跡: [V0.25.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/47)、Issue #315 - #327、#333 - #339
 
 ## V0.24.0: データ保全 - 未公開
 

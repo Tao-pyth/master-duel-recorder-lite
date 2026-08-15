@@ -24,7 +24,9 @@ V1.0.0までに、次の中核機能を段階的に提供します。
 
 ## 現在の状態
 
-現在の開発バージョンは `0.22.0`、「戦績入力体験」です。録画あり・なしの統合戦績管理に、簡易入力、根拠付き候補、未完了連続処理、一括編集、保存済みフィルターを追加しました。操作と状態遷移は [docs/architecture/duel-input-workflow.md](docs/architecture/duel-input-workflow.md)、V0.25.0までの作業順は [docs/implementation-plan-v0.22-v0.25.md](docs/implementation-plan-v0.22-v0.25.md) を参照してください。外部サービスへの直接アップロードとOAuthは未実装で、V1.0.0への更新はユーザーの明示指示を待ちます。
+現在のローカル開発バージョンは `0.25.0`、「シーズンレポート」です。V0.22.0の録画あり・なしを統合した戦績入力、V0.23.0の自動監視状態機械・数値診断、V0.24.0の検証付きバックアップ・復元・整合性確認、V0.25.0のシーズン比較・振り返り・HTML出力まで実装しています。操作と状態遷移は [戦績入力設計](docs/architecture/duel-input-workflow.md)、[自動判定設計](docs/architecture/visual-event-detection.md)、[データ保全設計](docs/architecture/data-protection.md)、[シーズンレポート設計](docs/architecture/season-reports.md)を参照してください。
+
+V0.25.0は未公開のRelease候補です。SHA-256で固定した3440x1440動画14本と1920x1080動画4本の2fps回帰、Ruff、全431テスト、CLI/GUI EXEビルドと両スモークは合格しています。残る公開条件は最新fix338 GUIによる初期3戦と、その後の10戦連続実戦試験、push後のWindows CIです。外部サービスへの直接アップロードとOAuthは未実装で、V1.0.0への更新はユーザーの明示指示を待ちます。
 
 開発計画は [docs/roadmap.md](docs/roadmap.md)、バージョンごとの変更は [docs/release-notes.md](docs/release-notes.md) を参照してください。ロードマップ作業は実装前にGitHub Issueへ登録し、バージョンラベルとMilestoneへ接続します。
 
