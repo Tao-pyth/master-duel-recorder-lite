@@ -5294,6 +5294,8 @@ class RecorderGui:
                 )
             elif event.kind in {"stopped", "error"}:
                 self.automatic_recording_confirmed = False
+                self.elapsed_var.set("00:00:00")
+                self.record_detail_var.set("録画ID: -\n保存先: -")
                 self._set_record_status(
                     "watch_waiting" if self.service.watch_active else "idle"
                 )
@@ -5312,13 +5314,16 @@ class RecorderGui:
             elif event.kind == "visual":
                 self.visual_details_var.set(f"判定詳細: {event.message}")
         can_poll_service = self.busy_operations == 0 and not self.closing
-        if can_poll_service and not self.service.watch_active:
+        if can_poll_service:
             try:
                 snapshot = self.service.recording_snapshot()
             except Exception as exc:
                 self._activity(f"状態確認エラー: {exc}")
             else:
-                self._render_recording(snapshot)
+                if self.service.watch_active:
+                    self._render_automatic_recording(snapshot)
+                else:
+                    self._render_recording(snapshot)
         if not self.closing:
             if can_poll_service:
                 status = self.service.visual_detection_status()
@@ -5368,6 +5373,14 @@ class RecorderGui:
             else "disabled"
         )
         self._update_duel_write_controls()
+
+    def _render_automatic_recording(self, snapshot: RecordingSnapshot) -> None:
+        if not snapshot.active:
+            return
+        self.elapsed_var.set(_format_duration(snapshot.elapsed_seconds))
+        self.record_detail_var.set(
+            f"録画ID: {snapshot.recording_id or '-'}\n保存先: 履歴で確認"
+        )
 
     def _set_record_status(self, status: str) -> None:
         presentation = record_status_presentation(status)

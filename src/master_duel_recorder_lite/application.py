@@ -272,6 +272,7 @@ class RecorderApplicationService:
         self._ffmpeg_installer = ffmpeg_installer or FfmpegInstaller()
         self._lock = threading.RLock()
         self._current: PreparedRecording | None = None
+        self._automatic_snapshot: RecordingSnapshot | None = None
         self._manual_starting = False
         self._watch_thread: threading.Thread | None = None
         self._watch_stop = threading.Event()
@@ -476,6 +477,12 @@ class RecorderApplicationService:
             self._collect_manual_terminal_locked()
             if self._current is not None:
                 self._visual_status = self._current.visual_detection_status
+                return self._manual_snapshot_locked()
+            if self._automatic_snapshot is not None:
+                return replace(
+                    self._automatic_snapshot,
+                    elapsed_seconds=_elapsed(self._automatic_snapshot.started_at),
+                )
             return self._manual_snapshot_locked()
 
     def visual_detection_status(self) -> VisualDetectionStatus:
@@ -1370,6 +1377,7 @@ class RecorderApplicationService:
                     diagnostics.transition(transition)
                     event = lifecycle_event
                 if controller.current is not None:
+                    self._publish_automatic_snapshot(controller.current)
                     if (
                         controller.current.duel_confirmed
                         and controller.current.target.recording_id
@@ -1396,6 +1404,7 @@ class RecorderApplicationService:
                         )
                     self._publish_visual_status(controller.current, callback)
                 else:
+                    self._clear_automatic_snapshot()
                     if event.action is AutoRecordingEventAction.STOPPED:
                         if lifecycle_event is None:
                             diagnostics.transition("recording_stopped")
@@ -1440,8 +1449,11 @@ class RecorderApplicationService:
             self._emit(callback, ApplicationEvent("error", str(exc), state="failed"))
         finally:
             if controller is not None and controller.current is not None:
+                if diagnostics is not None:
+                    diagnostics.transition("watch_stopped_with_active_recording")
                 event = controller.manual_stop()
                 self._emit(callback, _application_event(event))
+            self._clear_automatic_snapshot()
             if frame_stream is not None:
                 frame_stream.stop()
             if diagnostics is not None:
@@ -1607,6 +1619,24 @@ class RecorderApplicationService:
             _elapsed(session.started_at),
             session.result,
         )
+
+    def _publish_automatic_snapshot(self, prepared: PreparedRecording) -> None:
+        session = prepared.session
+        snapshot = RecordingSnapshot(
+            session.state is RecordingState.RECORDING,
+            session.state,
+            prepared.target.recording_id,
+            prepared.target.path,
+            session.started_at,
+            _elapsed(session.started_at),
+            session.result,
+        )
+        with self._lock:
+            self._automatic_snapshot = snapshot
+
+    def _clear_automatic_snapshot(self) -> None:
+        with self._lock:
+            self._automatic_snapshot = None
 
     def _browser(self) -> RecordingBrowser:
         if self._recording_browser is None:

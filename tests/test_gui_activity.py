@@ -1,8 +1,11 @@
 import queue
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
+from master_duel_recorder_lite.application import RecordingSnapshot
 from master_duel_recorder_lite.gui import (
     HISTORY_ROW_ACTIONS,
     ICON_GLYPHS,
@@ -16,6 +19,7 @@ from master_duel_recorder_lite.gui import (
     record_status_presentation,
 )
 from master_duel_recorder_lite.duel_statistics import StatisticsMetric
+from master_duel_recorder_lite.recording_session import RecordingState
 
 
 class FakeListbox:
@@ -96,6 +100,57 @@ class GuiActivityTest(unittest.TestCase):
 
         gui.service.recording_snapshot.assert_not_called()
         gui.service.visual_detection_status.assert_not_called()
+        gui.root.after.assert_called_once_with(500, gui._poll_runtime)
+
+    def test_runtime_poll_updates_automatic_elapsed_time_every_500ms(self) -> None:
+        gui = RecorderGui.__new__(RecorderGui)
+        gui.watch_events = queue.Queue()
+        gui.busy_operations = 0
+        gui.closing = False
+        gui.service = Mock()
+        gui.service.watch_active = True
+        gui.service.recording_snapshot.return_value = RecordingSnapshot(
+            True,
+            RecordingState.RECORDING,
+            "automatic-id",
+            Path("recordings/automatic.mkv"),
+            datetime.now(timezone.utc),
+            12.5,
+        )
+        gui.service.visual_detection_status.return_value = SimpleNamespace(
+            message="判定中",
+            source="desktop",
+            resolution="1920x1080",
+            profile="ja",
+            effective_fps=2.0,
+            visual_state="board",
+            coin_score=0.0,
+            board_score=1.0,
+            turn_score=0.0,
+            turn_order_score=0.0,
+            result_score=0.0,
+            error_score=0.0,
+            replay_score=0.0,
+            overlay_score=0.0,
+            loading_score=0.0,
+            agreement="3/5",
+            restart_count=0,
+        )
+        gui.service.operation_snapshot.return_value = SimpleNamespace(message="録画中")
+        gui.root = Mock()
+        gui.elapsed_var = Mock()
+        gui.record_detail_var = Mock()
+        gui.visual_status_var = Mock()
+        gui.visual_details_var = Mock()
+        gui._activity = Mock()
+
+        gui._poll_runtime()
+
+        gui.service.recording_snapshot.assert_called_once_with()
+        gui.elapsed_var.set.assert_called_once_with("00:00:12")
+        gui.record_detail_var.set.assert_called_once_with(
+            "録画ID: automatic-id\n保存先: 履歴で確認"
+        )
         gui.root.after.assert_called_once_with(500, gui._poll_runtime)
 
     def test_automatic_watch_statuses_distinguish_waiting_and_recording(self) -> None:

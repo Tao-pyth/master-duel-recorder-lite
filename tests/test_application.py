@@ -33,6 +33,34 @@ from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
+    def test_automatic_recording_snapshot_uses_ffmpeg_session_start(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        started_at = datetime.now(timezone.utc)
+        prepared = SimpleNamespace(
+            target=SimpleNamespace(
+                recording_id="automatic-id",
+                path=Path("recordings/automatic.mkv"),
+            ),
+            session=SimpleNamespace(
+                state=RecordingState.RECORDING,
+                started_at=started_at,
+                result=None,
+            ),
+        )
+
+        service._publish_automatic_snapshot(prepared)
+        first = service.recording_snapshot()
+        time.sleep(0.02)
+        second = service.recording_snapshot()
+
+        self.assertTrue(first.active)
+        self.assertEqual(first.recording_id, "automatic-id")
+        self.assertEqual(first.started_at, started_at)
+        self.assertGreater(second.elapsed_seconds, first.elapsed_seconds)
+
+        service._clear_automatic_snapshot()
+        self.assertFalse(service.recording_snapshot().active)
+
     def test_stopping_finished_watch_preserves_failed_state(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))
         service._operation_state.transition(OperationState.FAILED, "監視に失敗しました")
