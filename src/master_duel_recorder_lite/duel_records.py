@@ -303,6 +303,9 @@ class DuelRecordRepository:
                 "DELETE FROM duel_record_tag_links WHERE duel_id = ?", (current.duel_id,)
             )
             connection.execute(
+                "DELETE FROM duel_record_tags WHERE duel_id = ?", (current.duel_id,)
+            )
+            connection.execute(
                 "DELETE FROM duel_record_changes WHERE duel_id = ?", (current.duel_id,)
             )
             connection.execute("DELETE FROM duel_records WHERE duel_id = ?", (current.duel_id,))

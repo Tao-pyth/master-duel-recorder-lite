@@ -15,6 +15,7 @@ GUI_EXECUTABLE_NAME = "master-duel-recorder-lite-gui.exe"
 VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 NATIVE_HELPER_PROJECT = Path("native/audio_loopback/mdrl_audio_loopback.vcxproj")
 NATIVE_HELPER_OUTPUT = Path("native/audio_loopback/bin/mdrl-audio-loopback.exe")
+APP_ICON = Path("assets/mdrl.ico")
 
 
 def read_project_version(project_root: Path = PROJECT_ROOT) -> str:
@@ -98,6 +99,8 @@ def build_command(
         str(project_root / "src"),
         "--version-file",
         str(version_file),
+        "--icon",
+        str(project_root / APP_ICON),
         "--distpath",
         str(project_root / "dist"),
         "--workpath",
@@ -111,6 +114,9 @@ def build_command(
     notice = project_root / "THIRD_PARTY_NOTICES.md"
     if notice.is_file():
         command.extend(["--add-data", f"{notice};."])
+    icon = project_root / APP_ICON
+    if icon.is_file():
+        command.extend(["--add-data", f"{icon};assets"])
     command.append(str(project_root / "packaging" / entrypoint))
     return tuple(command)
 

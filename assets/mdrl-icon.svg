@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Master Duel Recorder Lite">
+  <rect x="12" y="12" width="232" height="232" rx="48" fill="#006A6A"/>
+  <path d="M48 62h52l28 34-28 34H72v64H48V62zm160 0h-52l-28 34 28 34h28v64h24V62z" fill="#D8F3EF"/>
+  <circle cx="128" cy="146" r="25" fill="#E23B32" stroke="#FFFFFF" stroke-width="8"/>
+</svg>

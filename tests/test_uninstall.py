@@ -66,6 +66,28 @@ class UninstallTest(unittest.TestCase):
             self.assertFalse(executable.exists())
             self.assertEqual(outside.read_text(encoding="utf-8"), "keep")
 
+    def test_cleanup_removes_runtime_root_pointer_that_selects_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "selected-data"
+            (root / "logs").mkdir(parents=True)
+            pointer = base / "runtime-root.json"
+            pointer.write_text(
+                json.dumps({"runtime_root": str(root.resolve())}), encoding="utf-8"
+            )
+            paths = default_runtime_paths(user_data_dir=root)
+            with (
+                patch(
+                    "master_duel_recorder_lite.data_location.runtime_root_pointer_path",
+                    return_value=pointer,
+                ),
+            ):
+                plan = create_uninstall_plan(paths)
+                execute_cleanup(plan)
+
+            self.assertFalse(root.exists())
+            self.assertFalse(pointer.exists())
+
     def test_cleanup_does_not_follow_directory_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

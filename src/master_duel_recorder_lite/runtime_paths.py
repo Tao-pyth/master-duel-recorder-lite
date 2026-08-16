@@ -76,6 +76,11 @@ def default_runtime_root(
         return project_root.expanduser().resolve() / "user_data"
     is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     if is_frozen:
+        from .data_location import load_runtime_root_pointer
+
+        selected = load_runtime_root_pointer()
+        if selected is not None:
+            return selected
         return local_application_data_root(environ=environment, home=home)
     return application_project_root(frozen=False).resolve() / "user_data"
 

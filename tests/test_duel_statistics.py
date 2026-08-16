@@ -13,6 +13,7 @@ from master_duel_recorder_lite.duel_statistics import (
     statistics_local_date,
 )
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
+from master_duel_recorder_lite.seasons import SeasonRepository
 
 
 class DuelStatisticsRepositoryTest(unittest.TestCase):
@@ -29,6 +30,7 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.records = DuelRecordRepository(self.database)
         self.catalog = DuelCatalogRepository(self.database)
         self.statistics = DuelStatisticsRepository(self.database)
+        self.seasons = SeasonRepository(self.database)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -127,6 +129,37 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual(dashboard.overall.matches, 1)
         self.assertEqual(dashboard.overall.wins, 1)
         self.assertEqual(dashboard.trend[0].period_start, date(2026, 8, 1))
+
+    def test_season_breakdown_includes_named_and_unassigned_records(self) -> None:
+        season = self.seasons.add(
+            name="SEASON 56",
+            season_type="ranked",
+            duel_type="ranked",
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 31),
+        )
+        self._record(
+            "season-win",
+            occurred_at=datetime(2026, 8, 3, 12, tzinfo=timezone.utc),
+            result="win",
+            play_order="first",
+            deck="青眼",
+            season_id=season.season_id,
+        )
+        self._record(
+            "unassigned-loss",
+            occurred_at=datetime(2026, 8, 4, 12, tzinfo=timezone.utc),
+            result="loss",
+            play_order="second",
+            deck="青眼",
+        )
+
+        dashboard = self.statistics.dashboard()
+
+        self.assertEqual(
+            [(item.label, item.metric.matches, item.metric.wins) for item in dashboard.by_season],
+            [("SEASON 56", 1, 1), ("シーズン未設定", 1, 0)],
+        )
 
     def test_imported_record_is_included_without_recording_row(self) -> None:
         record = self.records.create_manual(

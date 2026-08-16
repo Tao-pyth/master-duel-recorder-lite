@@ -117,8 +117,12 @@ class FfmpegInstaller:
             target.parent.mkdir(parents=True, exist_ok=True)
             staging = Path(
                 tempfile.mkdtemp(prefix=".mdrl-ffmpeg-install-", dir=target.parent)
-            )
+            ).resolve()
             try:
+                if staging.parent != target.parent or target in staging.parents:
+                    raise FfmpegSetupError(
+                        "FFmpegの一時展開先とインストール先の関係が不正です"
+                    )
                 _extract_required_tools(archive_path, staging)
                 executable = staging / "bin" / "ffmpeg.exe"
                 discovery = discover_ffmpeg(
@@ -149,7 +153,13 @@ class FfmpegInstaller:
                 _write_installation_record(staging, actual_hash, discovery.version)
                 if target.exists():
                     target.rmdir()
-                staging.replace(target)
+                try:
+                    os.replace(staging, target)
+                except OSError as exc:
+                    raise FfmpegSetupError(
+                        "FFmpegをインストール先へ配置できません。"
+                        f"書き込み権限と、他のアプリが使用していないことを確認してください: {target}: {exc}"
+                    ) from exc
             except Exception:
                 shutil.rmtree(staging, ignore_errors=True)
                 raise

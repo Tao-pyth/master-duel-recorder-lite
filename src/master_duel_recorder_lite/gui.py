@@ -16,6 +16,7 @@ from typing import Callable, TypeVar
 import webbrowser
 
 from . import __version__
+from .app_update import AppUpdateService, UpdateCheckResult, launch_update_after_exit
 from .application import (
     ActiveSeasonSummary,
     ApplicationEvent,
@@ -60,6 +61,13 @@ from .uninstall import (
     launch_cleanup_worker,
     run_cleanup_manifest,
 )
+from .ui_preferences import (
+    COLOR_KEYS,
+    HISTORY_OPTIONAL_COLUMNS,
+    UiPreferences,
+    load_ui_preferences,
+    save_ui_preferences,
+)
 
 
 T = TypeVar("T")
@@ -90,6 +98,8 @@ ICON_GLYPHS = {
     "collapse": "\ue70e",
     "link": "\ue71b",
     "duplicates": "\ue8ef",
+    "columns": "\ue8a5",
+    "update": "\ue895",
 }
 HISTORY_ROW_ACTIONS = (
     ("play", "再生", "Enter"),
@@ -140,6 +150,24 @@ RECORD_STATUS_PRESENTATIONS = {
 
 def record_status_presentation(status: str) -> RecordStatusPresentation:
     return RECORD_STATUS_PRESENTATIONS[status]
+
+
+def _bundled_asset(relative: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
+    return base / relative
+
+
+def _configure_windows_app_identity() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "TaoPyth.MasterDuelRecorderLite"
+        )
+    except (AttributeError, OSError):
+        return
 
 
 def incomplete_duel_count_presentation(count: int) -> RecordStatusPresentation:
@@ -397,6 +425,7 @@ class RecorderGui:
         self.history_views_by_id: dict[str, object] = {}
         self.history_action_buttons: dict[str, ttk.Button] = {}
         self.history_color_lines: list[tk.Widget] = []
+        self.history_color_cells: list[tk.Widget] = []
         self.seasons_by_id: dict[str, object] = {}
         self.season_color_images: dict[str, tk.PhotoImage] = {}
         self.statistics_decks_by_label: dict[str, str | None] = {"すべて": None}
@@ -418,6 +447,18 @@ class RecorderGui:
         self.ffmpeg_setup_prompted = False
         self.ffmpeg_setup_dialog: tk.Toplevel | None = None
         self.tooltips: list[WidgetTooltip] = []
+        self.ui_preferences = load_ui_preferences(self.service.paths.config)
+        self.history_column_vars = {
+            key: tk.BooleanVar(value=key in self.ui_preferences.history_visible_columns)
+            for key in HISTORY_OPTIONAL_COLUMNS
+        }
+        self.history_color_vars = {
+            key: tk.StringVar(value=self.ui_preferences.history_cell_colors[key])
+            for key in COLOR_KEYS
+        }
+        self.prepare_candidates_by_label: dict[str, object] = {}
+        self.pending_preparation_recording_id: str | None = None
+        self.pending_update_path: Path | None = None
 
         self._configure_window()
         self._configure_styles()
@@ -436,12 +477,20 @@ class RecorderGui:
             self._populate_smoke_data()
         else:
             self.refresh_all()
+            if self.ui_preferences.automatic_update_check:
+                self.root.after(2000, self.check_for_updates)
 
     def _configure_window(self) -> None:
         self.root.title(f"Master Duel Recorder Lite {__version__}")
         self.root.geometry("1180x760")
         self.root.minsize(980, 640)
         self.root.configure(background=self.COLORS["canvas"])
+        icon = _bundled_asset("assets/mdrl.ico")
+        if icon.is_file():
+            try:
+                self.root.iconbitmap(default=str(icon))
+            except tk.TclError:
+                pass
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
@@ -927,7 +976,7 @@ class RecorderGui:
         duel_summary.pack(fill="x", pady=(0, 12))
         self.manual_duel_button = ttk.Button(
             duel_summary,
-            text=f"{ICON_GLYPHS['add']}  戦績を追加",
+            text=f"{ICON_GLYPHS['add']}  戦績を追加（録画なし）",
             command=self._open_manual_quick_duel_editor,
         )
         self.manual_duel_button.pack(side="left", padx=(0, 14))
@@ -1095,6 +1144,21 @@ class RecorderGui:
             "録画履歴の整合性を確認",
             self.check_history,
         ).pack(side="left")
+        self.history_columns_button = self._icon_button(
+            action_bar,
+            "columns",
+            "表示する列を選択",
+            self.open_history_columns_menu,
+        )
+        self.history_columns_button.pack(side="left", padx=(6, 0))
+        self.history_prepare_button = self._icon_button(
+            action_bar,
+            "export",
+            "選択した録画をMP4準備へ送る",
+            self.prepare_selected_history,
+            state="disabled",
+        )
+        self.history_prepare_button.pack(side="left", padx=(6, 0))
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
         columns = (
@@ -1112,9 +1176,15 @@ class RecorderGui:
             panel, columns=columns, show="headings", selectmode="extended"
         )
         history_scrollbar = ttk.Scrollbar(
-            panel, orient="horizontal", command=self.history_tree.xview
+            panel, orient="horizontal"
         )
+        def scroll_history_horizontal(*arguments: object) -> None:
+            self.history_tree.xview(*arguments)
+            self.root.after_idle(self._draw_history_color_lines)
+
+        history_scrollbar.configure(command=scroll_history_horizontal)
         self.history_tree.configure(xscrollcommand=history_scrollbar.set)
+        self._apply_history_display_columns()
         for key, label, width in (
             ("started", "開始日時", 155),
             ("deck", "デッキ名", 170),
@@ -1150,6 +1220,11 @@ class RecorderGui:
         self.history_tree.bind(
             "<MouseWheel>", lambda _event: self.root.after_idle(self._draw_history_color_lines), add="+"
         )
+        self.history_tree.bind(
+            "<ButtonRelease-1>",
+            lambda _event: self.root.after_idle(self._draw_history_color_lines),
+            add="+",
+        )
         self.widgets["history_table"] = self.history_tree
         self.widgets["history_play"] = self.history_action_buttons["play"]
         self.widgets["history_reveal"] = self.history_action_buttons["folder"]
@@ -1163,6 +1238,8 @@ class RecorderGui:
         self.widgets["history_incomplete"] = self.history_incomplete_button
         self.widgets["history_bulk"] = self.history_bulk_button
         self.widgets["history_refresh"] = self.history_refresh_button
+        self.widgets["history_columns"] = self.history_columns_button
+        self.widgets["history_prepare"] = self.history_prepare_button
 
     def _build_statistics_page(self) -> None:
         page = self._new_page("statistics")
@@ -1332,10 +1409,12 @@ class RecorderGui:
         deck_page = ttk.Frame(notebook, style="Surface.TFrame", padding=(0, 0))
         order_page = ttk.Frame(notebook, style="Surface.TFrame", padding=(0, 0))
         coin_page = ttk.Frame(notebook, style="Surface.TFrame", padding=(0, 0))
+        season_page = ttk.Frame(notebook, style="Surface.TFrame", padding=(0, 0))
         notebook.add(trend_page, text="勝利数・勝率推移")
         notebook.add(deck_page, text="デッキ別全体")
         notebook.add(order_page, text="デッキ先後別")
         notebook.add(coin_page, text="コイントス別")
+        notebook.add(season_page, text="シーズン別")
         self.statistics_chart = StatisticsTrendChart(trend_page, colors=self.COLORS)
         self.statistics_chart.pack(fill="both", expand=True)
         self.statistics_deck_tree = self._build_statistics_tree(deck_page, "デッキ")
@@ -1345,11 +1424,15 @@ class RecorderGui:
         self.statistics_coin_tree = self._build_statistics_tree(
             coin_page, "コイントス"
         )
+        self.statistics_season_tree = self._build_statistics_tree(
+            season_page, "シーズン"
+        )
         self.widgets["statistics_filters"] = filters
         self.widgets["statistics_chart"] = self.statistics_chart
         self.widgets["statistics_deck_table"] = self.statistics_deck_tree
         self.widgets["statistics_order_table"] = self.statistics_order_tree
         self.widgets["statistics_coin_table"] = self.statistics_coin_tree
+        self.widgets["statistics_season_table"] = self.statistics_season_tree
 
     def _build_statistics_tree(
         self, parent: tk.Misc, first_heading: str
@@ -1621,7 +1704,7 @@ class RecorderGui:
         ttk.Label(form, text="アップロード用MP4準備", style="Heading.TLabel").grid(
             row=0, column=0, columnspan=4, sticky="w"
         )
-        ttk.Label(form, text="録画ID", style="Body.TLabel").grid(
+        ttk.Label(form, text="対象録画", style="Body.TLabel").grid(
             row=1, column=0, sticky="w", pady=(12, 4)
         )
         ttk.Label(form, text="タイトル", style="Body.TLabel").grid(
@@ -1629,9 +1712,24 @@ class RecorderGui:
         )
         self.prepare_recording_var = tk.StringVar()
         self.prepare_title_var = tk.StringVar()
-        ttk.Entry(form, textvariable=self.prepare_recording_var, width=44).grid(
-            row=2, column=0, sticky="ew", padx=(0, 8)
+        target_row = ttk.Frame(form, style="Surface.TFrame")
+        target_row.grid(row=2, column=0, sticky="ew", padx=(0, 8))
+        self.prepare_recording_combo = ttk.Combobox(
+            target_row,
+            textvariable=self.prepare_recording_var,
+            state="readonly",
+            width=44,
         )
+        self.prepare_recording_combo.pack(side="left", fill="x", expand=True)
+        self.prepare_recording_combo.bind(
+            "<<ComboboxSelected>>", self._preparation_candidate_selected
+        )
+        self._icon_button(
+            target_row,
+            "refresh",
+            "MP4準備できる録画を更新",
+            self.refresh_preparation_candidates,
+        ).pack(side="left", padx=(6, 0))
         ttk.Entry(form, textvariable=self.prepare_title_var, width=42).grid(
             row=2, column=1, sticky="ew", padx=(0, 8)
         )
@@ -1654,7 +1752,7 @@ class RecorderGui:
         for key, label, width in (
             ("state", "状態", 100),
             ("title", "タイトル", 240),
-            ("recording", "録画ID", 260),
+            ("recording", "対象録画", 360),
             ("queue", "キューID", 260),
         ):
             self.prepare_tree.heading(key, text=label)
@@ -1663,6 +1761,7 @@ class RecorderGui:
             )
         self.prepare_tree.pack(fill="both", expand=True)
         self.widgets["prepare_table"] = self.prepare_tree
+        self.widgets["prepare_recording"] = self.prepare_recording_combo
 
     def _build_settings_page(self) -> None:
         page = self._new_page("settings")
@@ -1679,6 +1778,12 @@ class RecorderGui:
             command=self.show_ffmpeg_setup,
         )
         self.ffmpeg_setup_button.grid(row=0, column=2, sticky="e")
+        self.ffmpeg_select_button = ttk.Button(
+            panel,
+            text="既存FFmpegを選択",
+            command=self.select_existing_ffmpeg,
+        )
+        self.ffmpeg_select_button.grid(row=0, column=1, sticky="e", padx=(0, 8))
         self.setting_vars = {
             "recorder.ffmpeg_path": tk.StringVar(),
             "recorder.audio_input": tk.StringVar(),
@@ -1816,7 +1921,12 @@ class RecorderGui:
             panel,
             textvariable=self.runtime_path_var,
             style="Muted.TLabel",
-        ).grid(row=14, column=0, columnspan=3, sticky="w")
+        ).grid(row=14, column=0, columnspan=2, sticky="w")
+        ttk.Button(
+            panel,
+            text="保存先を変更",
+            command=self.change_runtime_data_directory,
+        ).grid(row=14, column=2, sticky="e")
         footer = ttk.Frame(panel, style="Surface.TFrame")
         footer.grid(row=15, column=0, columnspan=3, sticky="ew", pady=(18, 0))
         self.settings_status_var = tk.StringVar(value="")
@@ -1976,11 +2086,100 @@ class RecorderGui:
             wraplength=800,
         ).pack(anchor="w")
         self.widgets["csv_status"] = self.csv_status_var
+        display_panel = self._surface(notebook, padding=(20, 18))
+        notebook.add(display_panel, text="表示")
+        ttk.Label(
+            display_panel, text="戦績管理の表示色", style="Heading.TLabel"
+        ).pack(anchor="w")
+        ttk.Label(
+            display_panel,
+            text="初期値は白です。色だけに依存せず、文字表記も維持します。",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(6, 14))
+        color_grid = ttk.Frame(display_panel, style="Surface.TFrame")
+        color_grid.pack(fill="x")
+        color_labels = {
+            "result.win": "勝敗: 勝ち",
+            "result.loss": "勝敗: 負け",
+            "result.draw": "勝敗: 引分",
+            "result.unknown": "勝敗: 未設定",
+            "play_order.first": "先後: 先攻",
+            "play_order.second": "先後: 後攻",
+            "play_order.unknown": "先後: 未設定",
+            "coin_face.heads": "コイン: 表",
+            "coin_face.tails": "コイン: 裏",
+            "coin_face.unknown": "コイン: 未設定",
+            "entry_origin.recording": "登録元: 録画",
+            "entry_origin.manual": "登録元: 手動",
+            "entry_origin.import": "登録元: 取込",
+        }
+        self.history_color_buttons: dict[str, tk.Button] = {}
+        for index, key in enumerate(COLOR_KEYS):
+            row, block = divmod(index, 3)
+            holder = ttk.Frame(color_grid, style="Surface.TFrame")
+            holder.grid(row=row, column=block, sticky="ew", padx=(0, 12), pady=(0, 8))
+            ttk.Label(holder, text=color_labels[key], style="Body.TLabel").pack(side="left")
+            button = tk.Button(
+                holder,
+                textvariable=self.history_color_vars[key],
+                width=9,
+                relief="flat",
+                borderwidth=1,
+                command=lambda selected=key: self.choose_history_cell_color(selected),
+            )
+            button.pack(side="right")
+            self.history_color_buttons[key] = button
+            self._render_history_color_button(key)
+        for column in range(3):
+            color_grid.columnconfigure(column, weight=1, uniform="history-colors")
+        ttk.Button(
+            display_panel,
+            text="表示色を白へ戻す",
+            command=self.reset_history_cell_colors,
+        ).pack(anchor="e", pady=(8, 0))
+
+        update_panel = self._surface(notebook, padding=(20, 18))
+        notebook.add(update_panel, text="アプリ更新")
+        ttk.Label(update_panel, text="アプリ更新", style="Heading.TLabel").pack(anchor="w")
+        self.update_check_var = tk.BooleanVar(
+            value=self.ui_preferences.automatic_update_check
+        )
+        ttk.Checkbutton(
+            update_panel,
+            text="起動後に新しい正式版を確認する",
+            variable=self.update_check_var,
+            command=self._save_ui_preferences,
+        ).pack(anchor="w", pady=(14, 8))
+        self.update_status_var = tk.StringVar(value=f"現在のバージョン: {__version__}")
+        ttk.Label(
+            update_panel,
+            textvariable=self.update_status_var,
+            style="Body.TLabel",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 14))
+        update_actions = ttk.Frame(update_panel, style="Surface.TFrame")
+        update_actions.pack(anchor="w")
+        ttk.Button(
+            update_actions,
+            text="更新を確認",
+            command=self.check_for_updates,
+        ).pack(side="left")
+        self.update_download_button = ttk.Button(
+            update_actions,
+            text="ダウンロードして更新",
+            style="Primary.TButton",
+            command=self.download_and_apply_update,
+            state="disabled",
+        )
+        self.update_download_button.pack(side="left", padx=(8, 0))
+        self.available_update = None
         panel.columnconfigure(0, weight=1)
         panel.columnconfigure(1, weight=1)
         panel.columnconfigure(2, weight=1)
         self.widgets["settings_form"] = notebook
         self.widgets["ffmpeg_setup"] = self.ffmpeg_setup_button
+        self.widgets["app_update"] = update_panel
 
     def show_page(self, key: str) -> None:
         titles = {
@@ -2019,6 +2218,9 @@ class RecorderGui:
             self.refresh_seasons()
         elif key == "prepare":
             self.refresh_preparations()
+            selected_id = self.pending_preparation_recording_id
+            self.pending_preparation_recording_id = None
+            self.refresh_preparation_candidates(selected_id)
         elif key == "settings":
             self.load_settings()
             self.refresh_data_protection()
@@ -2176,6 +2378,7 @@ class RecorderGui:
         self._clear_tree(self.statistics_deck_tree)
         self._clear_tree(self.statistics_order_tree)
         self._clear_tree(self.statistics_coin_tree)
+        self._clear_tree(self.statistics_season_tree)
         for item in dashboard.by_deck:
             self.statistics_deck_tree.insert(
                 "", "end", values=_statistics_breakdown_values(item.label, item.metric)
@@ -2186,6 +2389,10 @@ class RecorderGui:
             )
         for item in dashboard.by_coin_face:
             self.statistics_coin_tree.insert(
+                "", "end", values=_statistics_breakdown_values(item.label, item.metric)
+            )
+        for item in dashboard.by_season:
+            self.statistics_season_tree.insert(
                 "", "end", values=_statistics_breakdown_values(item.label, item.metric)
             )
 
@@ -2810,6 +3017,60 @@ class RecorderGui:
             self._history_loaded,
         )
 
+    def open_history_columns_menu(self) -> None:
+        menu = tk.Menu(self.root, tearoff=False)
+        labels = {
+            "coin_face": "コイン",
+            "duel_type": "対戦種別",
+            "duration": "時間",
+            "size": "サイズ",
+        }
+        for key in HISTORY_OPTIONAL_COLUMNS:
+            menu.add_checkbutton(
+                label=labels[key],
+                variable=self.history_column_vars[key],
+                command=self._history_columns_changed,
+            )
+        menu.add_separator()
+        menu.add_command(label="初期状態へ戻す", command=self._reset_history_columns)
+        button = self.history_columns_button
+        menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+
+    def _history_columns_changed(self) -> None:
+        self._apply_history_display_columns()
+        self._save_ui_preferences()
+
+    def _reset_history_columns(self) -> None:
+        for variable in self.history_column_vars.values():
+            variable.set(True)
+        self._history_columns_changed()
+
+    def _apply_history_display_columns(self) -> None:
+        required = ("started", "deck", "result", "order")
+        optional = tuple(
+            key for key in HISTORY_OPTIONAL_COLUMNS if self.history_column_vars[key].get()
+        )
+        self.history_tree.configure(displaycolumns=required + optional + ("origin",))
+        self.root.after_idle(self._draw_history_color_lines)
+
+    def _save_ui_preferences(self) -> None:
+        selected = UiPreferences(
+            tuple(
+                key for key in HISTORY_OPTIONAL_COLUMNS if self.history_column_vars[key].get()
+            ),
+            {key: variable.get() for key, variable in self.history_color_vars.items()},
+            self.update_check_var.get() if hasattr(self, "update_check_var") else self.ui_preferences.automatic_update_check,
+        ).normalized()
+        save_ui_preferences(self.service.paths.config, selected)
+        self.ui_preferences = selected
+
+    def prepare_selected_history(self) -> None:
+        selected = self._selected_history_view()
+        if selected is None or selected.recording_id is None:
+            return
+        self.pending_preparation_recording_id = selected.recording_id
+        self.show_page("prepare")
+
     def refresh_active_seasons(self) -> None:
         if self.smoke_mode:
             return
@@ -3111,6 +3372,9 @@ class RecorderGui:
         for widget in self.history_color_lines:
             widget.destroy()
         self.history_color_lines.clear()
+        for widget in self.history_color_cells:
+            widget.destroy()
+        self.history_color_cells.clear()
         if not self.history_tree.winfo_exists():
             return
         for row_id, view in self.history_views_by_id.items():
@@ -3124,6 +3388,52 @@ class RecorderGui:
             line = tk.Frame(self.history_tree, background=color, borderwidth=0)
             line.place(x=x + width - 3, y=y + 5, width=3, height=max(1, height - 10))
             self.history_color_lines.append(line)
+        self._draw_history_cell_colors()
+
+    def _draw_history_cell_colors(self) -> None:
+        value_keys = {
+            "result": ("result", "result"),
+            "order": ("play_order", "play_order"),
+            "coin_face": ("coin_face", "coin_face"),
+            "origin": ("entry_origin", "entry_origin"),
+        }
+        raw_columns = self.history_tree.cget("displaycolumns")
+        visible = set(
+            raw_columns
+            if isinstance(raw_columns, tuple)
+            else self.root.tk.splitlist(raw_columns)
+        )
+        for row_id, view in self.history_views_by_id.items():
+            for column, (attribute, prefix) in value_keys.items():
+                if column not in visible:
+                    continue
+                raw = str(getattr(view, attribute, "unknown") or "unknown")
+                color = self.ui_preferences.history_cell_colors.get(
+                    f"{prefix}.{raw}", "#FFFFFF"
+                )
+                if color.upper() == "#FFFFFF":
+                    continue
+                bounds = self.history_tree.bbox(row_id, column)
+                if not bounds:
+                    continue
+                x, y, width, height = bounds
+                label = tk.Label(
+                    self.history_tree,
+                    text=self.history_tree.set(row_id, column),
+                    background=color,
+                    foreground=_contrast_text_color(color),
+                    borderwidth=0,
+                    font=("Segoe UI", 9),
+                )
+                label.place(x=x + 1, y=y + 1, width=max(1, width - 2), height=max(1, height - 2))
+                label.bind(
+                    "<Button-1>",
+                    lambda _event, selected=row_id: (
+                        self.history_tree.selection_set(selected),
+                        self.history_tree.focus(selected),
+                    ),
+                )
+                self.history_color_cells.append(label)
 
     def _history_selection_changed(self, _event: object | None = None) -> None:
         selection = self.history_tree.selection()
@@ -3144,6 +3454,8 @@ class RecorderGui:
         self.history_action_buttons["delete"].configure(
             state="normal" if len(selection) == 1 and view is not None else "disabled"
         )
+        self.history_prepare_button.configure(state=media_state)
+
         missing_recording = False
         if has_recording and view is not None and view.entry is not None:
             missing_recording = not (
@@ -3162,6 +3474,10 @@ class RecorderGui:
             and self.service.duel_write_block_reason() is None
             else "disabled"
         )
+
+    def _selected_history_view(self) -> object | None:
+        selection = self.history_tree.selection()
+        return self.history_views_by_id.get(str(selection[0])) if selection else None
 
     def play_selected_history(self) -> None:
         selection = self.history_tree.selection()
@@ -5301,9 +5617,48 @@ class RecorderGui:
             return
         self._run(self.service.list_preparations, self._preparations_loaded)
 
+    def refresh_preparation_candidates(self, selected_id: str | None = None) -> None:
+        if self.smoke_mode:
+            return
+        self._run(
+            self.service.list_preparation_candidates,
+            lambda items: self._preparation_candidates_loaded(items, selected_id),
+        )
+
+    def _preparation_candidates_loaded(
+        self, items: tuple[object, ...], selected_id: str | None
+    ) -> None:
+        self.prepare_candidates_by_label = {item.label: item for item in items}
+        self.prepare_recording_combo.configure(values=tuple(self.prepare_candidates_by_label))
+        selected = next(
+            (
+                item
+                for item in items
+                if selected_id is not None and item.recording_id == selected_id
+            ),
+            items[0] if items else None,
+        )
+        self.prepare_recording_var.set(selected.label if selected is not None else "")
+        if selected is not None and not self.prepare_title_var.get().strip():
+            self.prepare_title_var.set(selected.title)
+        self.refresh_preparations()
+
+    def _preparation_candidate_selected(self, _event: object | None = None) -> None:
+        selected = self.prepare_candidates_by_label.get(self.prepare_recording_var.get())
+        if selected is not None:
+            self.prepare_title_var.set(selected.title)
+
     def _preparations_loaded(self, items: tuple[object, ...]) -> None:
         self._clear_tree(self.prepare_tree)
         for item in items:
+            candidate = next(
+                (
+                    value
+                    for value in self.prepare_candidates_by_label.values()
+                    if value.recording_id == item.recording_id
+                ),
+                None,
+            )
             self.prepare_tree.insert(
                 "",
                 "end",
@@ -5311,16 +5666,17 @@ class RecorderGui:
                 values=(
                     item.state.value,
                     item.metadata.title,
-                    item.recording_id,
+                    candidate.label if candidate is not None else "録画履歴から確認",
                     item.queue_id,
                 ),
             )
 
     def enqueue_preparation(self) -> None:
-        recording_id = self.prepare_recording_var.get().strip()
+        selected = self.prepare_candidates_by_label.get(self.prepare_recording_var.get())
+        recording_id = selected.recording_id if selected is not None else ""
         title = self.prepare_title_var.get().strip()
         if not recording_id or not title:
-            self._show_error(ValueError("録画IDとタイトルを入力してください"))
+            self._show_error(ValueError("対象録画とタイトルを入力してください"))
             return
         self._run(
             lambda: self.service.enqueue_preparation(recording_id, title=title),
@@ -5381,6 +5737,146 @@ class RecorderGui:
         self.audio_choice_var.set(config.audio_input or "音声なし")
         self._audio_mode_selected()
         self.refresh_audio_inputs()
+
+    def select_existing_ffmpeg(self) -> None:
+        selected = filedialog.askopenfilename(
+            parent=self.root,
+            title="既存のffmpeg.exeを選択",
+            filetypes=(("FFmpeg", "ffmpeg.exe"), ("実行ファイル", "*.exe")),
+        )
+        if not selected:
+            return
+        self._run(
+            lambda: self.service.select_ffmpeg_executable(Path(selected)),
+            lambda executable: (
+                self.setting_vars["recorder.ffmpeg_path"].set(str(executable)),
+                self.settings_status_var.set("既存FFmpegを設定しました"),
+                self.run_diagnosis(),
+            ),
+        )
+
+    def change_runtime_data_directory(self) -> None:
+        selected = filedialog.askdirectory(
+            parent=self.root,
+            title="新しいデータ保存先（空の専用フォルダ）",
+            initialdir=str(self.service.paths.root.parent),
+            mustexist=False,
+        )
+        if not selected:
+            return
+        destination = Path(selected).expanduser().resolve()
+        if not messagebox.askyesno(
+            "データ保存先を変更",
+            "現在のデータを新しい保存先へコピーし、SQLite整合性を確認します。\n"
+            "元データは自動削除しません。変更はアプリ再起動後に有効です。\n\n"
+            f"新しい保存先: {destination}\n\n続行しますか？",
+            parent=self.root,
+        ):
+            return
+        self._run(
+            lambda: self.service.relocate_runtime_data(destination),
+            lambda result: messagebox.showinfo(
+                "データ保存先を変更しました",
+                f"次回起動から次の保存先を使用します。\n{result.destination}\n\n"
+                f"元データは安全確認後に手動で整理してください。\n{result.source}",
+                parent=self.root,
+            ),
+        )
+
+    def choose_history_cell_color(self, key: str) -> None:
+        selected = colorchooser.askcolor(
+            color=self.history_color_vars[key].get(),
+            parent=self.root,
+            title="戦績表示色を選択",
+        )[1]
+        if not selected:
+            return
+        self.history_color_vars[key].set(selected.upper())
+        self._render_history_color_button(key)
+        self._save_ui_preferences()
+        self._draw_history_color_lines()
+
+    def _render_history_color_button(self, key: str) -> None:
+        color = self.history_color_vars[key].get()
+        self.history_color_buttons[key].configure(
+            background=color,
+            foreground=_contrast_text_color(color),
+            activebackground=color,
+            activeforeground=_contrast_text_color(color),
+        )
+
+    def reset_history_cell_colors(self) -> None:
+        if not messagebox.askyesno(
+            "表示色を初期化",
+            "戦績管理の表示色をすべて白へ戻しますか？",
+            parent=self.root,
+        ):
+            return
+        for key in COLOR_KEYS:
+            self.history_color_vars[key].set("#FFFFFF")
+            self._render_history_color_button(key)
+        self._save_ui_preferences()
+        self._draw_history_color_lines()
+
+    def check_for_updates(self) -> None:
+        if self.smoke_mode:
+            return
+        self.update_status_var.set("新しい正式版を確認しています")
+        self._run(
+            lambda: AppUpdateService().check(__version__),
+            self._update_check_completed,
+            self._update_check_failed,
+        )
+
+    def _update_check_completed(self, result: UpdateCheckResult) -> None:
+        self.available_update = result.release
+        if result.release is None:
+            self.update_status_var.set(f"現在のバージョン {__version__} は最新です")
+            self.update_download_button.configure(state="disabled")
+            return
+        release = result.release
+        self.update_status_var.set(
+            f"新しい正式版 {release.version} を利用できます / "
+            f"{_format_bytes(release.size_bytes)}"
+        )
+        self.update_download_button.configure(state="normal")
+
+    def _update_check_failed(self, error: BaseException) -> None:
+        self.update_status_var.set(f"更新を確認できません: {error}")
+        self._activity(f"更新確認: {error}")
+
+    def download_and_apply_update(self) -> None:
+        release = self.available_update
+        if release is None:
+            return
+        if self.service.operation_snapshot().state.value != "idle":
+            messagebox.showinfo(
+                "更新を適用できません",
+                "録画または自動監視を停止してから更新してください。",
+                parent=self.root,
+            )
+            return
+        if not messagebox.askyesno(
+            "アプリを更新",
+            f"V{release.version}を取得して、アプリ終了後に更新しますか？",
+            parent=self.root,
+        ):
+            return
+        destination = self.service.paths.data / "updates" / f"mdrl-gui-{release.version}.exe"
+        self.update_status_var.set("更新EXEを取得して検証しています")
+        self._run(
+            lambda: AppUpdateService().download(release, destination),
+            self._update_downloaded,
+        )
+
+    def _update_downloaded(self, path: Path) -> None:
+        try:
+            launch_update_after_exit(path)
+        except Exception as exc:
+            self._show_error(exc)
+            return
+        self.update_status_var.set("アプリ終了後に更新します")
+        self.request_close()
 
     def refresh_audio_inputs(self) -> None:
         if self.smoke_mode:
@@ -5896,6 +6392,7 @@ class RecorderGui:
             by_play_order=(),
             by_deck_play_order=(),
             by_coin_face=(),
+            by_season=(),
             trend=smoke_points,
             filters=StatisticsFilter(),
             granularity="month",
@@ -5984,6 +6481,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_gui_parser().parse_args(argv)
     if args.cleanup_manifest is not None:
         return run_cleanup_manifest(args.cleanup_manifest)
+    _configure_windows_app_identity()
     root = tk.Tk()
     service = RecorderApplicationService(
         project_root=args.project_root,

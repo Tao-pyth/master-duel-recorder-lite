@@ -38,6 +38,7 @@ from .config import (
 )
 from .config_management import updated_config
 from .data_management import ManagedDataResult, ManagedDataService
+from .data_location import DataRelocationResult, relocate_runtime_data
 from .data_protection import (
     BackupInfo,
     DataProtectionService,
@@ -136,6 +137,13 @@ class RecordingSnapshot:
     started_at: datetime | None
     elapsed_seconds: float
     result: RecordingResult | None = None
+
+
+@dataclass(frozen=True)
+class PreparationCandidate:
+    recording_id: str
+    label: str
+    title: str
 
 
 @dataclass(frozen=True)
@@ -370,6 +378,11 @@ class RecorderApplicationService:
     def runtime_data_directory(self) -> Path:
         return self.paths.root
 
+    def relocate_runtime_data(self, destination: Path) -> DataRelocationResult:
+        self._require_data_management_idle()
+        DataProtectionService(self.paths).create_backup("pre-data-relocation")
+        return relocate_runtime_data(self.paths, destination)
+
     def default_ffmpeg_install_directory(self) -> Path:
         return default_ffmpeg_install_directory()
 
@@ -382,6 +395,21 @@ class RecorderApplicationService:
         result = self._ffmpeg_installer.install(destination, progress=progress)
         self.save_settings({"recorder.ffmpeg_path": str(result.executable)})
         return result
+
+    def select_ffmpeg_executable(self, executable: Path) -> Path:
+        selected = executable.expanduser().resolve()
+        discovery = discover_ffmpeg(str(selected))
+        if (
+            not selected.is_file()
+            or not discovery.found
+            or discovery.version is None
+            or not discovery.version.is_supported
+        ):
+            raise ApplicationOperationError(
+                "FFmpeg 6.0以上のffmpeg.exeを選択してください"
+            )
+        self.save_settings({"recorder.ffmpeg_path": str(selected)})
+        return selected
 
     def list_audio_inputs(self) -> InputEnumerationResult:
         config = self.load_config().config
@@ -1301,6 +1329,32 @@ class RecorderApplicationService:
 
     def list_preparations(self) -> tuple[UploadQueueItem, ...]:
         return UploadQueueStore(self.paths).list()
+
+    def list_preparation_candidates(self) -> tuple[PreparationCandidate, ...]:
+        candidates: list[PreparationCandidate] = []
+        for view in self.list_history_views(limit=1000):
+            entry = view.entry
+            if entry is None or entry.state != "completed" or view.recording_id is None:
+                continue
+            try:
+                reference = self.resolve_recording(view.recording_id)
+            except Exception:
+                continue
+            occurred = view.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M")
+            deck = view.own_deck or "デッキ未設定"
+            result = {
+                "win": "勝ち",
+                "loss": "負け",
+                "draw": "引分",
+            }.get(view.result, "勝敗未設定")
+            candidates.append(
+                PreparationCandidate(
+                    view.recording_id,
+                    f"{occurred} | {deck} | {result} | {reference.path.name}",
+                    f"{occurred} {deck} {result}",
+                )
+            )
+        return tuple(candidates)
 
     def enqueue_preparation(
         self,

@@ -753,3 +753,21 @@
 追跡: [V1.0.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/52)、親Issue #378、子Issue #379 - #380
 
 完了条件: コード、README、ロードマップ、main、`v1.0.0`タグ、GitHub Release、CI、公開SHA-256が一致し、V0.26.2で確定した既知制約を維持したまま全品質ゲートが成功すること。
+
+## V1.0.1: 正式版初回の不具合修正と操作改善
+
+状態: 完了
+
+- 手動戦績削除時の外部キー制約エラーを修正する
+- FFmpegの既存実行ファイルと導入先をGUIから選択可能にする
+- 実行時データの保存先をバックアップ・検査・失敗時非切替付きで変更可能にする
+- MP4準備対象を利用者が識別できる録画情報から選択可能にする
+- 統計へシーズン別勝率を追加する
+- 戦績管理の任意列表示と値別背景色設定を追加する
+- 録画なし戦績の追加操作を明確に表記する
+- GitHub正式Releaseの安全な更新確認・取得・適用を追加する
+- 専用アプリアイコンをGUI、タスクバー、配布EXEへ適用する
+
+追跡: [V1.0.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/53)、親Issue #381、子Issue #382 - #392
+
+完了条件: Ruff、全単体テスト、CLI/GUI EXEビルド、両スモーク、GUI目視確認、Windows CI、公開SHA-256に合格し、コード、文書、main、`v1.0.1`タグ、GitHub Releaseを一致させること。

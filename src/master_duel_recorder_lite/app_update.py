@@ -1,0 +1,191 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+RELEASE_API = "https://api.github.com/repos/Tao-pyth/master-duel-recorder-lite/releases/latest"
+GUI_ASSET_NAME = "master-duel-recorder-lite-gui.exe"
+MAX_UPDATE_BYTES = 256 * 1024 * 1024
+VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+
+
+class AppUpdateError(RuntimeError):
+    """アプリ更新を安全に確認・取得できない場合のエラーです。"""
+
+
+@dataclass(frozen=True)
+class UpdateRelease:
+    version: str
+    name: str
+    page_url: str
+    executable_url: str
+    checksum_url: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class UpdateCheckResult:
+    current_version: str
+    release: UpdateRelease | None
+
+    @property
+    def available(self) -> bool:
+        return self.release is not None
+
+
+OpenUrl = Callable[..., object]
+
+
+class AppUpdateService:
+    def __init__(self, *, opener: OpenUrl = urlopen) -> None:
+        self.opener = opener
+
+    def check(self, current_version: str) -> UpdateCheckResult:
+        current = _version(current_version)
+        document = self._read_json(RELEASE_API, 1024 * 1024)
+        if bool(document.get("draft")) or bool(document.get("prerelease")):
+            return UpdateCheckResult(current_version, None)
+        tag = str(document.get("tag_name", ""))
+        latest = _version(tag)
+        if latest <= current:
+            return UpdateCheckResult(current_version, None)
+        assets = document.get("assets")
+        if not isinstance(assets, list):
+            raise AppUpdateError("Releaseの成果物一覧を確認できません")
+        by_name = {
+            str(asset.get("name")): asset
+            for asset in assets
+            if isinstance(asset, dict)
+        }
+        executable = by_name.get(GUI_ASSET_NAME)
+        checksum = by_name.get(f"{GUI_ASSET_NAME}.sha256")
+        if not isinstance(executable, dict) or not isinstance(checksum, dict):
+            raise AppUpdateError("GUI EXEまたはSHA-256成果物がReleaseにありません")
+        size = executable.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= MAX_UPDATE_BYTES:
+            raise AppUpdateError("更新EXEのサイズが安全範囲外です")
+        release = UpdateRelease(
+            ".".join(str(value) for value in latest),
+            str(document.get("name") or tag),
+            str(document.get("html_url") or ""),
+            _https_url(executable.get("browser_download_url")),
+            _https_url(checksum.get("browser_download_url")),
+            size,
+        )
+        return UpdateCheckResult(current_version, release)
+
+    def download(self, release: UpdateRelease, destination: Path) -> Path:
+        target = destination.expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        checksum_text = self._read_bytes(release.checksum_url, 4096).decode(
+            "ascii", errors="strict"
+        )
+        match = re.search(r"(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", checksum_text)
+        if match is None:
+            raise AppUpdateError("更新SHA-256を解析できません")
+        payload = self._read_bytes(release.executable_url, MAX_UPDATE_BYTES)
+        if len(payload) != release.size_bytes:
+            raise AppUpdateError("更新EXEのサイズがRelease情報と一致しません")
+        actual = hashlib.sha256(payload).hexdigest()
+        if actual != match.group(0).lower():
+            raise AppUpdateError("更新EXEのSHA-256が公開値と一致しません")
+        temporary = target.with_suffix(f"{target.suffix}.part")
+        try:
+            temporary.write_bytes(payload)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return target
+
+    def _read_json(self, url: str, maximum: int) -> dict[str, object]:
+        try:
+            document = json.loads(self._read_bytes(url, maximum).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AppUpdateError("更新情報を解析できません") from exc
+        if not isinstance(document, dict):
+            raise AppUpdateError("更新情報の形式が不正です")
+        return document
+
+    def _read_bytes(self, url: str, maximum: int) -> bytes:
+        request = Request(url, headers={"User-Agent": "master-duel-recorder-lite-update"})
+        try:
+            with self.opener(request, timeout=20) as response:  # type: ignore[attr-defined]
+                data = response.read(maximum + 1)
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            raise AppUpdateError(f"更新情報を取得できません: {exc}") from exc
+        if len(data) > maximum:
+            raise AppUpdateError("更新データが安全上限を超えています")
+        return data
+
+
+def launch_update_after_exit(downloaded_executable: Path) -> Path:
+    if not bool(getattr(sys, "frozen", False)):
+        raise AppUpdateError("アプリ更新の適用は配布EXEでのみ利用できます")
+    current = Path(sys.executable).resolve()
+    downloaded = downloaded_executable.expanduser().resolve()
+    if not downloaded.is_file() or downloaded.stat().st_size <= 0:
+        raise AppUpdateError("取得済み更新EXEが見つかりません")
+    script = downloaded.parent / "apply-mdrl-update.ps1"
+    backup = current.with_suffix(f"{current.suffix}.previous")
+    quoted_current = str(current).replace("'", "''")
+    quoted_downloaded = str(downloaded).replace("'", "''")
+    quoted_backup = str(backup).replace("'", "''")
+    script.write_text(
+        "\n".join(
+            (
+                "$ErrorActionPreference = 'Stop'",
+                f"$current = '{quoted_current}'",
+                f"$downloaded = '{quoted_downloaded}'",
+                f"$backup = '{quoted_backup}'",
+                f"Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue",
+                "Start-Sleep -Milliseconds 500",
+                "Copy-Item -LiteralPath $current -Destination $backup -Force",
+                "Copy-Item -LiteralPath $downloaded -Destination $current -Force",
+                "$updated = Start-Process -FilePath $current -PassThru",
+                "Start-Sleep -Seconds 5",
+                "if ($updated.HasExited -and $updated.ExitCode -ne 0) {",
+                "  Copy-Item -LiteralPath $backup -Destination $current -Force",
+                "  Start-Process -FilePath $current",
+                "}",
+                "Remove-Item -LiteralPath $downloaded -Force -ErrorAction SilentlyContinue",
+                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+            )
+        ),
+        encoding="utf-8-sig",
+    )
+    subprocess.Popen(
+        (
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+        ),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        close_fds=True,
+    )
+    return script
+
+
+def _version(value: str) -> tuple[int, int, int]:
+    match = VERSION_PATTERN.fullmatch(value.strip())
+    if match is None:
+        raise AppUpdateError(f"更新バージョンの形式が不正です: {value}")
+    return tuple(int(item) for item in match.groups())  # type: ignore[return-value]
+
+
+def _https_url(value: object) -> str:
+    if not isinstance(value, str) or not value.startswith("https://"):
+        raise AppUpdateError("更新成果物のURLがHTTPSではありません")
+    return value

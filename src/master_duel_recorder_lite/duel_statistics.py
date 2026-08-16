@@ -92,6 +92,7 @@ class StatisticsDashboard:
     by_play_order: tuple[StatisticsBreakdown, ...]
     by_deck_play_order: tuple[StatisticsBreakdown, ...]
     by_coin_face: tuple[StatisticsBreakdown, ...]
+    by_season: tuple[StatisticsBreakdown, ...]
     trend: tuple[StatisticsTrendPoint, ...]
     filters: StatisticsFilter
     granularity: str
@@ -137,6 +138,7 @@ class DuelStatisticsRepository:
             raise ValueError(f"未対応の集計単位です: {granularity}")
         all_rows = self._read_rows()
         filtered_rows = self.rows(selected)
+        season_labels = self._season_labels()
         return StatisticsDashboard(
             overall=_metric(all_rows),
             filtered=_metric(filtered_rows),
@@ -144,10 +146,16 @@ class DuelStatisticsRepository:
             by_play_order=_breakdown_by_play_order(filtered_rows),
             by_deck_play_order=_breakdown_by_deck_play_order(filtered_rows),
             by_coin_face=_breakdown_by_coin_face(filtered_rows),
+            by_season=_breakdown_by_season(filtered_rows, season_labels),
             trend=_trend(filtered_rows, selected, granularity),
             filters=selected,
             granularity=granularity,
         )
+
+    def _season_labels(self) -> dict[int, str]:
+        with closing(connect_history_database(self.database_path)) as connection:
+            rows = connection.execute("SELECT season_id, name FROM seasons").fetchall()
+        return {int(row["season_id"]): str(row["name"]) for row in rows}
 
     def rows(
         self, filters: StatisticsFilter | None = None
@@ -304,6 +312,26 @@ def _breakdown_by_coin_face(
 ) -> tuple[StatisticsBreakdown, ...]:
     labels = {"heads": "表", "tails": "裏", "unknown": "未設定"}
     return _breakdown_by_choice(rows, "coin_face", labels)
+
+
+def _breakdown_by_season(
+    rows: tuple[_StatisticsRow, ...], labels: dict[int, str]
+) -> tuple[StatisticsBreakdown, ...]:
+    grouped: dict[int | None, list[_StatisticsRow]] = defaultdict(list)
+    for row in rows:
+        grouped[row.season_id].append(row)
+    ordered = sorted(
+        grouped,
+        key=lambda key: (key is None, labels.get(key, "シーズン未設定").casefold()),
+    )
+    return tuple(
+        StatisticsBreakdown(
+            "unassigned" if key is None else str(key),
+            "シーズン未設定" if key is None else labels.get(key, f"削除済みシーズン {key}"),
+            _metric(grouped[key]),
+        )
+        for key in ordered
+    )
 
 
 def _breakdown_by_choice(

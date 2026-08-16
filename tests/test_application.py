@@ -331,6 +331,19 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertEqual(service.list_history_views(), ())
         self.assertEqual(backups[0].reason, "pre-duel-delete")
 
+    def test_manual_duel_with_legacy_and_catalog_tags_can_be_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            created = service.create_manual_duel_record(
+                DuelRecordValues(status="confirmed", tags=("大会",)),
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+            deleted = service.delete_duel_record(created.duel_id)
+
+            self.assertEqual(deleted.duel_id, created.duel_id)
+            self.assertEqual(service.list_history_views(), ())
+
     def test_new_duel_editor_inherits_last_values_but_existing_record_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir) / "user_data"

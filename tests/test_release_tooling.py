@@ -7,6 +7,7 @@ from pathlib import Path
 from scripts.build_windows_exe import (
     EXECUTABLE_NAME,
     GUI_EXECUTABLE_NAME,
+    APP_ICON,
     build_command,
     PROJECT_ROOT,
     read_project_version,
@@ -25,10 +26,10 @@ class ReleaseToolingTest(unittest.TestCase):
         version = read_project_version()
         resource = windows_version_resource(version)
 
-        self.assertEqual(version, "1.0.0")
-        self.assertEqual(windows_version_tuple(version), (1, 0, 0, 0))
-        self.assertIn("filevers=(1, 0, 0, 0)", resource)
-        self.assertIn("ProductVersion', '1.0.0'", resource)
+        self.assertEqual(version, "1.0.1")
+        self.assertEqual(windows_version_tuple(version), (1, 0, 1, 0))
+        self.assertIn("filevers=(1, 0, 1, 0)", resource)
+        self.assertIn("ProductVersion', '1.0.1'", resource)
         self.assertIn(EXECUTABLE_NAME, resource)
 
     def test_build_command_is_onefile_console_without_upx(self) -> None:
@@ -40,6 +41,7 @@ class ReleaseToolingTest(unittest.TestCase):
         self.assertIn("--noupx", command)
         self.assertIn(str(root / "src"), command)
         self.assertNotIn("--windowed", command)
+        self.assertEqual(command[command.index("--icon") + 1], str(root / APP_ICON))
 
     def test_gui_build_command_is_onefile_windowed(self) -> None:
         root = Path("project").resolve()
@@ -55,6 +57,7 @@ class ReleaseToolingTest(unittest.TestCase):
         self.assertIn("--windowed", command)
         self.assertNotIn("--console", command)
         self.assertIn(str(root / "packaging" / "mdrl_gui_entry.py"), command)
+        self.assertEqual(command[command.index("--icon") + 1], str(root / APP_ICON))
 
     def test_build_command_bundles_native_helper_and_license_notice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -72,13 +75,13 @@ class ReleaseToolingTest(unittest.TestCase):
         self.assertEqual(notice_option, f"{notice};.")
 
     def test_release_tag_matches_both_version_sources(self) -> None:
-        self.assertEqual(read_package_version(), "1.0.0")
-        self.assertEqual(verify_project_version(), "1.0.0")
-        self.assertEqual(verify_release_tag("v1.0.0"), "1.0.0")
+        self.assertEqual(read_package_version(), "1.0.1")
+        self.assertEqual(verify_project_version(), "1.0.1")
+        self.assertEqual(verify_release_tag("v1.0.1"), "1.0.1")
 
     def test_release_tag_script_supports_direct_execution(self) -> None:
         completed = subprocess.run(
-            [sys.executable, "scripts/verify_release_tag.py", "v1.0.0"],
+            [sys.executable, "scripts/verify_release_tag.py", "v1.0.1"],
             cwd=PROJECT_ROOT,
             check=False,
             capture_output=True,
@@ -86,7 +89,7 @@ class ReleaseToolingTest(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout.strip(), "1.0.0")
+        self.assertEqual(completed.stdout.strip(), "1.0.1")
 
     def test_release_tag_mismatch_fails(self) -> None:
         with self.assertRaises(ValueError):

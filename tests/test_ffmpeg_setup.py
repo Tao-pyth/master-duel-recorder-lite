@@ -127,6 +127,32 @@ class FfmpegInstallerTest(unittest.TestCase):
 
             self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
 
+    def test_existing_empty_destination_uses_a_sibling_staging_directory(self) -> None:
+        archive = archive_bytes()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            destination = Path(tmp_dir) / "ffmpeg"
+            destination.mkdir()
+            installer = FfmpegInstaller(
+                download=downloader_for(archive),
+                runner=lambda _command, timeout: CommandResult(
+                    0 if timeout == 15 else 1,
+                    VERSION_OUTPUT,
+                    "",
+                ),
+                platform_name="Windows",
+            )
+
+            result = installer.install(destination)
+
+            self.assertEqual(result.destination, destination.resolve())
+            self.assertTrue(result.executable.is_file())
+            self.assertFalse(
+                any(
+                    path.name.startswith(".mdrl-ffmpeg-install-")
+                    for path in destination.iterdir()
+                )
+            )
+
     def test_unsupported_version_is_removed_before_publish(self) -> None:
         archive = archive_bytes()
         with tempfile.TemporaryDirectory() as tmp_dir:

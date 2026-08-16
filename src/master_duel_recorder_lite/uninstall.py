@@ -31,6 +31,7 @@ class UninstallPlan:
     file_count: int
     directory_count: int
     total_bytes: int
+    runtime_pointer: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class CleanupManifest:
     executable: str | None
     remove_executable: bool
     result_path: str
+    runtime_pointer: str | None = None
 
 
 def _forbidden_roots() -> set[Path]:
@@ -126,6 +128,17 @@ def create_uninstall_plan(
         if not selected_executable.is_file():
             raise UninstallError(f"起動EXEが見つかりません: {selected_executable}")
     files, directories, total_bytes = _inventory(root)
+    from .data_location import load_runtime_root_pointer, runtime_root_pointer_path
+
+    pointer = runtime_root_pointer_path()
+    selected_pointer = (
+        pointer
+        if pointer.is_file() and load_runtime_root_pointer() == root
+        else None
+    )
+    if selected_pointer is not None:
+        files += 1
+        total_bytes += selected_pointer.stat().st_size
     if selected_executable is not None and not selected_executable.is_relative_to(root):
         files += 1
         total_bytes += selected_executable.stat().st_size
@@ -136,6 +149,7 @@ def create_uninstall_plan(
         file_count=files,
         directory_count=directories,
         total_bytes=total_bytes,
+        runtime_pointer=selected_pointer,
     )
 
 
@@ -166,6 +180,8 @@ def _unlink_tree(root: Path) -> None:
 def execute_cleanup(plan: UninstallPlan) -> None:
     root = validate_runtime_root(plan.runtime_root)
     _unlink_tree(root)
+    if plan.runtime_pointer is not None:
+        plan.runtime_pointer.expanduser().resolve().unlink(missing_ok=True)
     if plan.remove_executable and plan.executable is not None:
         executable = plan.executable.expanduser().resolve()
         if executable.exists() and not executable.is_relative_to(root):
@@ -229,6 +245,7 @@ def run_cleanup_manifest(path: Path) -> int:
             file_count=0,
             directory_count=0,
             total_bytes=0,
+            runtime_pointer=Path(manifest.runtime_pointer) if manifest.runtime_pointer else None,
         )
         execute_cleanup(plan)
         Path(manifest.result_path).write_text(
@@ -265,6 +282,7 @@ def launch_cleanup_worker(
         executable=str(plan.executable) if plan.executable else None,
         remove_executable=plan.remove_executable,
         result_path=str(result_path),
+        runtime_pointer=str(plan.runtime_pointer) if plan.runtime_pointer else None,
     )
     manifest_path.write_text(
         json.dumps(asdict(manifest), ensure_ascii=False), encoding="utf-8"
