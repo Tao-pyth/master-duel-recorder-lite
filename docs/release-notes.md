@@ -8,6 +8,9 @@
 - 戦績管理一覧のダブルクリック動作を、設定の「表示」から録画再生または戦績編集へ切り替えられるようにした。既定値は従来互換の録画再生
 - 戦績管理一覧の任意列へ相手デッキを追加し、初期非表示のまま列メニューから表示できるようにした
 - 旧`ui-preferences.json`では新しい表示列とダブルクリック設定を既定値で補完し、DBスキーマ変更なしで既存データを保持する
+- Ruff、全474テスト、CLI/GUI one-file EXEビルド、両スモークに合格した
+- ローカルCLI EXE SHA-256: `CC735DDCB38134179057D9966D8D699A8EDB6AA88C7C1375F11B4C028DA5A247`
+- ローカルGUI EXE SHA-256: `7CBF3A13E36AC76BFFB2F477D3774E5089DFEAEB4FBFA000FC93752CD624116B`
 
 追跡: [V1.0.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/54)、親Issue #393、子Issue #394 - #398
 
