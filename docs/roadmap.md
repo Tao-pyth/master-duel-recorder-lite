@@ -771,3 +771,18 @@
 追跡: [V1.0.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/53)、親Issue #381、子Issue #382 - #392
 
 完了条件: Ruff、全単体テスト、CLI/GUI EXEビルド、両スモーク、GUI目視確認、Windows CI、公開SHA-256に合格し、コード、文書、main、`v1.0.1`タグ、GitHub Releaseを一致させること。
+
+## V1.0.2: 戦績入力フローと一括編集の操作改善
+
+状態: 実装中
+
+- 未完了戦績の連続処理へ簡易入力を統合する
+- 詳細入力の保存・キャンセル後に未完了戦績の連続処理へ復帰する
+- 一括編集へコイントスの表裏と未設定を追加する
+- 戦績管理一覧のダブルクリック動作を録画再生または戦績編集から選べるようにする
+- 戦績管理一覧の表示列へ相手デッキを初期非表示の任意列として追加する
+- README、設計文書、リリースノート、バージョン情報を`1.0.2`へ整合する
+
+追跡: [V1.0.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/54)、親Issue #393、子Issue #394 - #398
+
+完了条件: Ruff、全単体テスト、配布ビルド、GUIスモーク、Release Contract確認に合格し、コード、文書、`v1.0.2`タグ、GitHub Releaseを一致させること。

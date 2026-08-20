@@ -20,6 +20,7 @@ from master_duel_recorder_lite.gui import (
 )
 from master_duel_recorder_lite.duel_statistics import StatisticsMetric
 from master_duel_recorder_lite.recording_session import RecordingState
+from master_duel_recorder_lite.ui_preferences import UiPreferences
 
 
 class FakeListbox:
@@ -195,6 +196,20 @@ class GuiActivityTest(unittest.TestCase):
         self.assertNotEqual(complete.background, incomplete.background)
         with self.assertRaises(ValueError):
             incomplete_duel_count_presentation(-1)
+
+    def test_history_double_click_action_uses_saved_preference(self) -> None:
+        gui = RecorderGui.__new__(RecorderGui)
+        gui.play_selected_history = Mock()
+        gui.edit_selected_duel_record = Mock()
+
+        gui.ui_preferences = UiPreferences(history_double_click_action="edit")
+        gui._activate_history_double_click_action()
+        gui.edit_selected_duel_record.assert_called_once_with()
+        gui.play_selected_history.assert_not_called()
+
+        gui.ui_preferences = UiPreferences(history_double_click_action="play")
+        gui._activate_history_double_click_action()
+        gui.play_selected_history.assert_called_once_with()
 
     def test_statistics_date_and_metric_presentations_are_unambiguous(self) -> None:
         self.assertEqual(_parse_filter_date("2026-08-12", "開始日"), date(2026, 8, 12))

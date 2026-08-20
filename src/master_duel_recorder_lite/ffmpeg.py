@@ -409,6 +409,10 @@ def test_windows_audio_input(
     return AudioInputTestResult("active", f"音声入力を確認しました（最大 {peak_db:.1f} dB）", peak_db)
 
 
+# pytestはテストモジュールへimportされたtest_*関数も収集するため、製品APIは収集対象外にします。
+test_windows_audio_input.__test__ = False
+
+
 def _audio_source_type(name: str) -> str:
     normalized = unicodedata.normalize("NFKC", name).casefold()
     if any(token in normalized for token in ("ステレオ ミキサー", "ステレオミキサー", "loopback", "what u hear")):

@@ -63,7 +63,8 @@ from .uninstall import (
 )
 from .ui_preferences import (
     COLOR_KEYS,
-    HISTORY_OPTIONAL_COLUMNS,
+    HISTORY_DEFAULT_VISIBLE_COLUMNS,
+    HISTORY_SELECTABLE_COLUMNS,
     UiPreferences,
     load_ui_preferences,
     save_ui_preferences,
@@ -450,8 +451,14 @@ class RecorderGui:
         self.ui_preferences = load_ui_preferences(self.service.paths.config)
         self.history_column_vars = {
             key: tk.BooleanVar(value=key in self.ui_preferences.history_visible_columns)
-            for key in HISTORY_OPTIONAL_COLUMNS
+            for key in HISTORY_SELECTABLE_COLUMNS
         }
+        self.history_double_click_play_var = tk.BooleanVar(
+            value=self.ui_preferences.history_double_click_action == "play"
+        )
+        self.history_double_click_edit_var = tk.BooleanVar(
+            value=self.ui_preferences.history_double_click_action == "edit"
+        )
         self.history_color_vars = {
             key: tk.StringVar(value=self.ui_preferences.history_cell_colors[key])
             for key in COLOR_KEYS
@@ -1170,6 +1177,7 @@ class RecorderGui:
             "duel_type",
             "duration",
             "size",
+            "opponent_deck",
             "origin",
         )
         self.history_tree = ttk.Treeview(
@@ -1194,6 +1202,7 @@ class RecorderGui:
             ("duel_type", "対戦種別", 105),
             ("duration", "時間", 85),
             ("size", "サイズ", 100),
+            ("opponent_deck", "相手デッキ", 150),
             ("origin", "登録元", 80),
         ):
             self.history_tree.heading(key, text=label)
@@ -1202,7 +1211,7 @@ class RecorderGui:
         self.history_tree.pack(fill="both", expand=True)
         self.history_tree.bind("<<TreeviewSelect>>", self._history_selection_changed)
         self.history_tree.bind(
-            "<Double-Button-1>", lambda _event: self.play_selected_history()
+            "<Double-Button-1>", lambda _event: self._activate_history_double_click_action()
         )
         self.history_tree.bind("<Return>", lambda _event: self.play_selected_history())
         self.history_tree.bind(
@@ -2137,6 +2146,26 @@ class RecorderGui:
             text="表示色を白へ戻す",
             command=self.reset_history_cell_colors,
         ).pack(anchor="e", pady=(8, 0))
+        ttk.Separator(display_panel).pack(fill="x", pady=(18, 14))
+        ttk.Label(
+            display_panel,
+            text="戦績管理のダブルクリック",
+            style="Heading.TLabel",
+        ).pack(anchor="w")
+        double_click_panel = ttk.Frame(display_panel, style="Surface.TFrame")
+        double_click_panel.pack(anchor="w", pady=(10, 0))
+        ttk.Checkbutton(
+            double_click_panel,
+            text="録画再生",
+            variable=self.history_double_click_play_var,
+            command=lambda: self._set_history_double_click_action("play"),
+        ).pack(side="left", padx=(0, 18))
+        ttk.Checkbutton(
+            double_click_panel,
+            text="戦績編集",
+            variable=self.history_double_click_edit_var,
+            command=lambda: self._set_history_double_click_action("edit"),
+        ).pack(side="left")
 
         update_panel = self._surface(notebook, padding=(20, 18))
         notebook.add(update_panel, text="アプリ更新")
@@ -3024,8 +3053,9 @@ class RecorderGui:
             "duel_type": "対戦種別",
             "duration": "時間",
             "size": "サイズ",
+            "opponent_deck": "相手デッキ",
         }
-        for key in HISTORY_OPTIONAL_COLUMNS:
+        for key in HISTORY_SELECTABLE_COLUMNS:
             menu.add_checkbutton(
                 label=labels[key],
                 variable=self.history_column_vars[key],
@@ -3040,15 +3070,21 @@ class RecorderGui:
         self._apply_history_display_columns()
         self._save_ui_preferences()
 
+    def _set_history_double_click_action(self, action: str) -> None:
+        selected = "edit" if action == "edit" else "play"
+        self.history_double_click_play_var.set(selected == "play")
+        self.history_double_click_edit_var.set(selected == "edit")
+        self._save_ui_preferences()
+
     def _reset_history_columns(self) -> None:
-        for variable in self.history_column_vars.values():
-            variable.set(True)
+        for key, variable in self.history_column_vars.items():
+            variable.set(key in HISTORY_DEFAULT_VISIBLE_COLUMNS)
         self._history_columns_changed()
 
     def _apply_history_display_columns(self) -> None:
         required = ("started", "deck", "result", "order")
         optional = tuple(
-            key for key in HISTORY_OPTIONAL_COLUMNS if self.history_column_vars[key].get()
+            key for key in HISTORY_SELECTABLE_COLUMNS if self.history_column_vars[key].get()
         )
         self.history_tree.configure(displaycolumns=required + optional + ("origin",))
         self.root.after_idle(self._draw_history_color_lines)
@@ -3056,10 +3092,13 @@ class RecorderGui:
     def _save_ui_preferences(self) -> None:
         selected = UiPreferences(
             tuple(
-                key for key in HISTORY_OPTIONAL_COLUMNS if self.history_column_vars[key].get()
+                key for key in HISTORY_SELECTABLE_COLUMNS if self.history_column_vars[key].get()
             ),
             {key: variable.get() for key, variable in self.history_color_vars.items()},
             self.update_check_var.get() if hasattr(self, "update_check_var") else self.ui_preferences.automatic_update_check,
+            "edit"
+            if self.history_double_click_edit_var.get()
+            else "play",
         ).normalized()
         save_ui_preferences(self.service.paths.config, selected)
         self.ui_preferences = selected
@@ -3330,16 +3369,20 @@ class RecorderGui:
             size = _format_bytes(entry.size_bytes) if entry is not None else "-"
             if entry is not None and entry.state == "failed":
                 result, play_order, coin_face, duel_type = "録画失敗", "-", "-", "-"
+                opponent_deck = "-"
             elif entry is not None and entry.state in {"starting", "recording"}:
                 result = "開始中" if entry.state == "starting" else "録画中"
                 play_order, coin_face, duel_type = "-", "-", "-"
+                opponent_deck = "-"
             elif view.duel_record is None:
                 result = play_order = coin_face = duel_type = "未入力"
+                opponent_deck = "未入力"
             else:
                 result = duel_choice_label("result", view.result)
                 play_order = duel_choice_label("play_order", view.play_order)
                 coin_face = duel_choice_label("coin_face", view.coin_face)
                 duel_type = duel_choice_label("duel_type", view.duel_type)
+                opponent_deck = view.opponent_deck or "未設定"
             own_deck = view.own_deck or "未設定"
             self.history_tree.insert(
                 "",
@@ -3354,6 +3397,7 @@ class RecorderGui:
                     duel_type,
                     duration,
                     size,
+                    opponent_deck,
                     {
                         "manual": "手動",
                         "import": "取込",
@@ -3478,6 +3522,12 @@ class RecorderGui:
     def _selected_history_view(self) -> object | None:
         selection = self.history_tree.selection()
         return self.history_views_by_id.get(str(selection[0])) if selection else None
+
+    def _activate_history_double_click_action(self) -> None:
+        if self.ui_preferences.history_double_click_action == "edit":
+            self.edit_selected_duel_record()
+            return
+        self.play_selected_history()
 
     def play_selected_history(self) -> None:
         selection = self.history_tree.selection()
@@ -4115,7 +4165,7 @@ class RecorderGui:
                 ):
                     return
             def operation() -> object:
-                if is_manual:
+                if identifier is None:
                     return self.service.create_manual_duel_record(updated, occurred_at=occurred)
                 if record is not None and record.entry_origin in {"manual", "import"}:
                     return self.service.update_duel_record(
@@ -4148,7 +4198,13 @@ class RecorderGui:
             text="詳細入力",
             command=lambda: (
                 dialog.destroy(),
-                self._show_duel_editor(identifier, data, read_only_reason=None),
+                self._show_duel_editor(
+                    identifier,
+                    data,
+                    read_only_reason=None,
+                    on_saved=on_saved,
+                    on_cancel=on_saved,
+                ),
             ),
         ).pack(side="left", padx=(0, 8))
         ttk.Button(
@@ -4181,10 +4237,11 @@ class RecorderGui:
         if not items:
             messagebox.showinfo("未完了戦績", "未完了の戦績はありません", parent=self.root)
             return
-        state = {"index": 0}
+        state = {"index": 0, "items": items}
         dialog = tk.Toplevel(self.root)
         dialog.title("未完了戦績を連続処理")
-        dialog.geometry("520x240")
+        dialog.geometry("620x520")
+        dialog.minsize(560, 480)
         dialog.transient(self.root)
         frame = ttk.Frame(dialog, padding=20)
         frame.pack(fill="both", expand=True)
@@ -4192,39 +4249,179 @@ class RecorderGui:
         detail = tk.StringVar()
         ttk.Label(frame, textvariable=progress, style="Heading.TLabel").pack(anchor="w")
         ttk.Label(frame, textvariable=detail, style="Muted.TLabel").pack(
-            anchor="w", pady=(8, 20)
+            anchor="w", pady=(8, 14)
         )
+        form = ttk.Frame(frame)
+        form.pack(fill="both", expand=True)
         actions = ttk.Frame(frame)
         actions.pack(anchor="e")
 
+        def clear_form() -> None:
+            for child in form.winfo_children():
+                child.destroy()
+
+        def reload_queue(preferred_index: int) -> None:
+            def loaded(fresh_items: tuple[object, ...]) -> None:
+                if not fresh_items:
+                    self._activity("未完了の戦績処理が完了しました")
+                    dialog.destroy()
+                    self.refresh_history()
+                    return
+                state["items"] = fresh_items
+                state["index"] = min(preferred_index, len(fresh_items) - 1)
+                render()
+
+            self._run(self.service.list_incomplete_duels, loaded)
+
         def render() -> None:
             index = state["index"]
-            item = items[index]
-            progress.set(f"未完了 {index + 1} / {len(items)}")
+            current_items = state["items"]
+            item = current_items[index]
+            progress.set(f"未完了 {index + 1} / {len(current_items)}")
             detail.set(
                 f"{item.occurred_at.astimezone().strftime('%Y-%m-%d %H:%M:%S')} / "
                 f"{'未入力' if item.kind == 'missing' else '編集中'}"
             )
+            clear_form()
+            data = self.service.get_duel_editor_data(item.identifier)
+            values = data.values
+            record = data.record
+            is_manual = record is not None and record.entry_origin in {"manual", "import"}
+            result_var = tk.StringVar(value=duel_choice_label("result", values.result))
+            order_var = tk.StringVar(value=duel_choice_label("play_order", values.play_order))
+            deck_var = tk.StringVar(value=values.own_deck)
+            visible_decks = tuple(
+                deck
+                for deck in data.decks
+                if not deck.hidden_from_history_statistics and not deck.opponent_only
+            )
+            seasons = {
+                "未設定": None,
+                **{season.name: season.season_id for season in data.seasons},
+            }
+            current_season = next(
+                (name for name, season_id in seasons.items() if season_id == values.season_id),
+                "未設定",
+            )
+            season_var = tk.StringVar(value=current_season)
+            occurred_var = tk.StringVar(
+                value=(
+                    record.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                    if record is not None
+                    else item.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                )
+            )
+            row = 0
+            if is_manual:
+                ttk.Label(form, text="対戦日時").grid(row=row, column=0, sticky="w", pady=7)
+                ttk.Entry(form, textvariable=occurred_var).grid(
+                    row=row, column=1, sticky="ew", pady=7
+                )
+                row += 1
+            fields = (
+                ("勝敗", result_var, duel_choice_labels("result"), "readonly"),
+                ("先後", order_var, duel_choice_labels("play_order"), "readonly"),
+                ("自分デッキ", deck_var, tuple(deck.name for deck in visible_decks), "normal"),
+                ("シーズン", season_var, tuple(seasons), "readonly"),
+            )
+            for label, variable, choices, state_name in fields:
+                ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=7)
+                ttk.Combobox(
+                    form,
+                    textvariable=variable,
+                    values=choices,
+                    state=state_name,
+                ).grid(row=row, column=1, sticky="ew", pady=7)
+                row += 1
+            form.columnconfigure(1, weight=1)
 
-        def move(delta: int) -> None:
-            state["index"] = (state["index"] + delta) % len(items)
-            render()
+            def save(status: str) -> None:
+                try:
+                    occurred = datetime.strptime(
+                        occurred_var.get().strip(), "%Y-%m-%d %H:%M:%S"
+                    ).astimezone()
+                except ValueError:
+                    self._show_error(ValueError("対戦日時はYYYY-MM-DD HH:MM:SSで入力してください"))
+                    return
+                updated = DuelRecordValues(
+                    **{
+                        **values.__dict__,
+                        "status": status,
+                        "result": duel_choice_value("result", result_var.get()),
+                        "play_order": duel_choice_value("play_order", order_var.get()),
+                        "own_deck": deck_var.get(),
+                        "season_id": seasons[season_var.get()],
+                    }
+                )
+                selected_season = next(
+                    (
+                        season
+                        for season in data.seasons
+                        if season.season_id == updated.season_id
+                    ),
+                    None,
+                )
+                if selected_season is not None and not selected_season.contains(
+                    occurred.date()
+                ):
+                    if not messagebox.askyesno(
+                        "シーズン期間外",
+                        f"対戦日は{occurred.date()}で、選択したシーズン期間外です。保存しますか？",
+                        parent=dialog,
+                    ):
+                        return
 
-        def edit() -> None:
-            item = items[state["index"]]
-            dialog.destroy()
-            self._run(
-                lambda: self.service.get_duel_editor_data(item.identifier),
-                lambda data: self._show_quick_duel_editor(
-                    item.identifier,
-                    data,
-                    on_saved=self._open_incomplete_duel_queue,
-                ),
+                def operation() -> object:
+                    if record is not None and record.entry_origin in {"manual", "import"}:
+                        return self.service.update_duel_record(
+                            record.duel_id,
+                            updated,
+                            expected_revision=record.revision,
+                            occurred_at=occurred,
+                        )
+                    recording_identifier = (
+                        record.recording_id if record is not None else item.identifier
+                    )
+                    assert recording_identifier is not None
+                    return self.service.save_duel_record(
+                        recording_identifier,
+                        updated,
+                        expected_revision=record.revision if record is not None else 0,
+                    )
+
+                def saved(_saved: object) -> None:
+                    self._activity("未完了戦績を保存しました")
+                    self.refresh_history()
+                    self.refresh_active_seasons()
+                    reload_queue(index)
+
+                self._run(operation, saved)
+
+            ttk.Button(form, text="保存して次へ", style="Primary.TButton", command=lambda: save("confirmed")).grid(
+                row=row, column=1, sticky="e", pady=(16, 0)
             )
 
-        ttk.Button(actions, text="前へ", command=lambda: move(-1)).pack(side="left", padx=(0, 8))
-        ttk.Button(actions, text="後回し", command=lambda: move(1)).pack(side="left", padx=(0, 8))
-        ttk.Button(actions, text="入力する", style="Primary.TButton", command=edit).pack(side="left")
+            def detail_input() -> None:
+                dialog.destroy()
+                self._show_duel_editor(
+                    item.identifier,
+                    data,
+                    read_only_reason=None,
+                    on_saved=self._open_incomplete_duel_queue,
+                    on_cancel=self._open_incomplete_duel_queue,
+                )
+
+            for child in actions.winfo_children():
+                child.destroy()
+            ttk.Button(actions, text="前へ", command=lambda: move(-1)).pack(side="left", padx=(0, 8))
+            ttk.Button(actions, text="後回し", command=lambda: move(1)).pack(side="left", padx=(0, 8))
+            ttk.Button(actions, text="下書き保存", command=lambda: save("draft")).pack(side="left", padx=(0, 8))
+            ttk.Button(actions, text="詳細入力", command=detail_input).pack(side="left")
+
+        def move(delta: int) -> None:
+            current_items = state["items"]
+            state["index"] = (state["index"] + delta) % len(current_items)
+            render()
         render()
         dialog.grab_set()
 
@@ -4254,15 +4451,18 @@ class RecorderGui:
         )
         season_values = {"変更しない": "", "未設定": "none", **{item.name: str(item.season_id) for item in seasons}}
         deck_values = ("変更しない", *(item.name for item in decks))
+        coin_values = ("変更しない", *duel_choice_labels("coin_face"))
         type_values = ("変更しない", *duel_choice_labels("duel_type"))
         season_var = tk.StringVar(value="変更しない")
         deck_var = tk.StringVar(value="変更しない")
+        coin_var = tk.StringVar(value="変更しない")
         type_var = tk.StringVar(value="変更しない")
         add_tags_var = tk.StringVar()
         remove_tags_var = tk.StringVar()
         rows = (
             ("シーズン", season_var, tuple(season_values)),
             ("自分デッキ", deck_var, deck_values),
+            ("コイントス", coin_var, coin_values),
             ("対戦種別", type_var, type_values),
         )
         for row, (label, variable, choices) in enumerate(rows, start=1):
@@ -4272,7 +4472,7 @@ class RecorderGui:
             )
         for row, (label, variable) in enumerate(
             (("追加タグ（カンマ区切り）", add_tags_var), ("削除タグ（カンマ区切り）", remove_tags_var)),
-            start=4,
+            start=5,
         ):
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
             ttk.Entry(frame, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=7)
@@ -4290,6 +4490,9 @@ class RecorderGui:
                 season_id=None if season_value in {"", "none"} else int(season_value),
                 change_season=season_value != "",
                 own_deck=None if deck_var.get() == "変更しない" else deck_var.get(),
+                coin_face=None
+                if coin_var.get() == "変更しない"
+                else duel_choice_value("coin_face", coin_var.get()),
                 duel_type=None
                 if type_var.get() == "変更しない"
                 else duel_choice_value("duel_type", type_var.get()),
@@ -4309,7 +4512,7 @@ class RecorderGui:
             )
 
         ttk.Button(frame, text="適用", style="Primary.TButton", command=apply).grid(
-            row=6, column=1, sticky="e", pady=(18, 0)
+            row=7, column=1, sticky="e", pady=(18, 0)
         )
         dialog.grab_set()
 
@@ -4328,6 +4531,8 @@ class RecorderGui:
         data: DuelEditorData,
         *,
         read_only_reason: str | None,
+        on_saved: Callable[[], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
     ) -> None:
         values = data.values
         revision = data.record.revision if data.record is not None else 0
@@ -4611,17 +4816,17 @@ class RecorderGui:
                 return self.service.save_duel_record(
                     recording_id, updated, expected_revision=revision
                 )
-            self._run(
-                operation,
-                lambda saved: (
-                    self._activity(
-                        f"対戦記録を保存しました: revision {saved.revision}"
-                    ),
-                    dialog.destroy(),
-                    self.refresh_history(),
-                    self.refresh_active_seasons(),
-                ),
-            )
+            def saved(saved_record: object) -> None:
+                self._activity(
+                    f"対戦記録を保存しました: revision {saved_record.revision}"
+                )
+                dialog.destroy()
+                self.refresh_history()
+                self.refresh_active_seasons()
+                if on_saved is not None:
+                    on_saved()
+
+            self._run(operation, saved)
 
         buttons = ttk.Frame(form)
         buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
@@ -4631,7 +4836,12 @@ class RecorderGui:
                 text="タイムライン",
                 command=lambda: self._show_timeline(recording_id),
             ).pack(side="left", padx=(0, 8))
-        ttk.Button(buttons, text="キャンセル", command=dialog.destroy).pack(
+        def cancel() -> None:
+            dialog.destroy()
+            if on_cancel is not None:
+                on_cancel()
+
+        ttk.Button(buttons, text="キャンセル", command=cancel).pack(
             side="left", padx=(0, 8)
         )
         save_button = self._icon_button(
@@ -4650,6 +4860,7 @@ class RecorderGui:
                 text=read_only_reason,
                 style="Muted.TLabel",
             ).grid(row=row + 2, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
         dialog.grab_set()
 
     def _show_history_diagnostic(self, entry: object) -> None:

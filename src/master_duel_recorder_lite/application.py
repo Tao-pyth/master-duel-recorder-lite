@@ -253,6 +253,14 @@ class RecordingHistoryView:
     def own_deck(self) -> str:
         return self.duel_record.values.own_deck if self.duel_record is not None else ""
 
+    @property
+    def opponent_deck(self) -> str:
+        return (
+            self.duel_record.values.opponent_deck
+            if self.duel_record is not None
+            else ""
+        )
+
 
 @dataclass(frozen=True)
 class RecordingHistoryDashboard:

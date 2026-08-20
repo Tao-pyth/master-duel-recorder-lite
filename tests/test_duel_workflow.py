@@ -108,6 +108,23 @@ class DuelWorkflowServiceTest(unittest.TestCase):
         self.assertTrue(all(item.values.tags == ("追加",) for item in saved))
         self.assertTrue(all(len(self.records.changes(item.duel_id)) == 2 for item in saved))
 
+    def test_bulk_update_changes_coin_face_and_can_clear_to_unknown(self) -> None:
+        heads, tails = (
+            self.records.create_manual(
+                DuelRecordValues(status="confirmed", coin_face=coin_face),
+                occurred_at=datetime(2026, 8, 10 + index, tzinfo=timezone.utc),
+            )
+            for index, coin_face in enumerate(("heads", "tails"))
+        )
+
+        saved = self.service.bulk_update(
+            (heads.duel_id, tails.duel_id),
+            BulkDuelUpdate(coin_face="unknown"),
+        )
+
+        self.assertEqual([item.values.coin_face for item in saved], ["unknown", "unknown"])
+        self.assertEqual(self.records.get(heads.duel_id).values.coin_face, "unknown")
+
     def test_bulk_update_validates_every_identifier_before_writing(self) -> None:
         record = self.records.create_manual(
             DuelRecordValues(status="confirmed", own_deck="変更前"),

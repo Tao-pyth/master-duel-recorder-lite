@@ -196,14 +196,22 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             )
             service.save_duel_record(
                 "internal-id",
-                DuelRecordValues(result="win", play_order="second", duel_type="ranked"),
+                DuelRecordValues(
+                    result="win",
+                    play_order="second",
+                    duel_type="ranked",
+                    opponent_deck="烙印",
+                ),
                 expected_revision=0,
             )
 
             view = service.list_history_views()[0]
 
         self.assertEqual(view.recording_id, "internal-id")
-        self.assertEqual((view.result, view.play_order, view.duel_type), ("win", "second", "ranked"))
+        self.assertEqual(
+            (view.result, view.play_order, view.duel_type, view.opponent_deck),
+            ("win", "second", "ranked", "烙印"),
+        )
 
     def test_manual_duel_is_listed_with_recording_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

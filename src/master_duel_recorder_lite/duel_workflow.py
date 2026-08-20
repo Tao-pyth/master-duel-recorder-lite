@@ -42,6 +42,7 @@ class BulkDuelUpdate:
     season_id: int | None = None
     change_season: bool = False
     own_deck: str | None = None
+    coin_face: str | None = None
     duel_type: str | None = None
     add_tags: tuple[str, ...] = ()
     remove_tags: tuple[str, ...] = ()
@@ -64,6 +65,8 @@ class BulkDuelUpdate:
             raw["season_id"] = self.season_id
         if self.own_deck is not None:
             raw["own_deck"] = self.own_deck
+        if self.coin_face is not None:
+            raw["coin_face"] = self.coin_face
         if self.duel_type is not None:
             raw["duel_type"] = self.duel_type
         return DuelRecordValues(**raw).normalized()
