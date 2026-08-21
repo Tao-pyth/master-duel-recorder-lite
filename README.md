@@ -8,7 +8,7 @@ master-duel-recorder-liteは、OBSに依存せず、Yu-Gi-Oh! Master Duelの対�
 
 ## 中核機能
 
-V1.3.0では、次の中核機能を提供します。
+V1.4.0では、次の中核機能を提供します。
 
 - FFmpeg、録画入力、保存先を確認する録画環境の初期化
 - 画面と音声を録画し、正常停止して再生可能なファイルを保存する最小録画
@@ -30,9 +30,18 @@ V1.3.0では、次の中核機能を提供します。
 
 ## 現在の状態
 
-現在の正式版は `1.3.0`、「入力削減・デッキ改善・運用管理」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、MP4対象選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理、自動録画の信頼性確認、改善支援を整備しました。
+現在の正式版は `1.4.0`、「YouTube一般配布導線」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、MP4対象選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理、自動録画の信頼性確認、改善支援、GUIからのYouTube連携とprivate投稿導線を整備しました。
 
 CSV移行は適用前バックアップと単一DBトランザクションで既存データを保護します。単体音声はWindows build 20348以上が対象で、非対応・ゲーム未起動・ヘルパー障害時には別音源へ無断で切り替えず、警告を残して映像のみ継続します。YouTube OAuth資格情報はOS資格情報ストアだけに保存し、設定、manifest、queue、標準出力、ログへ保存しません。
+
+## V1.4.0のYouTube一般配布導線
+
+- GUIの`設定`に`YouTube`タブを追加し、連携状態、連携、切断、接続確認、最新録画でのprivateテスト投稿を操作できます
+- `mdrl youtube connect`は配布者管理OAuth Clientが設定されている場合、既定ブラウザと`127.0.0.1:<random port>`のloopback callbackで認証コードを自動受信します
+- 開発者向けfallbackとして`--client-secrets`と`--authorization-code`は残しますが、通常ユーザー導線では`client_secret.json`を要求しません
+- 録画履歴で録画を選択し、タイトル、概要欄、タグ、公開範囲を確認してYouTubeへ投稿できます。既定は`private`で、`public`は追加確認を行います
+- 401、403、quota/rate、5xx、通信断、不明応答を分類し、再認証、quota待ち、権限確認、再試行、手動確認の次アクションを表示します
+- 配布前には配布者管理のGoogle OAuth Client、OAuth同意画面、プライバシーポリシー、必要に応じたGoogle OAuth verificationが必要です
 
 ## V1.2.0の信頼性機能
 
@@ -56,7 +65,7 @@ CSV移行は適用前バックアップと単一DBトランザクションで既
 
 ## V1.1.0のYouTube連携
 
-- `mdrl youtube connect`でYouTube Data APIの`youtube.upload`スコープを接続し、資格情報をOS資格情報ストアへ保存します。既定のredirect URIは`http://localhost:8080/`です
+- `mdrl youtube connect`でYouTube Data APIの`youtube.upload`スコープを接続し、資格情報をOS資格情報ストアへ保存します。V1.4.0以降の通常導線は既定ブラウザとloopback callbackで認証を完了します
 - `mdrl youtube upload RECORDING_ID --title TITLE`で完了済み録画をMP4準備し、既存prepare結果があれば再利用してYouTubeへ投稿します
 - 投稿状態、試行回数、失敗理由、動画ID、視聴URLを履歴DBの`youtube_uploads`へ保存します
 - `mdrl history list`と`mdrl history show`では完了済みYouTube投稿URLを録画IDと一緒に表示します

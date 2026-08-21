@@ -1,15 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+import base64
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+import os
 from pathlib import Path
+import secrets
+import socket
+import threading
+import time
 import urllib.parse
 import urllib.request
 import webbrowser
+import hashlib
 
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 YOUTUBE_CREDENTIAL_TARGET = "master-duel-recorder-lite/youtube-oauth"
+YOUTUBE_OAUTH_CLIENT_ID_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_ID"
+YOUTUBE_OAUTH_CLIENT_SECRET_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_SECRET"
+YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE = "youtube-oauth-client.json"
 
 
 class YouTubeOAuthError(RuntimeError):
@@ -129,9 +142,21 @@ class MemoryCredentialStore(CredentialStore):
 @dataclass(frozen=True)
 class OAuthClientInfo:
     client_id: str
-    client_secret: str
     auth_uri: str
     token_uri: str
+    client_secret: str = ""
+
+
+@dataclass(frozen=True)
+class OAuthLoopbackResult:
+    credentials: YouTubeCredentials
+    redirect_uri: str
+
+
+@dataclass(frozen=True)
+class OAuthCallbackResult:
+    code: str
+    state: str
 
 
 def load_client_secrets(path: Path) -> OAuthClientInfo:
@@ -146,7 +171,7 @@ def load_client_secrets(path: Path) -> OAuthClientInfo:
         raise YouTubeOAuthError("client secretsにはinstalledまたはweb objectが必要です")
     return OAuthClientInfo(
         client_id=_required_text(client.get("client_id"), "client_id"),
-        client_secret=_required_text(client.get("client_secret"), "client_secret"),
+        client_secret=str(client.get("client_secret", "")).strip(),
         auth_uri=_required_text(
             client.get("auth_uri", "https://accounts.google.com/o/oauth2/v2/auth"),
             "auth_uri",
@@ -158,17 +183,68 @@ def load_client_secrets(path: Path) -> OAuthClientInfo:
     )
 
 
-def authorization_url(client: OAuthClientInfo, *, redirect_uri: str, state: str) -> str:
+def load_distributed_oauth_client(
+    *,
+    environ: Mapping[str, str] | None = None,
+    project_root: Path | None = None,
+) -> OAuthClientInfo:
+    """配布アプリに組み込むOAuth Client情報を読み込みます。
+
+    client_idは秘密情報ではありません。実配布ではビルド時に同梱するか、検証時だけ
+    環境変数で与えます。refresh tokenはこの関数では扱いません。
+    """
+
+    environment = os.environ if environ is None else environ
+    client_id = environment.get(YOUTUBE_OAUTH_CLIENT_ID_ENV, "").strip()
+    if client_id:
+        return OAuthClientInfo(
+            client_id=client_id,
+            client_secret=environment.get(YOUTUBE_OAUTH_CLIENT_SECRET_ENV, "").strip(),
+            auth_uri="https://accounts.google.com/o/oauth2/v2/auth",
+            token_uri="https://oauth2.googleapis.com/token",
+        )
+    candidates: list[Path] = []
+    if project_root is not None:
+        candidates.append(project_root / "assets" / YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE)
+    candidates.append(Path(__file__).resolve().parents[2] / "assets" / YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE)
+    for candidate in candidates:
+        if candidate.is_file():
+            return load_client_secrets(candidate)
+    raise YouTubeOAuthError(
+        "YouTube OAuthクライアントが未設定です。配布ビルドへOAuth client_idを組み込んでください。"
+    )
+
+
+def new_pkce_code_verifier() -> str:
+    return secrets.token_urlsafe(64)[:96]
+
+
+def pkce_code_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def authorization_url(
+    client: OAuthClientInfo,
+    *,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str | None = None,
+) -> str:
+    query: dict[str, str] = {
+        "client_id": client.client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": YOUTUBE_UPLOAD_SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    }
+    if code_challenge:
+        query["code_challenge"] = code_challenge
+        query["code_challenge_method"] = "S256"
     query = urllib.parse.urlencode(
-        {
-            "client_id": client.client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": YOUTUBE_UPLOAD_SCOPE,
-            "access_type": "offline",
-            "prompt": "consent",
-            "state": state,
-        }
+        query
     )
     return f"{client.auth_uri}?{query}"
 
@@ -178,16 +254,19 @@ def exchange_authorization_code(
     *,
     code: str,
     redirect_uri: str,
+    code_verifier: str | None = None,
 ) -> YouTubeCredentials:
-    data = urllib.parse.urlencode(
-        {
-            "client_id": client.client_id,
-            "client_secret": client.client_secret,
-            "code": code,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-        }
-    ).encode("utf-8")
+    fields = {
+        "client_id": client.client_id,
+        "code": code,
+        "grant_type": "authorization_code",
+        "redirect_uri": redirect_uri,
+    }
+    if client.client_secret:
+        fields["client_secret"] = client.client_secret
+    if code_verifier:
+        fields["code_verifier"] = code_verifier
+    data = urllib.parse.urlencode(fields).encode("utf-8")
     request = urllib.request.Request(
         client.token_uri,
         data=data,
@@ -215,7 +294,127 @@ def open_authorization_url(url: str) -> None:
     webbrowser.open(url)
 
 
+def authorize_with_loopback(
+    client: OAuthClientInfo,
+    *,
+    timeout_seconds: float = 180.0,
+    open_browser: Callable[[str], None] = open_authorization_url,
+    state: str | None = None,
+) -> OAuthLoopbackResult:
+    verifier = new_pkce_code_verifier()
+    expected_state = state or secrets.token_urlsafe(24)
+    server = _OAuthCallbackServer(("127.0.0.1", _free_loopback_port()), expected_state)
+    redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
+    url = authorization_url(
+        client,
+        redirect_uri=redirect_uri,
+        state=expected_state,
+        code_challenge=pkce_code_challenge(verifier),
+    )
+    thread = threading.Thread(
+        target=server.serve_until_callback,
+        name="mdrl-youtube-oauth",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        open_browser(url)
+        callback = server.wait_for_callback(timeout_seconds)
+    finally:
+        server.stop()
+        thread.join(timeout=1.0)
+        server.server_close()
+    credentials = exchange_authorization_code(
+        client,
+        code=callback.code,
+        redirect_uri=redirect_uri,
+        code_verifier=verifier,
+    )
+    return OAuthLoopbackResult(credentials=credentials, redirect_uri=redirect_uri)
+
+
 def _required_text(value: object, key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise YouTubeOAuthError(f"{key} は空でない文字列である必要があります")
     return value.strip()
+
+
+def _free_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+class _OAuthCallbackServer(HTTPServer):
+    def __init__(self, server_address: tuple[str, int], expected_state: str) -> None:
+        super().__init__(server_address, _OAuthCallbackHandler)
+        self.expected_state = expected_state
+        self.callback: OAuthCallbackResult | None = None
+        self.error: YouTubeOAuthError | None = None
+        self._event = threading.Event()
+        self._stop_event = threading.Event()
+        self.timeout = 0.2
+
+    def serve_until_callback(self) -> None:
+        while not self._event.is_set() and not self._stop_event.is_set():
+            self.handle_request()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def wait_for_callback(self, timeout_seconds: float) -> OAuthCallbackResult:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if self._event.wait(0.05):
+                break
+        if not self._event.is_set():
+            raise YouTubeOAuthError("YouTube OAuth認証がタイムアウトしました")
+        if self.error is not None:
+            raise self.error
+        if self.callback is None:
+            raise YouTubeOAuthError("YouTube OAuth認証コードを受信できませんでした")
+        return self.callback
+
+    def complete(self, callback: OAuthCallbackResult | None, error: YouTubeOAuthError | None) -> None:
+        self.callback = callback
+        self.error = error
+        self._event.set()
+
+
+class _OAuthCallbackHandler(BaseHTTPRequestHandler):
+    server: _OAuthCallbackServer
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed.query)
+        if parsed.path != "/callback":
+            self._respond(HTTPStatus.NOT_FOUND, "Master Duel Recorder Lite OAuth callback path is invalid.")
+            return
+        error = query.get("error", [""])[0]
+        if error:
+            self.server.complete(None, YouTubeOAuthError(f"YouTube OAuth認証が拒否されました: {error}"))
+            self._respond(HTTPStatus.BAD_REQUEST, "YouTube authorization was rejected. You can close this tab.")
+            return
+        state = query.get("state", [""])[0]
+        code = query.get("code", [""])[0]
+        if state != self.server.expected_state:
+            self.server.complete(None, YouTubeOAuthError("YouTube OAuth stateが一致しません"))
+            self._respond(HTTPStatus.BAD_REQUEST, "OAuth state mismatch. You can close this tab.")
+            return
+        if not code:
+            self.server.complete(None, YouTubeOAuthError("YouTube OAuth認証コードがありません"))
+            self._respond(HTTPStatus.BAD_REQUEST, "OAuth authorization code is missing. You can close this tab.")
+            return
+        self.server.complete(OAuthCallbackResult(code=code, state=state), None)
+        self._respond(HTTPStatus.OK, "YouTube authorization completed. You can close this tab.")
+
+    def log_message(self, _format: str, *args: object) -> None:
+        return
+
+    def _respond(self, status: HTTPStatus, body: str) -> None:
+        payload = body.encode("utf-8")
+        self.send_response(int(status))
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)

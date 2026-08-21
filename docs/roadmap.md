@@ -848,3 +848,20 @@
 追跡: [V1.3.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/58)、親Issue #418、子Issue #419 - #426
 
 完了条件: 入力候補、ミニ入力、改善ビュー、目標、ストレージ候補、移行パック、軽量レビュー、DB移行、録画ファイル保護、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、Windows CI、GitHub Releaseが成功すること。
+
+## V1.4.0: YouTube一般配布導線
+
+状態: 外部検証待ち
+
+- YouTube OAuthを配布者管理OAuth Client、PKCE、`127.0.0.1:<random port>` loopback callbackへ再設計する
+- `client_secret.json`取得と認可コード再実行を一般ユーザー導線から外し、既定ブラウザでの認証完了をGUIから扱う
+- YouTube連携状態、連携、切断、接続確認、privateテスト投稿をGUIで操作できるようにする
+- 録画履歴から投稿前確認を経てYouTube private投稿し、完了時に`youtube_uploads.video_id`と`watch_url`を保存して履歴へ表示する
+- 401、403、quota/rate、5xx、通信断、不明応答を利用者向け状態へ分類し、再認証、再試行、quota待ち、手動確認の次アクションを表示する
+- refresh token、access token、client secret相当の値を設定、DB、queue、manifest、ログ、移行パックへ保存しない契約を維持する
+- 検証用YouTubeチャンネルでprivate実投稿E2Eを実施し、GUI連携、MP4準備、投稿完了、履歴URL表示、重複投稿防止、切断後の失敗表示を記録する
+- README、YouTube連携設計、検証記録、リリースノート、バージョン情報、配布物検証を`1.4.0`へ整合する
+
+追跡: [V1.4.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/59)、親Issue #427、子Issue #428 - #433
+
+完了条件: GUIだけでYouTube連携とprivate投稿が完了し、秘密情報非保存、既存CLI fallback互換、実YouTube private投稿E2E、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、両EXEスモーク、Release Contract確認、GitHub Releaseが成功すること。

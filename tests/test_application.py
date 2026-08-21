@@ -29,8 +29,12 @@ from master_duel_recorder_lite.operation_state import OperationState
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
+from master_duel_recorder_lite.upload_metadata import UploadMetadata
+from master_duel_recorder_lite.upload_queue import UploadQueueState, UploadQueueStore
 from master_duel_recorder_lite.visual_detection import DetectionCandidate
 from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
+from master_duel_recorder_lite.youtube_client import FakeYouTubeClient
+from master_duel_recorder_lite.youtube_oauth import MemoryCredentialStore, YouTubeCredentials
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
@@ -230,6 +234,77 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertIsNone(views[0].entry)
         self.assertIsNone(views[0].recording_id)
         self.assertEqual(views[0].own_deck, "青眼")
+
+    def test_youtube_status_and_upload_are_available_from_application_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = MemoryCredentialStore()
+            store.write(YouTubeCredentials("client", "", "refresh"))
+            client = FakeYouTubeClient()
+            service = RecorderApplicationService(
+                user_data_dir=Path(tmp_dir) / "user_data",
+                youtube_credential_store=store,
+                youtube_client=client,
+            )
+            history = RecordingHistoryRepository.from_runtime_paths(service.paths)
+            source = service.paths.recordings / "2026" / "08" / "21" / "recording.mp4"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"video")
+            history.register_starting(
+                recording_id="rec-1",
+                output_path=source,
+                container="mp4",
+                source="manual",
+                created_at=datetime(2026, 8, 21, tzinfo=timezone.utc),
+            )
+            history.mark_recording(
+                "rec-1",
+                started_at=datetime(2026, 8, 21, 0, 0, tzinfo=timezone.utc),
+            )
+            history.finalize(
+                "rec-1",
+                RecordingResult(
+                    state=RecordingState.COMPLETED,
+                    output_path=source,
+                    returncode=0,
+                    started_at=datetime(2026, 8, 21, 0, 0, tzinfo=timezone.utc),
+                    ended_at=datetime(2026, 8, 21, 0, 1, tzinfo=timezone.utc),
+                    size_bytes=4,
+                    error=None,
+                    diagnostics=(),
+                ),
+            )
+            export = service.paths.exports / "rec-1" / "prepared.mp4"
+            export.parent.mkdir(parents=True)
+            export.write_bytes(b"video")
+            queue = UploadQueueStore(service.paths)
+            item = queue.enqueue(recording_id="rec-1", metadata=UploadMetadata("title"))
+            processing = queue.transition(
+                item.queue_id,
+                UploadQueueState.PROCESSING,
+                increment_attempts=True,
+            )
+            queue.transition(
+                processing.queue_id,
+                UploadQueueState.COMPLETED,
+                export_path=export.relative_to(service.paths.root),
+            )
+
+            status = service.youtube_connection_status()
+            with patch(
+                "master_duel_recorder_lite.application.discover_ffmpeg",
+                return_value=SimpleNamespace(found=True, executable=Path("ffmpeg.exe")),
+            ), patch(
+                "master_duel_recorder_lite.application.find_ffprobe",
+                return_value=Path("ffprobe.exe"),
+            ):
+                outcome = service.upload_history_to_youtube(
+                    recording_id="rec-1",
+                    title="title",
+                )
+
+        self.assertEqual(status.state, "connected")
+        self.assertEqual(outcome.upload.watch_url, "https://youtu.be/fake-video-id")
+        self.assertEqual(len(client.uploaded), 1)
 
     def test_manual_duel_write_is_rejected_during_watch(self) -> None:
         service = RecorderApplicationService()

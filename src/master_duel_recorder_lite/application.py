@@ -122,6 +122,15 @@ from .visual_diagnostics import VisualDiagnosticSession
 from .visual_worker import VisualDetectionStatus
 from .windows_notification import NotificationMessage, WindowsNotificationService
 from .windows_process import subprocess_creation_flags
+from .youtube_client import YouTubeClient
+from .youtube_oauth import (
+    CredentialStore,
+    WindowsCredentialStore,
+    authorize_with_loopback,
+    load_distributed_oauth_client,
+)
+from .youtube_service import YouTubeUploadOutcome, YouTubeUploadService
+from .youtube_uploads import YouTubeUploadRepository
 
 
 class ApplicationOperationError(RuntimeError):
@@ -274,6 +283,13 @@ class ActiveSeasonSummary:
     statistics: StatisticsDashboard
 
 
+@dataclass(frozen=True)
+class YouTubeConnectionStatus:
+    state: str
+    message: str
+    scope: str = ""
+
+
 EventCallback = Callable[[ApplicationEvent], None]
 
 
@@ -300,6 +316,8 @@ class RecorderApplicationService:
         target_catalog: CaptureTargetCatalog | None = None,
         recording_browser: RecordingBrowser | None = None,
         ffmpeg_installer: FfmpegInstaller | None = None,
+        youtube_credential_store: CredentialStore | None = None,
+        youtube_client: YouTubeClient | None = None,
     ) -> None:
         self.project_root = project_root
         self.user_data_dir = user_data_dir
@@ -309,6 +327,8 @@ class RecorderApplicationService:
         self._target_catalog = target_catalog
         self._recording_browser = recording_browser
         self._ffmpeg_installer = ffmpeg_installer or FfmpegInstaller()
+        self._youtube_credential_store = youtube_credential_store or WindowsCredentialStore()
+        self._youtube_client = youtube_client
         self._lock = threading.RLock()
         self._current: PreparedRecording | None = None
         self._automatic_snapshot: RecordingSnapshot | None = None
@@ -923,6 +943,62 @@ class RecorderApplicationService:
         if entry is None:
             raise ApplicationOperationError(f"録画履歴が見つかりません: {recording_id}")
         return entry
+
+    def youtube_connection_status(self) -> YouTubeConnectionStatus:
+        try:
+            credentials = self._youtube_credential_store.read()
+        except Exception as exc:
+            return YouTubeConnectionStatus("error", f"YouTube連携状態を確認できません: {exc}")
+        if credentials is None:
+            return YouTubeConnectionStatus("disconnected", "YouTubeは未連携です")
+        return YouTubeConnectionStatus("connected", "YouTubeは連携済みです", credentials.scope)
+
+    def connect_youtube(self, *, timeout_seconds: float = 180.0) -> YouTubeConnectionStatus:
+        try:
+            client = load_distributed_oauth_client(project_root=self.project_root)
+            result = authorize_with_loopback(client, timeout_seconds=timeout_seconds)
+            self._youtube_credential_store.write(result.credentials)
+        except Exception as exc:
+            raise ApplicationOperationError(f"YouTube連携を完了できません: {exc}") from exc
+        return self.youtube_connection_status()
+
+    def disconnect_youtube(self) -> YouTubeConnectionStatus:
+        try:
+            self._youtube_credential_store.delete()
+        except Exception as exc:
+            raise ApplicationOperationError(f"YouTube連携を解除できません: {exc}") from exc
+        return self.youtube_connection_status()
+
+    def upload_history_to_youtube(
+        self,
+        *,
+        recording_id: str,
+        title: str,
+        description: str = "",
+        tags: tuple[str, ...] = (),
+        privacy: str = "private",
+        force_new_upload: bool = False,
+    ) -> YouTubeUploadOutcome:
+        self._require_data_management_idle()
+        self.get_history(recording_id)
+        try:
+            metadata = UploadMetadata(
+                title,
+                description=description,
+                tags=tags,
+                privacy=UploadPrivacy(privacy),
+            )
+        except ValueError as exc:
+            raise ApplicationOperationError(f"YouTube投稿メタデータが不正です: {exc}") from exc
+        service = self._youtube_upload_service()
+        outcome = service.upload_recording(
+            recording_id=recording_id,
+            metadata=metadata,
+            force_new_upload=force_new_upload,
+        )
+        if outcome.upload.state.value != "completed":
+            raise ApplicationOperationError(outcome.message)
+        return outcome
 
     def get_duel_record(self, recording_id: str) -> DuelRecord | None:
         return DuelRecordRepository.from_runtime_paths(self.paths).get(recording_id)
@@ -1977,6 +2053,16 @@ class RecorderApplicationService:
                 validator=validator,
             ),
             manifest_writer=UploadManifestWriter(self.paths),
+        )
+
+    def _youtube_upload_service(self) -> YouTubeUploadService:
+        return YouTubeUploadService(
+            paths=self.paths,
+            upload_repository=YouTubeUploadRepository.from_runtime_paths(self.paths),
+            queue=UploadQueueStore(self.paths),
+            credential_store=self._youtube_credential_store,
+            youtube_client=self._youtube_client,
+            preparation_service=self._upload_preparation_service(),
         )
 
     @staticmethod

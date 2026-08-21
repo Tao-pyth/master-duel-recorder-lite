@@ -14,6 +14,7 @@ from .youtube_client import (
     YouTubeClient,
     YouTubeClientError,
     YouTubeUploadFailureKind,
+    user_action_message,
 )
 from .youtube_oauth import CredentialStore, WindowsCredentialStore
 from .youtube_uploads import (
@@ -123,17 +124,19 @@ class YouTubeUploadService:
                     if exc.kind is YouTubeUploadFailureKind.RETRIABLE and current.attempts < max_attempts:
                         delay = min(60.0, 2.0 ** max(0, current.attempts - 1))
                         self.sleep(delay)
+                        retry_error = f"{exc.kind.value}: {exc} {user_action_message(exc.kind)}"
                         current = self.upload_repository.update(
                             current,
                             state=YouTubeUploadState.UPLOADING,
-                            error=str(exc),
+                            error=retry_error,
                             increment_attempts=True,
                         )
                         continue
+                    final_error = f"{exc.kind.value}: {exc} {user_action_message(exc.kind)}"
                     failed = self.upload_repository.update(
                         current,
                         state=YouTubeUploadState.FAILED,
-                        error=f"{exc.kind.value}: {exc}",
+                        error=final_error,
                     )
                     return YouTubeUploadOutcome(failed, failed.error or str(exc))
         except (OSError, RuntimeError, ValueError, YouTubeUploadError) as exc:

@@ -1,5 +1,22 @@
 # リリースノート
 
+## V1.4.0: YouTube一般配布導線 - 2026-08-21
+
+- YouTube OAuthをPKCEと`127.0.0.1:<random port>` loopback callbackに対応させ、通常導線で認可コードのコピー&ペーストを不要にした
+- 配布者管理OAuth Clientを使う通常導線と、開発者向け`--client-secrets` fallbackを分離した
+- GUIの設定へ`YouTube`タブを追加し、連携状態、連携、切断、接続確認、最新録画でのprivateテスト投稿入口を追加した
+- 戦績管理の録画履歴からYouTube投稿ダイアログを開き、タイトル、概要欄、タグ、公開範囲を確認して投稿できるようにした
+- 既定公開範囲は`private`を維持し、`public`投稿では追加確認を行うようにした
+- 401、403、quota/rate、5xx、通信断、不明応答の分類と、再認証、quota待ち、権限確認、再試行、手動確認の次アクション表示を追加した
+- refresh token、access token、client secret相当の値を設定、DB、queue、manifest、ログ、移行パックへ保存しない契約を維持した
+- DBスキーマはV16のまま変更しない。既存`youtube_uploads`を継続利用する
+- 実YouTube private投稿E2Eは、配布者管理OAuth ClientとGoogleアカウント許可が必要な外部ゲートとして残る
+- Ruff、全520テスト、Python GUIスモーク、CLI/GUI one-file EXEビルド、両スモークに合格した
+- ローカルCLI EXE SHA-256: `C986332100AF2DC36D60BA88CF7F424910706A8EE79E7A75848A6AA878CB4547`
+- ローカルGUI EXE SHA-256: `BFB1D21CEF8B0E8270847F628AA210F3EA0B04BC254A448C024EA5BE0C740034`
+
+追跡: [V1.4.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/59)、親Issue #427、子Issue #428 - #433
+
 ## V1.3.0: 入力削減・デッキ改善・運用管理 - 2026-08-21
 
 - 履歴DBをV16へ更新し、タグテンプレート用`tag_templates`と練習目標用`practice_goals`を追加した
