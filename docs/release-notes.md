@@ -8,11 +8,11 @@
 - `MP4準備`をGUIの独立主要ナビから外し、録画履歴からのYouTube投稿フロー内で投稿前処理として扱うようにした
 - `改善`を未成熟な主要ナビとして露出しないよう整理し、録画なし戦績追加など必要な操作は戦績管理側から維持した
 - PKCE/loopback、OS資格情報ストア、prepare queue、manifest、DB V16、secret非保存契約は維持した
-- 実YouTube private投稿E2Eは、配布者管理OAuth ClientとGoogleアカウント許可が必要な外部ゲートとして残る
+- 実YouTube private投稿E2Eは、正式更新で配布EXEを取得した後の外部検証として扱う
 - Ruff、全531テスト、Python GUIスモーク、CLI/GUI one-file EXEビルド、両スモークに合格した
-- release用OAuth client_id必須検証は未設定時にビルド前失敗することを確認した
-- ローカルCLI EXE SHA-256: `558E74835F97CDE2A9431DF00DE56E614B2C7D28F982960E8E951DFCE118C864`
-- ローカルGUI EXE SHA-256: `08483D56FA8A91DA0A895D0C8C14440F4576AE3468C0CF5347EC2A6EC646638D`
+- release用OAuth client_id必須検証は、未設定時にビルド前失敗し、設定時に`client_id`のみを同梱して成功することを確認した
+- ローカルrelease相当CLI EXE SHA-256: `C94D5EA25905965DE74DB196493D540ADEFA16AD718C84AED56C441C86BBF2FE`
+- ローカルrelease相当GUI EXE SHA-256: `D19A00E92D30ED0E1F7A74F3A535E0D3AED1F05A4BE6A5F3796FB6C655A31663`
 
 追跡: [V1.4.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/61)、親Issue #444、子Issue #445 - #450
 
