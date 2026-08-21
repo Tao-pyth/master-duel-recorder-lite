@@ -66,6 +66,103 @@ if (Test-Path -LiteralPath $isolatedData) {
     throw "read-only config smoke unexpectedly created user_data"
 }
 
+$credentialHelperSource = @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class MdrlCredentialSmoke {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct FILETIME {
+        public UInt32 dwLowDateTime;
+        public UInt32 dwHighDateTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct CREDENTIAL {
+        public UInt32 Flags;
+        public UInt32 Type;
+        public string TargetName;
+        public string Comment;
+        public FILETIME LastWritten;
+        public UInt32 CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public UInt32 Persist;
+        public UInt32 AttributeCount;
+        public IntPtr Attributes;
+        public string TargetAlias;
+        public string UserName;
+    }
+
+    [DllImport("Advapi32.dll", EntryPoint = "CredWriteW", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CredWrite(ref CREDENTIAL credential, UInt32 flags);
+
+    [DllImport("Advapi32.dll", EntryPoint = "CredDeleteW", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CredDelete(string target, UInt32 type, UInt32 flags);
+
+    public static void Write(string target, string value) {
+        byte[] blob = Encoding.UTF8.GetBytes(value);
+        IntPtr blobPointer = Marshal.AllocHGlobal(blob.Length);
+        try {
+            Marshal.Copy(blob, 0, blobPointer, blob.Length);
+            CREDENTIAL credential = new CREDENTIAL();
+            credential.Type = 1;
+            credential.TargetName = target;
+            credential.CredentialBlobSize = (UInt32)blob.Length;
+            credential.CredentialBlob = blobPointer;
+            credential.Persist = 2;
+            credential.UserName = "youtube";
+            if (!CredWrite(ref credential, 0)) {
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+        }
+        finally {
+            Marshal.FreeHGlobal(blobPointer);
+        }
+    }
+
+    public static void Delete(string target) {
+        CredDelete(target, 1, 0);
+    }
+}
+"@
+Add-Type -TypeDefinition $credentialHelperSource
+$credentialTarget = "master-duel-recorder-lite/smoke/" + [guid]::NewGuid().ToString("N")
+$fakeCredentials = '{"client_id":"smoke-client","client_secret":"smoke-secret","refresh_token":"smoke-refresh","scope":"https://www.googleapis.com/auth/youtube.upload"}'
+$previousCredentialTarget = $env:MDRL_YOUTUBE_CREDENTIAL_TARGET
+try {
+    [MdrlCredentialSmoke]::Write($credentialTarget, $fakeCredentials)
+    $env:MDRL_YOUTUBE_CREDENTIAL_TARGET = $credentialTarget
+
+    $accountOutput = & $resolvedExe youtube account
+    if ($LASTEXITCODE -ne 0) {
+        throw "youtube account failed to read smoke credential with exit code $LASTEXITCODE"
+    }
+    if (($accountOutput | Out-String) -notmatch "scope: https://www.googleapis.com/auth/youtube.upload") {
+        throw "youtube account did not report connected credentials"
+    }
+
+    $disconnectOutput = & $resolvedExe youtube disconnect
+    if ($LASTEXITCODE -ne 0) {
+        throw "youtube disconnect failed with exit code $LASTEXITCODE"
+    }
+    if (($disconnectOutput | Out-String) -notmatch "OAuth") {
+        throw "youtube disconnect did not report deletion"
+    }
+
+    $missingOutput = & $resolvedExe youtube account
+    if ($LASTEXITCODE -eq 0) {
+        throw "youtube account unexpectedly reported connected after disconnect"
+    }
+    if (($missingOutput | Out-String) -match "scope: https://www.googleapis.com/auth/youtube.upload") {
+        throw "youtube account did not report missing credentials after disconnect"
+    }
+}
+finally {
+    $env:MDRL_YOUTUBE_CREDENTIAL_TARGET = $previousCredentialTarget
+    [MdrlCredentialSmoke]::Delete($credentialTarget)
+}
+
 $defaultSmokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mdrl-default-path-smoke-" + [guid]::NewGuid().ToString("N"))
 $appPath = Join-Path $defaultSmokeRoot "app"
 $localAppDataPath = Join-Path $defaultSmokeRoot "local-app-data"

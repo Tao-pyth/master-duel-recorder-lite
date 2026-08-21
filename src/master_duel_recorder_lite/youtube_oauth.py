@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Callable, Mapping
 import base64
+import ctypes
+from ctypes import wintypes
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -13,6 +15,7 @@ import socket
 import sys
 import threading
 import time
+from typing import Protocol
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,9 +26,13 @@ import re
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 YOUTUBE_CREDENTIAL_TARGET = "master-duel-recorder-lite/youtube-oauth"
+YOUTUBE_CREDENTIAL_TARGET_ENV = "MDRL_YOUTUBE_CREDENTIAL_TARGET"
 YOUTUBE_OAUTH_CLIENT_ID_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_ID"
 YOUTUBE_OAUTH_CLIENT_SECRET_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_SECRET"
 YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE = "youtube-oauth-client.json"
+CRED_TYPE_GENERIC = 1
+CRED_PERSIST_LOCAL_MACHINE = 2
+ERROR_NOT_FOUND = 1168
 
 
 class YouTubeOAuthError(RuntimeError):
@@ -81,51 +88,144 @@ class CredentialStore:
         raise NotImplementedError
 
 
-class WindowsCredentialStore(CredentialStore):
-    def __init__(self, target: str = YOUTUBE_CREDENTIAL_TARGET) -> None:
-        self.target = target
+class _CredentialApi(Protocol):
+    def read(self, target: str) -> bytes | None:
+        raise NotImplementedError
 
-    def _module(self):
+    def write(self, target: str, blob: bytes, *, username: str) -> None:
+        raise NotImplementedError
+
+    def delete(self, target: str) -> None:
+        raise NotImplementedError
+
+
+class _FILETIME(ctypes.Structure):
+    _fields_ = [
+        ("dwLowDateTime", wintypes.DWORD),
+        ("dwHighDateTime", wintypes.DWORD),
+    ]
+
+
+class _CREDENTIALW(ctypes.Structure):
+    _fields_ = [
+        ("Flags", wintypes.DWORD),
+        ("Type", wintypes.DWORD),
+        ("TargetName", wintypes.LPWSTR),
+        ("Comment", wintypes.LPWSTR),
+        ("LastWritten", _FILETIME),
+        ("CredentialBlobSize", wintypes.DWORD),
+        ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+        ("Persist", wintypes.DWORD),
+        ("AttributeCount", wintypes.DWORD),
+        ("Attributes", wintypes.LPVOID),
+        ("TargetAlias", wintypes.LPWSTR),
+        ("UserName", wintypes.LPWSTR),
+    ]
+
+
+class _WindowsCredentialApi:
+    def __init__(self) -> None:
+        if os.name != "nt":
+            raise YouTubeOAuthError("Windows資格情報ストアはWindowsでのみ利用できます")
         try:
-            import win32cred  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise YouTubeOAuthError(
-                "Windows Credential Managerを利用するにはpywin32が必要です"
-            ) from exc
-        return win32cred
+            self._advapi = ctypes.WinDLL("Advapi32", use_last_error=True)
+        except AttributeError as exc:
+            raise YouTubeOAuthError("Windows資格情報ストアAPIを読み込めません") from exc
+        self._advapi.CredReadW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(ctypes.POINTER(_CREDENTIALW)),
+        ]
+        self._advapi.CredReadW.restype = wintypes.BOOL
+        self._advapi.CredWriteW.argtypes = [
+            ctypes.POINTER(_CREDENTIALW),
+            wintypes.DWORD,
+        ]
+        self._advapi.CredWriteW.restype = wintypes.BOOL
+        self._advapi.CredDeleteW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        self._advapi.CredDeleteW.restype = wintypes.BOOL
+        self._advapi.CredFree.argtypes = [wintypes.LPVOID]
+        self._advapi.CredFree.restype = None
+
+    def read(self, target: str) -> bytes | None:
+        credential_pointer = ctypes.POINTER(_CREDENTIALW)()
+        ok = self._advapi.CredReadW(
+            target,
+            CRED_TYPE_GENERIC,
+            0,
+            ctypes.byref(credential_pointer),
+        )
+        if not ok:
+            error = ctypes.get_last_error()
+            if error == ERROR_NOT_FOUND:
+                return None
+            raise YouTubeOAuthError(_windows_credential_error("読み取り", error))
+        try:
+            credential = credential_pointer.contents
+            if credential.CredentialBlobSize == 0 or not credential.CredentialBlob:
+                return b""
+            return ctypes.string_at(
+                credential.CredentialBlob,
+                credential.CredentialBlobSize,
+            )
+        finally:
+            self._advapi.CredFree(credential_pointer)
+
+    def write(self, target: str, blob: bytes, *, username: str) -> None:
+        blob_buffer = ctypes.create_string_buffer(blob)
+        credential = _CREDENTIALW()
+        credential.Type = CRED_TYPE_GENERIC
+        credential.TargetName = target
+        credential.CredentialBlobSize = len(blob)
+        credential.CredentialBlob = ctypes.cast(
+            blob_buffer,
+            ctypes.POINTER(ctypes.c_ubyte),
+        )
+        credential.Persist = CRED_PERSIST_LOCAL_MACHINE
+        credential.UserName = username
+        if not self._advapi.CredWriteW(ctypes.byref(credential), 0):
+            error = ctypes.get_last_error()
+            raise YouTubeOAuthError(_windows_credential_error("保存", error))
+
+    def delete(self, target: str) -> None:
+        if self._advapi.CredDeleteW(target, CRED_TYPE_GENERIC, 0):
+            return
+        error = ctypes.get_last_error()
+        if error == ERROR_NOT_FOUND:
+            return
+        raise YouTubeOAuthError(_windows_credential_error("削除", error))
+
+
+class WindowsCredentialStore(CredentialStore):
+    def __init__(
+        self,
+        target: str | None = None,
+        *,
+        api: _CredentialApi | None = None,
+    ) -> None:
+        self.target = target or _credential_target_from_environment()
+        self._api = api or _WindowsCredentialApi()
 
     def read(self) -> YouTubeCredentials | None:
-        win32cred = self._module()
-        try:
-            credential = win32cred.CredRead(self.target, win32cred.CRED_TYPE_GENERIC)
-        except Exception:
+        blob = self._api.read(self.target)
+        if blob is None:
             return None
-        blob = credential.get("CredentialBlob", b"")
-        if isinstance(blob, bytes):
-            text = _credential_blob_to_text(blob)
-        else:
-            text = str(blob)
-        return YouTubeCredentials.from_json(text)
+        return YouTubeCredentials.from_json(_credential_blob_to_text(blob))
 
     def write(self, credentials: YouTubeCredentials) -> None:
-        win32cred = self._module()
-        win32cred.CredWrite(
-            {
-                "Type": win32cred.CRED_TYPE_GENERIC,
-                "TargetName": self.target,
-                "CredentialBlob": credentials.to_json(),
-                "Persist": win32cred.CRED_PERSIST_LOCAL_MACHINE,
-                "UserName": "youtube",
-            },
-            0,
+        self._api.write(
+            self.target,
+            credentials.to_json().encode("utf-8"),
+            username="youtube",
         )
 
     def delete(self) -> None:
-        win32cred = self._module()
-        try:
-            win32cred.CredDelete(self.target, win32cred.CRED_TYPE_GENERIC)
-        except Exception:
-            return
+        self._api.delete(self.target)
 
 
 class MemoryCredentialStore(CredentialStore):
@@ -143,9 +243,25 @@ class MemoryCredentialStore(CredentialStore):
 
 
 def _credential_blob_to_text(blob: bytes) -> str:
-    if b"\x00" in blob:
-        return blob.decode("utf-16-le")
-    return blob.decode("utf-8")
+    try:
+        if b"\x00" in blob:
+            return blob.decode("utf-16-le").rstrip("\x00")
+        return blob.decode("utf-8").rstrip("\x00")
+    except UnicodeDecodeError as exc:
+        raise YouTubeOAuthError("保存済みYouTube資格情報を文字列として読めません") from exc
+
+
+def _credential_target_from_environment() -> str:
+    target = os.environ.get(YOUTUBE_CREDENTIAL_TARGET_ENV, "").strip()
+    return target or YOUTUBE_CREDENTIAL_TARGET
+
+
+def _windows_credential_error(action: str, error: int) -> str:
+    try:
+        detail = ctypes.WinError(error).strerror
+    except Exception:
+        detail = f"WinError {error}"
+    return f"Windows資格情報ストアの{action}に失敗しました: {detail} (WinError {error})"
 
 
 @dataclass(frozen=True)

@@ -42,7 +42,7 @@ python scripts/build_windows_exe.py
 .\scripts\smoke_windows_updater.ps1 -ExePath .\dist\master-duel-recorder-lite-updater.exe -ExpectedVersion 1.0.2
 ```
 
-CLIスモークは`--version`、`--help`、`config show --json`を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。updaterスモークは`--version`と必須引数のhelp表示を検証します。CLI/GUIは一時フォルダへコピーして起動し、EXE隣接`user_data/`を作成せず、既定パスが分離した`LOCALAPPDATA`配下になることを確認します。読取操作だけではその既定パスも作成しません。
+CLIスモークは`--version`、`--help`、`config show --json`、隔離したWindows Credential Manager targetでのYouTube OAuth資格情報読み取り・削除を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。updaterスモークは`--version`と必須引数のhelp表示を検証します。CLI/GUIは一時フォルダへコピーして起動し、EXE隣接`user_data/`を作成せず、既定パスが分離した`LOCALAPPDATA`配下になることを確認します。読取操作だけではその既定パスも作成しません。
 
 ## GitHub Release
 
