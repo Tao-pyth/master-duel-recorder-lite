@@ -10,7 +10,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 15
+CURRENT_SCHEMA_VERSION = 16
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -765,6 +765,44 @@ def _migrate_to_v15(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v16(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE tag_templates (
+            template_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            tags_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "CREATE UNIQUE INDEX tag_templates_name_idx ON tag_templates(name)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE practice_goals (
+            goal_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            target_value REAL NOT NULL,
+            current_value REAL NOT NULL DEFAULT 0,
+            own_deck TEXT,
+            opponent_deck TEXT,
+            season_name TEXT,
+            status TEXT NOT NULL CHECK (status IN ('active', 'achieved', 'paused', 'archived')),
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX practice_goals_status_idx ON practice_goals(status, updated_at DESC)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -781,6 +819,7 @@ _MIGRATIONS: dict[int, Migration] = {
     13: _migrate_to_v13,
     14: _migrate_to_v14,
     15: _migrate_to_v15,
+    16: _migrate_to_v16,
 }
 
 
@@ -1128,6 +1167,31 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "updated_at",
     }.issubset(youtube_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のyoutube_uploadsスキーマがありません")
+    tag_template_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(tag_templates)")
+    }
+    if not {"template_id", "name", "tags_json", "created_at", "updated_at"}.issubset(
+        tag_template_columns
+    ):
+        raise HistoryDatabaseError("録画履歴DBに必須のtag_templatesスキーマがありません")
+    goal_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(practice_goals)")
+    }
+    if not {
+        "goal_id",
+        "title",
+        "metric",
+        "target_value",
+        "current_value",
+        "own_deck",
+        "opponent_deck",
+        "season_name",
+        "status",
+        "notes",
+        "created_at",
+        "updated_at",
+    }.issubset(goal_columns):
+        raise HistoryDatabaseError("録画履歴DBに必須のpractice_goalsスキーマがありません")
     quick_check = connection.execute("PRAGMA quick_check").fetchone()
     if quick_check is None or quick_check[0] != "ok":
         detail = quick_check[0] if quick_check else "結果なし"

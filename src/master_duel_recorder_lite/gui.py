@@ -483,6 +483,7 @@ class RecorderGui:
         self.reliability_check_var = tk.StringVar(value="未実行")
         self.reliability_wizard_var = tk.StringVar(value="未確認")
         self.reliability_hotkey_var = tk.StringVar(value="未確認")
+        self.improvement_status_var = tk.StringVar(value="未確認")
 
         self._configure_window()
         self._configure_styles()
@@ -494,6 +495,7 @@ class RecorderGui:
         self._build_seasons_page()
         self._build_prepare_page()
         self._build_reliability_page()
+        self._build_improvement_page()
         self._build_settings_page()
         self.show_page("record")
         self.root.protocol("WM_DELETE_WINDOW", self.request_close)
@@ -764,6 +766,7 @@ class RecorderGui:
             ("seasons", "シーズン"),
             ("prepare", "MP4準備"),
             ("reliability", "信頼性"),
+            ("improve", "改善"),
             ("settings", "設定"),
         ):
             button = tk.Button(
@@ -1888,6 +1891,37 @@ class RecorderGui:
         panel.columnconfigure(1, weight=1)
         self.widgets["reliability_status"] = panel
 
+    def _build_improvement_page(self) -> None:
+        page = self._new_page("improve")
+        panel = self._surface(page)
+        panel.pack(fill="x", pady=(0, 10))
+        ttk.Label(panel, text="入力削減と運用管理", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w"
+        )
+        ttk.Label(panel, text="状態", style="Body.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(12, 0)
+        )
+        ttk.Label(
+            panel,
+            textvariable=self.improvement_status_var,
+            style="Body.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=1, column=1, sticky="ew", pady=(12, 0))
+        actions = ttk.Frame(panel, style="Surface.TFrame")
+        actions.grid(row=2, column=0, columnspan=2, sticky="w", pady=(16, 0))
+        ttk.Button(actions, text="状態を更新", command=self.refresh_improvement).pack(
+            side="left"
+        )
+        ttk.Button(
+            actions,
+            text="録画なし戦績を追加",
+            style="Primary.TButton",
+            command=self._open_manual_quick_duel_editor,
+        ).pack(side="left", padx=(8, 0))
+        panel.columnconfigure(1, weight=1)
+        self.widgets["improvement_status"] = panel
+
     def _build_settings_page(self) -> None:
         page = self._new_page("settings")
         notebook = ttk.Notebook(page)
@@ -2336,6 +2370,7 @@ class RecorderGui:
             "seasons": "シーズン",
             "prepare": "MP4準備",
             "reliability": "信頼性",
+            "improve": "改善",
             "settings": "設定",
         }
         for page in self.pages.values():
@@ -2369,6 +2404,8 @@ class RecorderGui:
             self.refresh_preparation_candidates(selected_id)
         elif key == "reliability":
             self.refresh_reliability()
+        elif key == "improve":
+            self.refresh_improvement()
         elif key == "settings":
             self.load_settings()
             self.refresh_data_protection()
@@ -6014,6 +6051,24 @@ class RecorderGui:
             f"{'有効' if config.hotkeys_enabled else '無効'} / "
             f"トレイ{'有効' if config.tray_enabled else '無効'} / "
             + "、".join(f"{key}: {command.value}" for key, command in bindings.items())
+        )
+
+    def refresh_improvement(self) -> None:
+        if self.smoke_mode:
+            self.improvement_status_var.set(
+                "入力候補、ミニ入力、デッキ改善、ストレージ、移行パック、レビュー入口を表示できます"
+            )
+            return
+        self._run(
+            lambda: (
+                self.service.list_history(DuelManagementQuery(limit=100)),
+                self.service.list_decks(),
+                self.service.list_tags(),
+            ),
+            lambda result: self.improvement_status_var.set(
+                f"最近の戦績候補: {len(result[0].items)}件 / "
+                f"デッキ: {len(result[1])}件 / タグ: {len(result[2])}件"
+            ),
         )
 
     def refresh_preparation_candidates(self, selected_id: str | None = None) -> None:

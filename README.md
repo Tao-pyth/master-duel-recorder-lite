@@ -8,7 +8,7 @@ master-duel-recorder-liteは、OBSに依存せず、Yu-Gi-Oh! Master Duelの対�
 
 ## 中核機能
 
-V1.2.0では、次の中核機能を提供します。
+V1.3.0では、次の中核機能を提供します。
 
 - FFmpeg、録画入力、保存先を確認する録画環境の初期化
 - 画面と音声を録画し、正常停止して再生可能なファイルを保存する最小録画
@@ -19,6 +19,7 @@ V1.2.0では、次の中核機能を提供します。
 - YouTube公式OAuth連携、MP4自動アップロード、履歴への動画URL保存
 - タイムライン時刻からの投稿用クリップ出力と、OAuth未接続でも使える投稿素材生成
 - 自動録画の事前チェック、初回導入状態、既存動画後解析、ホットキー・トレイ操作入口
+- 戦績入力候補、タグテンプレート、目標、デッキ改善集計、ストレージ候補、移行パック、軽量レビュー入口
 - 初期化からアップロード準備までを一貫して操作する設定・運用CLI
 - 録画履歴から動画を再生し、保存場所へ到達する録画の閲覧
 - 勝敗、先後、デッキ、対戦種別、タグ、メモを後編集できる対戦記録管理
@@ -29,7 +30,7 @@ V1.2.0では、次の中核機能を提供します。
 
 ## 現在の状態
 
-現在の正式版は `1.2.0`、「自動録画の信頼性と後解析」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、MP4対象選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理、自動録画の信頼性確認を整備しました。
+現在の正式版は `1.3.0`、「入力削減・デッキ改善・運用管理」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、MP4対象選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理、自動録画の信頼性確認、改善支援を整備しました。
 
 CSV移行は適用前バックアップと単一DBトランザクションで既存データを保護します。単体音声はWindows build 20348以上が対象で、非対応・ゲーム未起動・ヘルパー障害時には別音源へ無断で切り替えず、警告を残して映像のみ継続します。YouTube OAuth資格情報はOS資格情報ストアだけに保存し、設定、manifest、queue、標準出力、ログへ保存しません。
 
@@ -41,6 +42,17 @@ CSV移行は適用前バックアップと単一DBトランザクションで既
 - `mdrl reliability hotkeys`で録画開始/停止、マーカー追加、自動監視切替のショートカットとトレイ設定を確認できます
 - GUIには「信頼性」ページを追加し、30秒事前チェック、初回導入、ホットキー・トレイの状態入口をまとめました
 - V1.2.0の設定追加は`[interaction]`の非シークレット項目だけで、既存設定は既定値補完により手動移行不要です
+
+## V1.3.0の改善支援
+
+- `mdrl improve suggest`で最近値、頻出値、タグから戦績入力候補を表示します
+- `mdrl improve tag-template create --name NAME --tag TAG`でタグテンプレートを作成できます
+- `mdrl improve goals create --title TITLE --metric METRIC --target 10`で練習目標を作成できます
+- `mdrl improve deck-view`で自分デッキ別に対面、先後、コインを集計します
+- `mdrl improve storage`で失敗録画や戦績未入力録画などの整理候補を表示します。自動削除はしません
+- `mdrl improve migration-export PATH`で設定と管理DBの移行パックを作成します。録画ファイルとOAuth資格情報は含めません
+- GUIには「改善」ページを追加し、入力候補、録画なし戦績追加、デッキ改善、ストレージ、移行、レビューの入口をまとめました
+- 履歴DBはV16へ移行し、`tag_templates`と`practice_goals`を追加します。移行前バックアップと失敗時ロールバックの既存契約を維持します
 
 ## V1.1.0のYouTube連携
 
@@ -148,6 +160,9 @@ python -m master_duel_recorder_lite prepare run
 python -m master_duel_recorder_lite reliability check
 python -m master_duel_recorder_lite reliability wizard
 python -m master_duel_recorder_lite reliability hotkeys
+python -m master_duel_recorder_lite improve suggest
+python -m master_duel_recorder_lite improve deck-view
+python -m master_duel_recorder_lite improve storage
 python -m master_duel_recorder_lite youtube account
 python -m master_duel_recorder_lite youtube materials RECORDING_ID
 python -m master_duel_recorder_lite youtube upload RECORDING_ID --title "対戦記録"

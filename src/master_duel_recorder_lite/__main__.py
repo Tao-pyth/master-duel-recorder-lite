@@ -49,6 +49,13 @@ from .ffmpeg import discover_ffmpeg, enumerate_windows_inputs
 from .game_window import GameWindowMonitor, GameWindowObservation, GameWindowStatus
 from .operational_status import collect_operational_status
 from .hotkey_actions import default_hotkey_bindings
+from .improvement import (
+    ImprovementRepository,
+    deck_improvement_rows,
+    export_migration_pack,
+    storage_candidates,
+    suggest_duel_inputs,
+)
 from .offline_analysis import (
     OfflineAnalysisError,
     OfflineAnalysisMode,
@@ -259,6 +266,42 @@ def build_parser() -> argparse.ArgumentParser:
         "hotkeys", help="ホットキーとトレイ設定を表示します。"
     )
     reliability_hotkeys.add_argument("--json", action="store_true")
+    improve_parser = subparsers.add_parser(
+        "improve",
+        help="入力候補、目標、ストレージ、移行パックを扱います。",
+        description="記録済みデータを上達支援と長期運用へつなげます。",
+    )
+    improve_subparsers = improve_parser.add_subparsers(
+        dest="improve_command", required=True
+    )
+    improve_subparsers.add_parser("suggest", help="戦績入力候補を表示します。")
+    improve_subparsers.add_parser("deck-view", help="デッキ改善集計を表示します。")
+    template_parser = improve_subparsers.add_parser(
+        "tag-template", help="タグテンプレートを作成または一覧します。"
+    )
+    template_subparsers = template_parser.add_subparsers(
+        dest="template_command", required=True
+    )
+    template_create = template_subparsers.add_parser("create", help="テンプレートを作成します。")
+    template_create.add_argument("--name", required=True)
+    template_create.add_argument("--tag", action="append", required=True)
+    template_subparsers.add_parser("list", help="テンプレートを一覧します。")
+    goals_parser = improve_subparsers.add_parser("goals", help="目標を作成または一覧します。")
+    goals_subparsers = goals_parser.add_subparsers(dest="goals_command", required=True)
+    goals_create = goals_subparsers.add_parser("create", help="目標を作成します。")
+    goals_create.add_argument("--title", required=True)
+    goals_create.add_argument("--metric", required=True)
+    goals_create.add_argument("--target", type=float, required=True)
+    goals_create.add_argument("--own-deck", default=None)
+    goals_create.add_argument("--opponent-deck", default=None)
+    goals_create.add_argument("--season", default=None)
+    goals_create.add_argument("--notes", default="")
+    goals_subparsers.add_parser("list", help="目標を一覧します。")
+    improve_subparsers.add_parser("storage", help="録画ストレージ整理候補を表示します。")
+    migration_export = improve_subparsers.add_parser(
+        "migration-export", help="設定と管理DBの移行パックを作成します。"
+    )
+    migration_export.add_argument("destination", type=Path)
     config_parser = subparsers.add_parser(
         "config",
         help="非シークレット設定を安全に管理します。",
@@ -670,6 +713,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             user_data_dir=args.user_data_dir,
         )
 
+    if args.command == "improve":
+        return _run_improve_command(paths=paths, args=args)
+
     if args.command == "config":
         return _run_config_command(paths=paths, args=args)
 
@@ -948,6 +994,85 @@ def _print_auto_check_result(result: AutoCheckResult) -> None:
     print(f"サンプル数: {result.sampled_frames}")
     for reason in result.reasons:
         print(f"- {reason}")
+
+
+def _run_improve_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
+    repository = ImprovementRepository.from_runtime_paths(paths)
+    records = DuelRecordRepository.from_runtime_paths(paths)
+    command = args.improve_command
+    if command == "suggest":
+        suggestions = suggest_duel_inputs(records.list(limit=200))
+        if not suggestions:
+            print("入力候補はまだありません。")
+            return EXIT_SUCCESS
+        for item in suggestions:
+            print(f"{item.field}: {item.value} ({item.reason})")
+        return EXIT_SUCCESS
+    if command == "deck-view":
+        rows = deck_improvement_rows(records.list(limit=1000))
+        if not rows:
+            print("デッキ改善に使える戦績はまだありません。")
+            return EXIT_SUCCESS
+        for row in rows[:30]:
+            print(
+                f"{row.own_deck} vs {row.opponent_deck}: "
+                f"{row.wins}/{row.total} win_rate={row.win_rate:.3f} "
+                f"first={row.first_total} second={row.second_total} "
+                f"heads={row.coin_heads} tails={row.coin_tails}"
+            )
+        return EXIT_SUCCESS
+    if command == "tag-template":
+        if args.template_command == "create":
+            template = repository.create_tag_template(name=args.name, tags=args.tag)
+            print(f"タグテンプレートを作成しました: {template.template_id} {template.name}")
+            return EXIT_SUCCESS
+        for template in repository.list_tag_templates():
+            print(f"{template.template_id}: {template.name} [{', '.join(template.tags)}]")
+        return EXIT_SUCCESS
+    if command == "goals":
+        if args.goals_command == "create":
+            goal = repository.create_goal(
+                title=args.title,
+                metric=args.metric,
+                target_value=args.target,
+                own_deck=args.own_deck,
+                opponent_deck=args.opponent_deck,
+                season_name=args.season,
+                notes=args.notes,
+            )
+            print(f"目標を作成しました: {goal.goal_id} {goal.title}")
+            return EXIT_SUCCESS
+        for goal in repository.list_goals():
+            print(
+                f"{goal.goal_id}: {goal.title} {goal.current_value:g}/{goal.target_value:g} "
+                f"status={goal.status}"
+            )
+        return EXIT_SUCCESS
+    if command == "storage":
+        histories = RecordingHistoryRepository.from_runtime_paths(paths).query(
+            HistoryQuery(limit=1000)
+        )
+        candidates = storage_candidates(histories, records.list(limit=1000))
+        if not candidates:
+            print("整理候補はありません。")
+            return EXIT_SUCCESS
+        for item in candidates[:100]:
+            print(f"{item.category}: {item.recording_id} {item.size_bytes} bytes - {item.reason}")
+        return EXIT_SUCCESS
+    if command == "migration-export":
+        try:
+            path = export_migration_pack(paths, args.destination)
+        except OSError as exc:
+            _print_cli_error(
+                "E_MIGRATION_EXPORT",
+                str(exc),
+                "保存先の権限と空き容量を確認してください。",
+            )
+            return EXIT_OPERATION
+        print(f"移行パックを作成しました: {path}")
+        print("録画ファイルとOAuth資格情報は含めていません。")
+        return EXIT_SUCCESS
+    raise AssertionError(f"未対応のimproveコマンドです: {command}")
 
 
 def _run_config_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
