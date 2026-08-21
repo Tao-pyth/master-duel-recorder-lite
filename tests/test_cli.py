@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from master_duel_recorder_lite.__main__ import main
+from master_duel_recorder_lite.__main__ import _resolve_youtube_upload_command, main
 from master_duel_recorder_lite.config import AppConfig, LoadedAppConfig
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.game_window import GameWindowObservation, GameWindowStatus
@@ -43,6 +43,30 @@ class FakeRecordingSession:
 
 
 class CliTest(unittest.TestCase):
+    def test_youtube_upload_command_accepts_recording_id_directly(self) -> None:
+        args = SimpleNamespace(
+            youtube_upload_command="rec-1",
+            youtube_upload_value=None,
+        )
+
+        self.assertEqual(_resolve_youtube_upload_command(args), ("recording", "rec-1"))
+
+    def test_youtube_upload_command_keeps_management_subcommands(self) -> None:
+        cases = (
+            ("run", None, ("run", None)),
+            ("list", None, ("list", None)),
+            ("show", "upload-1", ("show", "upload-1")),
+            ("recording", "rec-1", ("recording", "rec-1")),
+        )
+        for command, value, expected in cases:
+            with self.subTest(command=command):
+                args = SimpleNamespace(
+                    youtube_upload_command=command,
+                    youtube_upload_value=value,
+                )
+
+                self.assertEqual(_resolve_youtube_upload_command(args), expected)
+
     def test_doctor_returns_two_when_preflight_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "user_data" / "config" / "app.toml"

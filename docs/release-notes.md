@@ -1,5 +1,22 @@
 # リリースノート
 
+## V1.1.0: YouTube公式連携 + MP4自動アップロード - 2026-08-21
+
+- `upload.privacy_status`とアップロードメタデータで`public`を明示指定できるようにし、既定は引き続き`private`にした
+- 概要欄テンプレートを追加し、許可済み変数だけを展開して未知項目や秘密情報に見える項目を拒否するようにした
+- 履歴DBスキーマをV15へ更新し、`youtube_uploads`で投稿状態、試行回数、失敗理由、動画ID、視聴URLを録画IDへ紐付けるようにした
+- YouTube OAuth接続、接続状態確認、切断を`mdrl youtube`へ追加し、資格情報をOS資格情報ストアだけへ保存するようにした
+- 既存のcompleted prepare結果を再利用し、なければMP4準備を実行してからYouTube Data APIのresumable uploadへ進む投稿サービスを追加した
+- fake clientを使う結合テストで成功、再試行、OAuth未接続時の失敗保存を検証した
+- `mdrl youtube upload RECORDING_ID --title TITLE`、`upload run/list/show`、`history list/show`のYouTube URL表示を追加した
+- タイムライン時刻から前後秒数を指定して投稿用MP4クリップを`user_data/data/exports/`へ非破壊で出力するCLIとサービスを追加した
+- OAuth未接続でもタイトル、概要欄、タグ、投稿チェックリスト、素材出力先を生成できる投稿素材サービスを追加した
+- Ruff、全500テスト、Python GUIスモーク、CLI/GUI one-file EXEビルド、両スモークに合格した
+- ローカルCLI EXE SHA-256: `330D3BAE34DCB8E706F49CC474CCF11078C0759B51BA0F4A6484A848A3776DBD`
+- ローカルGUI EXE SHA-256: `D05CAF0F416A8D7ED487E3A1F2A80D5CF07B1A5F27856BAF0037CDD7B0AEA842`
+
+追跡: [V1.1.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/56)、親Issue #401、子Issue #402 - #408、#410 - #411
+
 ## V1.0.3: GUI操作性改善 - 2026-08-21
 
 - カレンダーピッカーのヘッダーを7列グリッドへ整理し、「前月」「年月」「今月へ」「翌月」を1:3:2:1で配置した

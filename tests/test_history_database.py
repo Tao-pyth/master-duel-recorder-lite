@@ -202,6 +202,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                         12: lambda _connection: None,
                         13: lambda _connection: None,
                         14: lambda _connection: None,
+                        15: lambda _connection: None,
                     },
                 )
 

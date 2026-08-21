@@ -10,7 +10,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -728,6 +728,43 @@ def _migrate_to_v14(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v15(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE youtube_uploads (
+            upload_id TEXT PRIMARY KEY CHECK (length(trim(upload_id)) > 0),
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            prepare_queue_id TEXT,
+            state TEXT NOT NULL CHECK (
+                state IN ('waiting', 'preparing', 'uploading', 'completed', 'failed', 'cancelled')
+            ),
+            privacy TEXT NOT NULL CHECK (privacy IN ('private', 'unlisted', 'public')),
+            title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+            description TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            video_id TEXT,
+            watch_url TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX youtube_uploads_recording_idx "
+        "ON youtube_uploads(recording_id, created_at DESC, upload_id DESC)"
+    )
+    connection.execute(
+        "CREATE UNIQUE INDEX youtube_uploads_completed_recording_idx "
+        "ON youtube_uploads(recording_id) WHERE state = 'completed'"
+    )
+    connection.execute(
+        "CREATE INDEX youtube_uploads_state_idx "
+        "ON youtube_uploads(state, updated_at DESC, upload_id DESC)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -743,6 +780,7 @@ _MIGRATIONS: dict[int, Migration] = {
     12: _migrate_to_v12,
     13: _migrate_to_v13,
     14: _migrate_to_v14,
+    15: _migrate_to_v15,
 }
 
 
@@ -1070,6 +1108,26 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         raise HistoryDatabaseError(
             "録画履歴DBに必須のduel_editor_preferencesスキーマがありません"
         )
+    youtube_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(youtube_uploads)")
+    }
+    if not {
+        "upload_id",
+        "recording_id",
+        "prepare_queue_id",
+        "state",
+        "privacy",
+        "title",
+        "description",
+        "tags_json",
+        "video_id",
+        "watch_url",
+        "attempts",
+        "error",
+        "created_at",
+        "updated_at",
+    }.issubset(youtube_columns):
+        raise HistoryDatabaseError("録画履歴DBに必須のyoutube_uploadsスキーマがありません")
     quick_check = connection.execute("PRAGMA quick_check").fetchone()
     if quick_check is None or quick_check[0] != "ok":
         detail = quick_check[0] if quick_check else "結果なし"

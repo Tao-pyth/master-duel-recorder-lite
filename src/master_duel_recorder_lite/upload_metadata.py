@@ -18,6 +18,7 @@ class UploadMetadataError(ValueError):
 class UploadPrivacy(str, Enum):
     PRIVATE = "private"
     UNLISTED = "unlisted"
+    PUBLIC = "public"
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,7 @@ class UploadMetadata:
             seen.add(key)
             normalized_tags.append(normalized)
         if not isinstance(self.privacy, UploadPrivacy):
-            raise UploadMetadataError("privacy はprivateまたはunlistedである必要があります")
+            raise UploadMetadataError("privacy はprivate、unlisted、public のいずれかである必要があります")
         object.__setattr__(self, "title", title)
         object.__setattr__(self, "description", description)
         object.__setattr__(self, "tags", tuple(normalized_tags))
@@ -92,7 +93,7 @@ class UploadMetadata:
         try:
             privacy = UploadPrivacy(value.get("privacy", UploadPrivacy.PRIVATE.value))
         except ValueError as exc:
-            raise UploadMetadataError("privacy はprivateまたはunlistedである必要があります") from exc
+            raise UploadMetadataError("privacy はprivate、unlisted、public のいずれかである必要があります") from exc
         return cls(
             title=title,
             description=description,

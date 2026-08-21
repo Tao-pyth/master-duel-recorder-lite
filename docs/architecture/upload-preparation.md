@@ -2,7 +2,7 @@
 
 ## 目的と範囲
 
-V0.7.0では録画を外部アップローダーへ渡せる状態まで、ローカルで検証・エクスポート・記述します。YouTube等への直接アップロード、OAuth、アクセストークン保存は行いません。
+V0.7.0では録画を外部アップローダーへ渡せる状態まで、ローカルで検証・エクスポート・記述しました。V1.1.0ではこの準備結果を再利用し、YouTube公式OAuth連携とMP4自動アップロードを追加します。準備キュー、投稿状態、OAuth資格情報は責務を分け、秘密情報を設定、manifest、queue、標準出力、ログへ保存しません。
 
 ## メタデータ
 
@@ -11,9 +11,9 @@ V0.7.0では録画を外部アップローダーへ渡せる状態まで、ロ�
 | title | 必須、100文字以内、改行・制御文字なし |
 | description | 5000文字以内 |
 | tags | 30件以内、各100文字以内、大文字小文字を無視して重複不可 |
-| privacy | `private`または`unlisted`、既定は`private` |
+| privacy | `private`、`unlisted`、`public`、既定は`private` |
 
-UnicodeはNFCへ正規化します。許可した4項目以外は拒否するため、APIキー、OAuth情報、クライアントシークレットをモデルやマニフェストへ混入できません。`public`はV1.0.0範囲では許可しません。
+UnicodeはNFCへ正規化します。許可した4項目以外は拒否するため、APIキー、OAuth情報、クライアントシークレットをモデルやマニフェストへ混入できません。`public`はV1.1.0以降のYouTube投稿で明示指定された場合だけ使用します。
 
 ## メディア検証
 
@@ -60,6 +60,12 @@ FFmpegへ `-map 0 -c copy -movflags +faststart -n` を渡し、再エンコー�
 
 GUIでは録画IDの手入力を要求せず、完了済みで実ファイルが存在する録画を、開始日時・自分デッキ・勝敗・ファイル名を含む表示名から選択します。戦績管理で選択中の録画からMP4準備ページを開くこともできます。内部のキュー契約は録画IDを維持します。
 
+## YouTube投稿
+
+YouTube投稿は`youtube_uploads`テーブルで管理します。状態は`waiting -> preparing -> uploading -> completed/failed/cancelled`です。完了済み録画に対して既存のcompleted prepareがあれば再利用し、なければ`UploadPreparationService`でMP4準備を行ってから投稿します。同一録画のcompleted投稿は既定で重複作成せず、明示した再投稿だけを許可します。
+
+OAuth資格情報はWindows資格情報ストアへ保存します。アプリ設定、準備キュー、manifest、投稿状態DB、標準出力、ログにはclient secret、refresh token、access tokenを保存しません。YouTube Data APIはresumable uploadを使い、通信断、5xx、rate/quota、401/403を分類します。通信断と5xxは指数バックオフで再試行し、完了時はvideo_idとwatch_urlを履歴表示へ渡します。
+
 ## CLI
 
 ```powershell
@@ -69,6 +75,14 @@ python -m master_duel_recorder_lite prepare show QUEUE_ID
 python -m master_duel_recorder_lite prepare run
 python -m master_duel_recorder_lite prepare run QUEUE_ID
 python -m master_duel_recorder_lite prepare cancel QUEUE_ID
+python -m master_duel_recorder_lite youtube connect --client-secrets client_secret.json
+python -m master_duel_recorder_lite youtube account
+python -m master_duel_recorder_lite youtube materials RECORDING_ID
+python -m master_duel_recorder_lite youtube clip RECORDING_ID --elapsed-ms 30000
+python -m master_duel_recorder_lite youtube upload RECORDING_ID --title "対戦記録" --privacy private
+python -m master_duel_recorder_lite youtube upload run
+python -m master_duel_recorder_lite youtube upload list
+python -m master_duel_recorder_lite youtube upload show UPLOAD_ID
 ```
 
 `prepare run`は待機項目を個別に処理し、1件でも失敗・キャンセルなら終了コード4を返します。キュー・設定・ファイル操作自体の失敗は3です。

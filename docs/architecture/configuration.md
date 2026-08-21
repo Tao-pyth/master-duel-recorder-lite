@@ -70,7 +70,7 @@ GUIでFFmpegを導入した場合、実行ファイルを既定では`%LOCALAPPD
 
 `visual_events_enabled`はMaster Duel録画中の基本イベント判定、`visual_maximum_fps`は0より大きく2以下の解析頻度、`visual_language`は`auto`・`ja`・`en`、`visual_minimum_confidence`は0.70以上の候補保存閾値です。画像はメモリ内で処理し保存しません。任意ウィンドウ、モニター、デスクトップ録画では自動判定を無効化し、録画は継続します。
 
-`upload.privacy_status` はアップロード準備メタデータの既定公開範囲です。安全のため `private` が既定で、明示した場合だけ `unlisted` を使用できます。`public`、OAuthトークン、APIキー、クライアントシークレットは設定・メタデータ・マニフェストへ保存しません。
+`upload.privacy_status` はアップロード準備とYouTube投稿メタデータの既定公開範囲です。安全のため `private` が既定で、明示した場合だけ `unlisted` または `public` を使用できます。OAuthトークン、APIキー、クライアントシークレットは設定・メタデータ・マニフェストへ保存しません。YouTube OAuth資格情報はOS資格情報ストアだけに保存します。
 
 V0.1.xで作成した設定には新しい項目がありませんが、読込時に上記の既定値を補うため手動移行は不要です。
 

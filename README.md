@@ -8,7 +8,7 @@ master-duel-recorder-liteは、OBSに依存せず、Yu-Gi-Oh! Master Duelの対�
 
 ## 中核機能
 
-V1.0.3では、次の中核機能を提供します。
+V1.1.0では、次の中核機能を提供します。
 
 - FFmpeg、録画入力、保存先を確認する録画環境の初期化
 - 画面と音声を録画し、正常停止して再生可能なファイルを保存する最小録画
@@ -16,6 +16,8 @@ V1.0.3では、次の中核機能を提供します。
 - 録画結果、状態、ファイル、失敗理由をSQLiteで追跡する録画履歴
 - ランク・イベント期間を独立して管理し、戦績とレポートメモをまとめるシーズン管理
 - 動画検証、remux、メタデータ、キュー、マニフェストを扱うアップロード準備
+- YouTube公式OAuth連携、MP4自動アップロード、履歴への動画URL保存
+- タイムライン時刻からの投稿用クリップ出力と、OAuth未接続でも使える投稿素材生成
 - 初期化からアップロード準備までを一貫して操作する設定・運用CLI
 - 録画履歴から動画を再生し、保存場所へ到達する録画の閲覧
 - 勝敗、先後、デッキ、対戦種別、タグ、メモを後編集できる対戦記録管理
@@ -26,9 +28,19 @@ V1.0.3では、次の中核機能を提供します。
 
 ## 現在の状態
 
-現在の正式版は `1.0.3`、「GUI操作性改善」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、MP4対象選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択を整備しました。
+現在の正式版は `1.1.0`、「YouTube公式連携 + MP4自動アップロード」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、MP4対象選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理を整備しました。
 
-CSV移行は適用前バックアップと単一DBトランザクションで既存データを保護します。単体音声はWindows build 20348以上が対象で、非対応・ゲーム未起動・ヘルパー障害時には別音源へ無断で切り替えず、警告を残して映像のみ継続します。外部サービスへの直接アップロードとOAuthはV1.0.3の対象外で、アップロード準備までを提供します。
+CSV移行は適用前バックアップと単一DBトランザクションで既存データを保護します。単体音声はWindows build 20348以上が対象で、非対応・ゲーム未起動・ヘルパー障害時には別音源へ無断で切り替えず、警告を残して映像のみ継続します。YouTube OAuth資格情報はOS資格情報ストアだけに保存し、設定、manifest、queue、標準出力、ログへ保存しません。
+
+## V1.1.0のYouTube連携
+
+- `mdrl youtube connect`でYouTube Data APIの`youtube.upload`スコープを接続し、資格情報をOS資格情報ストアへ保存します。既定のredirect URIは`http://localhost:8080/`です
+- `mdrl youtube upload RECORDING_ID --title TITLE`で完了済み録画をMP4準備し、既存prepare結果があれば再利用してYouTubeへ投稿します
+- 投稿状態、試行回数、失敗理由、動画ID、視聴URLを履歴DBの`youtube_uploads`へ保存します
+- `mdrl history list`と`mdrl history show`では完了済みYouTube投稿URLを録画IDと一緒に表示します
+- `mdrl youtube clip RECORDING_ID --elapsed-ms 30000`で元録画を壊さず`user_data/data/exports/`へ投稿用クリップを出力します
+- `mdrl youtube materials RECORDING_ID`でタイトル、概要欄、タグ、投稿チェックリスト、素材出力先をOAuth未接続でも生成できます
+- 既定公開範囲は`private`で、明示した場合だけ`unlisted`または`public`を使えます
 
 ## V1.0.3の操作改善
 
@@ -59,7 +71,7 @@ CLIでは対象を表示するだけなら`mdrl uninstall`、実行する場合�
 - 録画データ、設定、認証情報、履歴、キュー、ログを `user_data/` に分離して保護する
 - ゲーム画像、テンプレート画像、配布できないゲーム素材をリポジトリに含めない
 - 未完了録画は自動修復せず`failed`へ確定し、録画ファイルと失敗診断を保持する
-- 直接アップロードとOAuthはV1.0.3の中核範囲に含めず、まず安全なアップロード準備までを提供する
+- YouTube OAuth資格情報はOS資格情報ストアだけに保存し、設定、manifest、queue、ログへ混入させない
 - GUIとCLIを同じアプリケーションサービスへ接続し、録画・履歴・戦績の規則を共通化する
 
 ## Windows EXEの導入
@@ -123,6 +135,9 @@ python -m master_duel_recorder_lite timeline list RECORDING_ID
 python -m master_duel_recorder_lite timeline add RECORDING_ID --elapsed-ms 3000 --type marker --label "重要局面"
 python -m master_duel_recorder_lite prepare list
 python -m master_duel_recorder_lite prepare run
+python -m master_duel_recorder_lite youtube account
+python -m master_duel_recorder_lite youtube materials RECORDING_ID
+python -m master_duel_recorder_lite youtube upload RECORDING_ID --title "対戦記録"
 python -m unittest discover -s tests
 ```
 

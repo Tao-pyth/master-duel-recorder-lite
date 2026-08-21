@@ -100,12 +100,23 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.upload_privacy_status, "unlisted")
         self.assertFalse(loaded.config.auto_create_user_data)
 
-    def test_invalid_privacy_status_fails_fast(self) -> None:
+    def test_public_privacy_status_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
             ensure_runtime_dirs(paths)
             config_path = paths.config / "app.toml"
             config_path.write_text('[upload]\nprivacy_status = "public"\n', encoding="utf-8")
+
+            loaded = load_app_config(user_data_dir=paths.root)
+
+        self.assertEqual(loaded.config.upload_privacy_status, "public")
+
+    def test_invalid_privacy_status_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text('[upload]\nprivacy_status = "friends"\n', encoding="utf-8")
 
             with self.assertRaises(AppConfigError):
                 load_app_config(user_data_dir=paths.root)

@@ -10,7 +10,7 @@ import uuid
 from .runtime_paths import RuntimePaths, default_runtime_paths
 
 
-ALLOWED_PRIVACY_STATUSES = {"private", "unlisted"}
+ALLOWED_PRIVACY_STATUSES = {"private", "unlisted", "public"}
 ALLOWED_RECORDING_FORMATS = {"mkv", "mp4"}
 ALLOWED_SCREEN_INPUT_FORMATS = {"gdigrab"}
 ALLOWED_AUDIO_INPUT_FORMATS = {"dshow"}
@@ -425,7 +425,7 @@ def _capture_mode(value: str) -> str:
 def _privacy_status(value: str) -> str:
     normalized = value.lower()
     if normalized not in ALLOWED_PRIVACY_STATUSES:
-        raise ValueError("privacy_status は private または unlisted である必要があります")
+        raise ValueError("privacy_status は private、unlisted、public のいずれかである必要があります")
     return normalized
 
 

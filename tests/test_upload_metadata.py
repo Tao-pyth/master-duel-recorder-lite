@@ -23,12 +23,19 @@ class UploadMetadataTest(unittest.TestCase):
 
         self.assertIs(metadata.privacy, UploadPrivacy.UNLISTED)
 
-    def test_invalid_lengths_duplicates_and_public_are_rejected(self) -> None:
+    def test_public_can_be_explicit_for_youtube_upload(self) -> None:
+        metadata = UploadMetadata.from_dict(
+            {"title": "対戦記録", "privacy": "public", "tags": []}
+        )
+
+        self.assertIs(metadata.privacy, UploadPrivacy.PUBLIC)
+
+    def test_invalid_lengths_duplicates_and_unknown_privacy_are_rejected(self) -> None:
         invalid_values = (
             {"title": ""},
             {"title": "x" * 101},
             {"title": "title", "tags": ["tag", "TAG"]},
-            {"title": "title", "privacy": "public"},
+            {"title": "title", "privacy": "friends"},
         )
         for value in invalid_values:
             with self.subTest(value=value):

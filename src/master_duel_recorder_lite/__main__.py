@@ -11,6 +11,7 @@ import time
 from . import __version__
 from .application import ApplicationEvent, RecorderApplicationService
 from .capture_targets import CaptureTargetCatalog
+from .clip_export import ClipExportError, ClipExportService
 from .config import (
     AppConfig,
     AppConfigError,
@@ -90,6 +91,22 @@ from .uninstall import (
     create_uninstall_plan,
     launch_cleanup_worker,
     run_cleanup_manifest,
+)
+from .youtube_client import HttpYouTubeClient
+from .youtube_oauth import (
+    WindowsCredentialStore,
+    YouTubeOAuthError,
+    authorization_url,
+    exchange_authorization_code,
+    load_client_secrets,
+)
+from .youtube_service import YouTubeServiceError, YouTubeUploadService
+from .youtube_materials import YouTubeMaterialService
+from .youtube_uploads import (
+    YouTubeUpload,
+    YouTubeUploadError,
+    YouTubeUploadRepository,
+    YouTubeUploadState,
 )
 
 
@@ -388,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
         "prepare",
         help="アップロード用動画と情報を準備します。",
         description="完了済み録画IDをキューへ登録し、再実行可能なMP4準備を行います。",
-        epilog="例: mdrl prepare enqueue RECORDING_ID --title 対戦記録\n直接アップロードとOAuthは行いません。",
+        epilog="例: mdrl prepare enqueue RECORDING_ID --title 対戦記録\nYouTube投稿はmdrl youtubeで扱います。",
     )
     prepare_subparsers = prepare_parser.add_subparsers(
         dest="prepare_command", required=True
@@ -401,7 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_enqueue.add_argument("--description", default="")
     prepare_enqueue.add_argument("--tag", action="append", default=[])
     prepare_enqueue.add_argument(
-        "--privacy", choices=("private", "unlisted"), default=None
+        "--privacy", choices=("private", "unlisted", "public"), default=None
     )
     prepare_subparsers.add_parser("list", help="準備キューを一覧します。")
     prepare_show = prepare_subparsers.add_parser(
@@ -416,6 +433,68 @@ def build_parser() -> argparse.ArgumentParser:
         "cancel", help="待機中の準備処理を取消します。"
     )
     prepare_cancel.add_argument("queue_id")
+    youtube_parser = subparsers.add_parser(
+        "youtube",
+        help="YouTube連携と投稿を管理します。",
+        description="OAuth資格情報はOS資格情報ストアに保存し、app.tomlやqueueには保存しません。",
+    )
+    youtube_subparsers = youtube_parser.add_subparsers(
+        dest="youtube_command", required=True
+    )
+    youtube_connect = youtube_subparsers.add_parser(
+        "connect", help="YouTube OAuth資格情報を保存します。"
+    )
+    youtube_connect.add_argument("--client-secrets", type=Path, required=True)
+    youtube_connect.add_argument(
+        "--authorization-code",
+        default=None,
+        help="ブラウザ認可後に取得した認可コード。未指定時は認可URLを表示します。",
+    )
+    youtube_connect.add_argument(
+        "--redirect-uri",
+        default="http://localhost:8080/",
+        help="OAuthクライアントに設定したredirect URIです。",
+    )
+    youtube_subparsers.add_parser("account", help="YouTube連携状態を表示します。")
+    youtube_subparsers.add_parser("disconnect", help="YouTube資格情報を削除します。")
+    youtube_materials = youtube_subparsers.add_parser(
+        "materials", help="YouTube投稿素材を生成して表示します。"
+    )
+    youtube_materials.add_argument("recording_id")
+    youtube_materials.add_argument("--title", default=None)
+    youtube_clip = youtube_subparsers.add_parser(
+        "clip", help="録画から投稿用MP4クリップを出力します。"
+    )
+    youtube_clip.add_argument("recording_id")
+    youtube_clip.add_argument("--elapsed-ms", type=_nonnegative_integer, required=True)
+    youtube_clip.add_argument("--before-seconds", type=_positive_seconds, default=30.0)
+    youtube_clip.add_argument("--after-seconds", type=_positive_seconds, default=30.0)
+    youtube_upload = youtube_subparsers.add_parser(
+        "upload", help="録画をYouTubeへ投稿します。"
+    )
+    youtube_upload.add_argument(
+        "youtube_upload_command",
+        nargs="?",
+        help="録画ID、またはrun/list/show/recordingを指定します。",
+    )
+    youtube_upload.add_argument(
+        "youtube_upload_value",
+        nargs="?",
+        help="showのupload_id、またはrecording指定時の録画IDです。",
+    )
+    youtube_upload.add_argument("--title", default=None)
+    youtube_upload.add_argument("--description", default="")
+    youtube_upload.add_argument("--tag", action="append", default=[])
+    youtube_upload.add_argument(
+        "--privacy", choices=("private", "unlisted", "public"), default=None
+    )
+    youtube_upload.add_argument("--force-new-upload", action="store_true")
+    youtube_upload.add_argument(
+        "--limit",
+        type=_history_limit,
+        default=20,
+        help="runで処理する待機投稿の最大件数です。",
+    )
     uninstall_parser = subparsers.add_parser(
         "uninstall",
         help="現在の使用領域をすべて削除します。",
@@ -573,6 +652,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "prepare":
         return _run_prepare_command(
+            paths=paths,
+            args=args,
+            project_root=args.project_root,
+            user_data_dir=args.user_data_dir,
+        )
+
+    if args.command == "youtube":
+        return _run_youtube_command(
             paths=paths,
             args=args,
             project_root=args.project_root,
@@ -1027,8 +1114,12 @@ def _run_history_command(*, paths: RuntimePaths, args: argparse.Namespace) -> in
             if not entries:
                 print("録画履歴はありません。")
                 return 0
+            uploads = YouTubeUploadRepository.from_runtime_paths(paths)
             for entry in entries:
-                _print_history_summary(entry)
+                _print_history_summary(
+                    entry,
+                    youtube_upload=uploads.completed_for_recording(entry.recording_id),
+                )
             return 0
         if args.history_command == "show":
             entry = repository.get(args.recording_id)
@@ -1039,7 +1130,10 @@ def _run_history_command(*, paths: RuntimePaths, args: argparse.Namespace) -> in
                     "history listで録画IDを確認してください。",
                 )
                 return 4
-            _print_history_detail(entry, paths.recordings)
+            upload = YouTubeUploadRepository.from_runtime_paths(paths).completed_for_recording(
+                entry.recording_id
+            )
+            _print_history_detail(entry, paths.recordings, youtube_upload=upload)
             return 0
         if args.history_command in {"play", "reveal"}:
             browser = RecordingBrowser(
@@ -1099,19 +1193,33 @@ def _run_history_command(*, paths: RuntimePaths, args: argparse.Namespace) -> in
     raise RuntimeError(f"未対応のhistoryコマンドです: {args.history_command}")
 
 
-def _print_history_summary(entry: RecordingHistoryEntry) -> None:
+def _print_history_summary(
+    entry: RecordingHistoryEntry,
+    *,
+    youtube_upload: YouTubeUpload | None = None,
+) -> None:
     timestamp = entry.started_at or entry.created_at
     duration = (
         f"{entry.duration_seconds:.1f}s" if entry.duration_seconds is not None else "-"
     )
     size = f"{entry.size_bytes}B" if entry.size_bytes is not None else "-"
+    youtube = (
+        f" youtube={youtube_upload.watch_url or 'uploaded'}"
+        if youtube_upload is not None
+        else ""
+    )
     print(
         f"{timestamp.isoformat()} {entry.state:<9} id={entry.recording_id} "
-        f"duration={duration} size={size} file={entry.output_path}"
+        f"duration={duration} size={size} file={entry.output_path}{youtube}"
     )
 
 
-def _print_history_detail(entry: RecordingHistoryEntry, recordings_root: Path) -> None:
+def _print_history_detail(
+    entry: RecordingHistoryEntry,
+    recordings_root: Path,
+    *,
+    youtube_upload: YouTubeUpload | None = None,
+) -> None:
     print(f"recording id: {entry.recording_id}")
     print(f"state: {entry.state}")
     print(f"source: {entry.source}")
@@ -1128,6 +1236,7 @@ def _print_history_detail(entry: RecordingHistoryEntry, recordings_root: Path) -
     print(f"return code: {entry.returncode if entry.returncode is not None else '-'}")
     print(f"error: {entry.error or '-'}")
     print(f"failure code: {entry.failure_code or '-'}")
+    print(f"youtube: {youtube_upload.watch_url if youtube_upload is not None else '-'}")
     if entry.diagnostics:
         print("diagnostics:")
         for line in entry.diagnostics:
@@ -1483,6 +1592,320 @@ def _run_prepare_command(
         )
         return 3
     raise RuntimeError(f"未対応のprepareコマンドです: {args.prepare_command}")
+
+
+def _run_youtube_command(
+    *,
+    paths: RuntimePaths,
+    args: argparse.Namespace,
+    project_root: Path,
+    user_data_dir: Path | None,
+) -> int:
+    store = WindowsCredentialStore()
+    try:
+        if args.youtube_command == "connect":
+            client = load_client_secrets(args.client_secrets)
+            if args.authorization_code is None:
+                url = authorization_url(
+                    client,
+                    redirect_uri=args.redirect_uri,
+                    state="mdrl-youtube-connect",
+                )
+                print("次のURLをブラウザで開き、認可コードを取得してください。")
+                print(url)
+                print(
+                    "取得後に --authorization-code CODE を付けて再実行してください。"
+                )
+                return EXIT_ATTENTION
+            credentials = exchange_authorization_code(
+                client,
+                code=args.authorization_code,
+                redirect_uri=args.redirect_uri,
+            )
+            store.write(credentials)
+            print("YouTube OAuth資格情報をOS資格情報ストアへ保存しました。")
+            return EXIT_SUCCESS
+        if args.youtube_command == "account":
+            credentials = store.read()
+            if credentials is None:
+                print("YouTubeは未連携です。")
+                return EXIT_ATTENTION
+            print("YouTubeは連携済みです。")
+            print(f"scope: {credentials.scope}")
+            return EXIT_SUCCESS
+        if args.youtube_command == "disconnect":
+            store.delete()
+            print("YouTube OAuth資格情報を削除しました。")
+            return EXIT_SUCCESS
+        if args.youtube_command == "materials":
+            history = RecordingHistoryRepository.from_runtime_paths(paths).get(
+                args.recording_id
+            )
+            if history is None:
+                _print_cli_error(
+                    "E_HISTORY_NOT_FOUND",
+                    f"録画履歴が見つかりません: {args.recording_id}",
+                    "history listで録画IDを確認してください。",
+                )
+                return EXIT_ATTENTION
+            duel = None
+            try:
+                duel = DuelRecordRepository.from_runtime_paths(paths).get(
+                    args.recording_id
+                )
+            except DuelRecordError:
+                duel = None
+            materials = YouTubeMaterialService(paths).generate(
+                history=history,
+                duel_record=duel,
+                title=args.title,
+            )
+            print(f"title: {materials.title}")
+            print(f"description:\n{materials.description}")
+            print(f"tags: {', '.join(materials.tags)}")
+            print("checklist:")
+            for item in materials.checklist:
+                print(f"- {item}")
+            print(f"output: {materials.output_directory}")
+            return EXIT_SUCCESS
+        if args.youtube_command == "clip":
+            loaded = _load_config_or_report(project_root, user_data_dir)
+            if loaded is None:
+                return EXIT_CONFIGURATION
+            discovery = discover_ffmpeg(loaded.config.ffmpeg_path)
+            if not discovery.found or discovery.executable is None:
+                _print_cli_error(
+                    "E_FFMPEG_NOT_FOUND",
+                    "FFmpegが見つかりません。",
+                    "doctorで詳細を確認してください。",
+                )
+                return EXIT_CONFIGURATION
+            service = ClipExportService(
+                paths=paths,
+                repository=RecordingHistoryRepository.from_runtime_paths(paths),
+                ffmpeg_executable=discovery.executable,
+                validator=UploadMediaValidator(
+                    ffprobe_executable=find_ffprobe(discovery.executable)
+                ),
+            )
+            result = service.export_clip(
+                recording_id=args.recording_id,
+                center_seconds=args.elapsed_ms / 1000,
+                before_seconds=args.before_seconds,
+                after_seconds=args.after_seconds,
+            )
+            print(f"clip: {result.output_path}")
+            print(
+                f"range: start={result.clip_range.start_seconds:.3f}s "
+                f"duration={result.clip_range.duration_seconds:.3f}s"
+            )
+            return EXIT_SUCCESS
+        if args.youtube_command == "upload":
+            return _run_youtube_upload_command(
+                paths=paths,
+                args=args,
+                project_root=project_root,
+                user_data_dir=user_data_dir,
+                store=store,
+            )
+    except (ClipExportError, YouTubeOAuthError) as exc:
+        _print_cli_error(
+            "E_YOUTUBE_OAUTH",
+            str(exc),
+            "client secrets、認可状態、OS資格情報ストアを確認してください。",
+        )
+        return EXIT_CONFIGURATION
+    raise RuntimeError(f"未対応のyoutubeコマンドです: {args.youtube_command}")
+
+
+def _run_youtube_upload_command(
+    *,
+    paths: RuntimePaths,
+    args: argparse.Namespace,
+    project_root: Path,
+    user_data_dir: Path | None,
+    store: WindowsCredentialStore,
+) -> int:
+    repository = YouTubeUploadRepository.from_runtime_paths(paths)
+    queue = UploadQueueStore(paths)
+    try:
+        command, identifier = _resolve_youtube_upload_command(args)
+        if command is None:
+            _print_cli_error(
+                "E_ARGUMENT",
+                "youtube uploadには録画ID、run、list、showのいずれかが必要です。",
+                "mdrl youtube upload --helpで引数を確認してください。",
+            )
+            return EXIT_CONFIGURATION
+        if command == "list":
+            uploads = repository.list()
+            if not uploads:
+                print("YouTube投稿状態はありません。")
+                return EXIT_SUCCESS
+            for upload in uploads:
+                _print_youtube_upload_summary(upload)
+            return EXIT_SUCCESS
+        if command == "show":
+            if identifier is None:
+                _print_cli_error(
+                    "E_ARGUMENT",
+                    "youtube upload showにはupload_idが必要です。",
+                    "mdrl youtube upload show UPLOAD_ID を実行してください。",
+                )
+                return EXIT_CONFIGURATION
+            upload = repository.get(identifier)
+            if upload is None:
+                _print_cli_error(
+                    "E_YOUTUBE_UPLOAD_NOT_FOUND",
+                    f"YouTube投稿状態が見つかりません: {identifier}",
+                    "mdrl youtube upload listでIDを確認してください。",
+                )
+                return EXIT_ATTENTION
+            _print_youtube_upload_detail(upload)
+            return EXIT_SUCCESS
+        service = _youtube_upload_service(
+            paths=paths,
+            repository=repository,
+            queue=queue,
+            project_root=project_root,
+            user_data_dir=user_data_dir,
+            store=store,
+        )
+        if command == "run":
+            outcomes = service.run_waiting(limit=args.limit)
+            if not outcomes:
+                print("待機中のYouTube投稿はありません。")
+                return EXIT_SUCCESS
+            for outcome in outcomes:
+                _print_youtube_upload_summary(outcome.upload)
+                print(outcome.message)
+            return (
+                EXIT_SUCCESS
+                if all(outcome.upload.state is YouTubeUploadState.COMPLETED for outcome in outcomes)
+                else EXIT_ATTENTION
+            )
+        if command == "recording":
+            if identifier is None or args.title is None:
+                _print_cli_error(
+                    "E_ARGUMENT",
+                    "youtube uploadには録画IDと--titleが必要です。",
+                    "mdrl youtube upload RECORDING_ID --title TITLE を実行してください。",
+                )
+                return EXIT_CONFIGURATION
+            loaded = _load_config_or_report(project_root, user_data_dir)
+            if loaded is None:
+                return EXIT_CONFIGURATION
+            privacy_value = args.privacy or loaded.config.upload_privacy_status
+            metadata = UploadMetadata(
+                title=args.title,
+                description=args.description,
+                tags=tuple(args.tag),
+                privacy=UploadPrivacy(privacy_value),
+            )
+            outcome = service.upload_recording(
+                recording_id=identifier,
+                metadata=metadata,
+                force_new_upload=args.force_new_upload,
+            )
+            _print_youtube_upload_detail(outcome.upload)
+            print(outcome.message)
+            return (
+                EXIT_SUCCESS
+                if outcome.upload.state is YouTubeUploadState.COMPLETED
+                else EXIT_ATTENTION
+            )
+    except (
+        OSError,
+        ValueError,
+        UploadMetadataError,
+        YouTubeUploadError,
+        YouTubeServiceError,
+    ) as exc:
+        _print_cli_error(
+            "E_YOUTUBE",
+            f"YouTube投稿を処理できません: {exc}",
+            "mdrl youtube upload listで状態を確認してください。",
+        )
+        return EXIT_OPERATION
+    raise RuntimeError(f"未対応のyoutube uploadコマンドです: {args.youtube_upload_command}")
+
+
+def _resolve_youtube_upload_command(
+    args: argparse.Namespace,
+) -> tuple[str | None, str | None]:
+    command = args.youtube_upload_command
+    value = args.youtube_upload_value
+    if command is None:
+        return None, None
+    if command in {"run", "list"}:
+        return command, None
+    if command == "show":
+        return "show", value
+    if command == "recording":
+        return "recording", value
+    if value is not None:
+        raise ValueError(f"未対応のyoutube upload引数です: {command} {value}")
+    return "recording", command
+
+
+def _youtube_upload_service(
+    *,
+    paths: RuntimePaths,
+    repository: YouTubeUploadRepository,
+    queue: UploadQueueStore,
+    project_root: Path,
+    user_data_dir: Path | None,
+    store: WindowsCredentialStore,
+) -> YouTubeUploadService:
+    loaded = _load_config_or_report(project_root, user_data_dir)
+    if loaded is None:
+        raise YouTubeServiceError("設定を読み込めません")
+    discovery = discover_ffmpeg(loaded.config.ffmpeg_path)
+    if not discovery.found or discovery.executable is None:
+        raise YouTubeServiceError("FFmpegが見つかりません")
+    validator = UploadMediaValidator(ffprobe_executable=find_ffprobe(discovery.executable))
+    preparation = UploadPreparationService(
+        paths=paths,
+        repository=RecordingHistoryRepository.from_runtime_paths(paths),
+        queue=queue,
+        exporter=UploadExporter(
+            paths=paths,
+            ffmpeg_executable=discovery.executable,
+            validator=validator,
+        ),
+        manifest_writer=UploadManifestWriter(paths),
+    )
+    return YouTubeUploadService(
+        paths=paths,
+        upload_repository=repository,
+        queue=queue,
+        credential_store=store,
+        youtube_client=HttpYouTubeClient(),
+        preparation_service=preparation,
+    )
+
+
+def _print_youtube_upload_summary(upload: YouTubeUpload) -> None:
+    print(
+        f"{upload.state.value:<10} id={upload.upload_id} recording={upload.recording_id} "
+        f"attempts={upload.attempts} privacy={upload.metadata.privacy.value} "
+        f"url={upload.watch_url or '-'}"
+    )
+
+
+def _print_youtube_upload_detail(upload: YouTubeUpload) -> None:
+    print(f"upload id: {upload.upload_id}")
+    print(f"recording id: {upload.recording_id}")
+    print(f"prepare queue id: {upload.prepare_queue_id or '-'}")
+    print(f"state: {upload.state.value}")
+    print(f"attempts: {upload.attempts}")
+    print(f"title: {upload.metadata.title}")
+    print(f"description: {upload.metadata.description or '-'}")
+    print(f"tags: {', '.join(upload.metadata.tags) or '-'}")
+    print(f"privacy: {upload.metadata.privacy.value}")
+    print(f"video id: {upload.video_id or '-'}")
+    print(f"watch url: {upload.watch_url or '-'}")
+    print(f"error: {upload.error or '-'}")
 
 
 def _print_prepare_item(item: UploadQueueItem) -> None:
