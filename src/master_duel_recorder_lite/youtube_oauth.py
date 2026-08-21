@@ -102,7 +102,7 @@ class WindowsCredentialStore(CredentialStore):
             return None
         blob = credential.get("CredentialBlob", b"")
         if isinstance(blob, bytes):
-            text = blob.decode("utf-8")
+            text = _credential_blob_to_text(blob)
         else:
             text = str(blob)
         return YouTubeCredentials.from_json(text)
@@ -113,7 +113,7 @@ class WindowsCredentialStore(CredentialStore):
             {
                 "Type": win32cred.CRED_TYPE_GENERIC,
                 "TargetName": self.target,
-                "CredentialBlob": credentials.to_json().encode("utf-8"),
+                "CredentialBlob": credentials.to_json(),
                 "Persist": win32cred.CRED_PERSIST_LOCAL_MACHINE,
                 "UserName": "youtube",
             },
@@ -140,6 +140,12 @@ class MemoryCredentialStore(CredentialStore):
 
     def delete(self) -> None:
         self.credentials = None
+
+
+def _credential_blob_to_text(blob: bytes) -> str:
+    if b"\x00" in blob:
+        return blob.decode("utf-16-le")
+    return blob.decode("utf-8")
 
 
 @dataclass(frozen=True)
