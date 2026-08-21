@@ -13,10 +13,12 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
 import hashlib
+import re
 
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
@@ -297,6 +299,8 @@ def exchange_authorization_code(
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise YouTubeOAuthError(_oauth_http_error_message(exc)) from exc
     except Exception as exc:
         raise YouTubeOAuthError(f"OAuth token交換に失敗しました: {exc}") from exc
     if not isinstance(payload, dict):
@@ -358,6 +362,109 @@ def _required_text(value: object, key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise YouTubeOAuthError(f"{key} は空でない文字列である必要があります")
     return value.strip()
+
+
+def _oauth_http_error_message(error: urllib.error.HTTPError) -> str:
+    raw_detail = error.read().decode("utf-8", errors="replace")
+    reason, description = _oauth_error_details(raw_detail)
+    description = _redact_oauth_diagnostics(description) if description else ""
+    detail = _redact_oauth_diagnostics(raw_detail)[-1000:]
+    guidance = _oauth_error_guidance(reason)
+    message = f"OAuth token交換に失敗しました: HTTP {error.code}"
+    if reason:
+        message = f"{message} {reason}"
+    if description:
+        message = f"{message}: {description}"
+    if guidance:
+        message = f"{message}。{guidance}"
+    if detail and detail not in {reason, description}:
+        message = f"{message} / detail: {detail}"
+    return message
+
+
+def _oauth_error_details(content: str) -> tuple[str, str]:
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return "", content
+    if not isinstance(parsed, dict):
+        return "", content
+    raw_error = parsed.get("error", "")
+    reason = raw_error if isinstance(raw_error, str) else ""
+    raw_description = parsed.get("error_description", "")
+    description = raw_description if isinstance(raw_description, str) else ""
+    return reason, description
+
+
+def _oauth_error_guidance(reason: str) -> str:
+    return {
+        "invalid_grant": (
+            "認可をやり直してください。再発する場合はredirect_uriとPKCE設定を確認してください"
+        ),
+        "redirect_uri_mismatch": (
+            "Google Cloud ConsoleのOAuth ClientがDesktop app用か確認してください"
+        ),
+        "invalid_client": (
+            "配布EXEに組み込まれたOAuth client_idが有効か確認してください"
+        ),
+        "invalid_request": (
+            "OAuth要求パラメータが不足または不正です。配布者へ診断情報を共有してください"
+        ),
+        "access_denied": "Google認可画面で許可されていません。許可して再試行してください",
+    }.get(reason, "")
+
+
+def _redact_oauth_diagnostics(value: str) -> str:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = None
+    if parsed is not None:
+        return json.dumps(_redact_oauth_value(parsed), ensure_ascii=False, sort_keys=True)
+    redacted = value
+    redacted = re.sub(
+        r"(?i)(code|authorization_code|refresh_token|access_token|client_secret)"
+        r"([\"'\s:=]+)([^&\s\"',}]+)",
+        r"\1\2[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(code|authorization_code|refresh_token|access_token|client_secret)=([^&\s\"']+)",
+        r"\1=[REDACTED]",
+        redacted,
+    )
+    return redacted
+
+
+def _redact_oauth_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): "[REDACTED]"
+            if _is_oauth_secret_key(str(key))
+            else _redact_oauth_value(raw_value)
+            for key, raw_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_oauth_value(item) for item in value]
+    return value
+
+
+def _is_oauth_secret_key(key: str) -> bool:
+    normalized = key.casefold().replace("-", "_")
+    return (
+        normalized
+        in {
+            "access_token",
+            "authorization",
+            "authorization_code",
+            "client_secret",
+            "code",
+            "refresh_token",
+            "token",
+        }
+        or normalized.endswith("_token")
+        or normalized.endswith("_secret")
+    )
 
 
 def _free_loopback_port() -> int:

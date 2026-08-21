@@ -53,8 +53,9 @@ CLIスモークは`--version`、`--help`、`config show --json`を検証しま�
 4. SHA-256ファイル生成
 5. GitHub artifact attestationによるbuild provenance作成
 6. EXEとSHA-256をGitHub Releaseへ公開
+7. 公開済みRelease assetを再ダウンロードし、CLI/GUIスモークを公開物そのもので再実行
 
-いずれかが失敗した場合はReleaseを作成しません。Actionsはタグ名ではなく検証済みcommit SHAへ固定します。
+公開前の検証が失敗した場合はReleaseを作成しません。公開済みassetの再スモークが失敗した場合は、Release workflowを失敗として扱い、該当Releaseを修正版で置き換えるまで利用者へ案内しません。Actionsはタグ名ではなく検証済みcommit SHAへ固定します。
 
 ## FFmpeg子プロセス
 

@@ -1,6 +1,7 @@
 import hashlib
 from io import BytesIO
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,6 +90,76 @@ class AppUpdateServiceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with self.assertRaisesRegex(AppUpdateError, "SHA-256"):
                 service.download(release, Path(tmp_dir) / "update.exe")
+
+    def test_download_and_verify_runs_gui_smoke_before_accepting_update(self) -> None:
+        executable = b"verified-exe"
+        digest = hashlib.sha256(executable).hexdigest()
+        release = type(
+            "Release",
+            (),
+            {
+                "checksum_url": "https://example.invalid/sha256",
+                "executable_url": "https://example.invalid/exe",
+                "size_bytes": len(executable),
+                "version": "1.4.2",
+            },
+        )()
+        smoke_calls: list[list[str]] = []
+
+        def opener(request, timeout):
+            if request.full_url.endswith("sha256"):
+                return _Response(f"{digest}  app.exe\n".encode())
+            return _Response(executable)
+
+        def runner(args, **_kwargs):
+            smoke_calls.append(list(args))
+            output = Path(args[args.index("--smoke-output") + 1])
+            output.write_text(
+                json.dumps(
+                    {
+                        "version": "1.4.2",
+                        "runtime_data": str(
+                            output.parent / "local-app-data" / "MasterDuelRecorderLite"
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        service = AppUpdateService(opener=opener, process_runner=runner)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = service.download_and_verify(release, Path(tmp_dir) / "update.exe")
+            self.assertEqual(target.read_bytes(), executable)
+
+        self.assertEqual(len(smoke_calls), 1)
+
+    def test_download_and_verify_rejects_smoke_without_result(self) -> None:
+        executable = b"broken-exe"
+        digest = hashlib.sha256(executable).hexdigest()
+        release = type(
+            "Release",
+            (),
+            {
+                "checksum_url": "https://example.invalid/sha256",
+                "executable_url": "https://example.invalid/exe",
+                "size_bytes": len(executable),
+                "version": "1.4.2",
+            },
+        )()
+
+        def opener(request, timeout):
+            if request.full_url.endswith("sha256"):
+                return _Response(f"{digest}  app.exe\n".encode())
+            return _Response(executable)
+
+        def runner(args, **_kwargs):
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        service = AppUpdateService(opener=opener, process_runner=runner)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesRegex(AppUpdateError, "起動検証結果"):
+                service.download_and_verify(release, Path(tmp_dir) / "update.exe")
 
 
 if __name__ == "__main__":

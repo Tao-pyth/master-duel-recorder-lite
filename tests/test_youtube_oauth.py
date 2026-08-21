@@ -1,7 +1,9 @@
 import json
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 import urllib.request
 from unittest.mock import patch
@@ -10,13 +12,23 @@ from master_duel_recorder_lite.youtube_oauth import (
     MemoryCredentialStore,
     OAuthClientInfo,
     YouTubeCredentials,
+    YouTubeOAuthError,
     authorize_with_loopback,
     authorization_url,
+    exchange_authorization_code,
     load_client_secrets,
     load_distributed_oauth_client,
     new_pkce_code_verifier,
     pkce_code_challenge,
 )
+
+
+class _Response(BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
 
 
 class YouTubeOAuthTest(unittest.TestCase):
@@ -160,6 +172,70 @@ class YouTubeOAuthTest(unittest.TestCase):
         self.assertEqual(result.credentials.refresh_token, "refresh")
         exchange.assert_called_once()
         self.assertIn("127.0.0.1", result.redirect_uri)
+
+    def test_exchange_authorization_code_reports_redacted_google_error(self) -> None:
+        client = OAuthClientInfo(
+            client_id="client",
+            auth_uri="https://example.test/auth",
+            token_uri="https://example.test/token",
+        )
+        body = json.dumps(
+            {
+                "error": "invalid_grant",
+                "error_description": "Bad Request",
+                "code": "secret-code",
+                "client_secret": "secret-value",
+            }
+        ).encode()
+
+        def fail(_request, timeout):
+            raise HTTPError(
+                "https://example.test/token",
+                400,
+                "Bad Request",
+                hdrs=None,
+                fp=BytesIO(body),
+            )
+
+        with patch("urllib.request.urlopen", fail):
+            with self.assertRaises(YouTubeOAuthError) as raised:
+                exchange_authorization_code(
+                    client,
+                    code="secret-code",
+                    redirect_uri="http://127.0.0.1:1234/callback",
+                    code_verifier="verifier",
+                )
+
+        message = str(raised.exception)
+        self.assertIn("HTTP 400 invalid_grant", message)
+        self.assertIn("認可をやり直してください", message)
+        self.assertNotIn("secret-code", message)
+        self.assertNotIn("secret-value", message)
+
+    def test_exchange_authorization_code_sends_pkce_and_redirect_uri(self) -> None:
+        client = OAuthClientInfo(
+            client_id="client",
+            auth_uri="https://example.test/auth",
+            token_uri="https://example.test/token",
+        )
+        captured: dict[str, list[str]] = {}
+
+        def succeed(request, timeout):
+            captured.update(parse_qs(request.data.decode("utf-8")))  # type: ignore[union-attr]
+            return _Response(json.dumps({"refresh_token": "refresh"}).encode())
+
+        with patch("urllib.request.urlopen", succeed):
+            credentials = exchange_authorization_code(
+                client,
+                code="code",
+                redirect_uri="http://127.0.0.1:1234/callback",
+                code_verifier="verifier",
+            )
+
+        self.assertEqual(credentials.refresh_token, "refresh")
+        self.assertEqual(captured["redirect_uri"], ["http://127.0.0.1:1234/callback"])
+        self.assertEqual(captured["code_verifier"], ["verifier"])
+        self.assertNotIn("client_secret", captured)
 
 
 if __name__ == "__main__":

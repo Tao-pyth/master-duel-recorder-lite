@@ -108,3 +108,21 @@ jobs:
       - name: Verify published release assets
         if: github.event_name == 'push'
         run: python scripts/verify_release_assets.py "${{ github.ref_name }}"
+      - name: Smoke downloaded release assets
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $download = "build/release-asset-smoke"
+          New-Item -ItemType Directory -Path $download -Force | Out-Null
+          gh release download "${{ github.ref_name }}" `
+            --pattern "master-duel-recorder-lite*.exe" `
+            --dir $download `
+            --clobber
+          ./scripts/smoke_windows_exe.ps1 `
+            -ExePath "$download/master-duel-recorder-lite.exe" `
+            -ExpectedVersion $env:MDRL_VERSION
+          ./scripts/smoke_windows_gui.ps1 `
+            -ExePath "$download/master-duel-recorder-lite-gui.exe" `
+            -ExpectedVersion $env:MDRL_VERSION

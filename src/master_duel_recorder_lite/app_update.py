@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -44,11 +45,18 @@ class UpdateCheckResult:
 
 
 OpenUrl = Callable[..., object]
+ProcessRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 class AppUpdateService:
-    def __init__(self, *, opener: OpenUrl = urlopen) -> None:
+    def __init__(
+        self,
+        *,
+        opener: OpenUrl = urlopen,
+        process_runner: ProcessRunner = subprocess.run,
+    ) -> None:
         self.opener = opener
+        self.process_runner = process_runner
 
     def check(self, current_version: str) -> UpdateCheckResult:
         current = _version(current_version)
@@ -106,6 +114,74 @@ class AppUpdateService:
         finally:
             temporary.unlink(missing_ok=True)
         return target
+
+    def download_and_verify(self, release: UpdateRelease, destination: Path) -> Path:
+        target = self.download(release, destination)
+        self.verify_gui_executable(target, expected_version=release.version)
+        return target
+
+    def verify_gui_executable(
+        self,
+        executable: Path,
+        *,
+        expected_version: str,
+        timeout_seconds: float = 20.0,
+    ) -> None:
+        target = executable.expanduser().resolve()
+        if not target.is_file() or target.stat().st_size <= 0:
+            raise AppUpdateError("更新EXEの起動検証対象が見つかりません")
+        with tempfile.TemporaryDirectory(prefix="mdrl-update-smoke-") as tmp_dir:
+            smoke_root = Path(tmp_dir)
+            result_path = smoke_root / "result.json"
+            local_app_data = smoke_root / "local-app-data"
+            environment = os.environ.copy()
+            environment["LOCALAPPDATA"] = str(local_app_data)
+            try:
+                completed = self.process_runner(
+                    [
+                        str(target),
+                        "--smoke-test",
+                        "--smoke-output",
+                        str(result_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout_seconds,
+                    env=environment,
+                    check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise AppUpdateError("更新EXEの起動検証がタイムアウトしました") from exc
+            except OSError as exc:
+                raise AppUpdateError(f"更新EXEを起動できません: {exc}") from exc
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "").strip()[-1000:]
+                message = f"更新EXEの起動検証に失敗しました: exit code {completed.returncode}"
+                if detail:
+                    message = f"{message}: {detail}"
+                raise AppUpdateError(message)
+            if not result_path.is_file():
+                raise AppUpdateError("更新EXEの起動検証結果が作成されませんでした")
+            try:
+                document = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise AppUpdateError("更新EXEの起動検証結果を解析できません") from exc
+            if not isinstance(document, dict):
+                raise AppUpdateError("更新EXEの起動検証結果の形式が不正です")
+            if document.get("version") != expected_version:
+                raise AppUpdateError(
+                    f"更新EXEのバージョンが一致しません: {document.get('version')}"
+                )
+            runtime_data = document.get("runtime_data")
+            if isinstance(runtime_data, str):
+                expected_runtime = local_app_data / "MasterDuelRecorderLite"
+                if Path(runtime_data).resolve() != expected_runtime.resolve():
+                    raise AppUpdateError("更新EXEの既定保存先が検証環境から外れています")
+            if local_app_data.joinpath("MasterDuelRecorderLite").exists():
+                raise AppUpdateError("更新EXEの起動検証が実行時データを作成しました")
 
     def _read_json(self, url: str, maximum: int) -> dict[str, object]:
         try:
