@@ -1,5 +1,19 @@
 # リリースノート
 
+## V1.4.2: 更新EXE起動検証とOAuth診断hotfix - 2026-08-21
+
+- アプリ更新でGUI EXEを取得した後、置換前に`--smoke-test`で起動検証し、Python DLL展開失敗などの起動不能EXEを適用しないようにした
+- GitHub Release公開後に公開済みassetを再ダウンロードし、CLI/GUIスモークを公開物そのものへ実行するようにした
+- YouTube OAuth token交換HTTP 400のGoogleエラー本文を読み取り、`invalid_grant`、`redirect_uri_mismatch`、`invalid_client`などの原因分類と次の確認事項を表示するようにした
+- OAuth診断ではauthorization code、access token、refresh token、client secretなどのsecret相当値を伏せるようにした
+- V1.4.2配布ビルドでは、更新されたYouTube OAuth `client_id`だけをGitHub Secretから同梱する
+- DBスキーマ、設定形式、録画ファイル、prepare queue、OAuth資格情報保存先は変更しない
+- Ruff、全535テスト、Python GUIスモーク、CLI/GUI one-file EXEビルド、両スモーク、更新取得後GUI EXE事前スモークに合格した
+- ローカルrelease相当CLI EXE SHA-256: `926B4A94CC32955949624390B4143FE02AD0D82AB31771F9CAFD04A327BFB2C2`
+- ローカルrelease相当GUI EXE SHA-256: `9F44FA27E6EEB3A735B952C23904EE0E6C5F95E6495997E6A7434317F0619322`
+
+追跡: [V1.4.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/62)、親Issue #452、子Issue #453 - #457
+
 ## V1.4.1: YouTube一般配布導線hotfix - 2026-08-21
 
 - 改善ページの状態更新で`list_history()`の引数不整合により例外が出る回帰を修正した

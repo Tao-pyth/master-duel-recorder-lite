@@ -6521,9 +6521,9 @@ class RecorderGui:
         ):
             return
         destination = self.service.paths.data / "updates" / f"mdrl-gui-{release.version}.exe"
-        self.update_status_var.set("更新EXEを取得して検証しています")
+        self.update_status_var.set("更新EXEを取得して起動検証しています")
         self._run(
-            lambda: AppUpdateService().download(release, destination),
+            lambda: AppUpdateService().download_and_verify(release, destination),
             self._update_downloaded,
         )
 

@@ -880,3 +880,17 @@
 追跡: [V1.4.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/61)、親Issue #444、子Issue #445 - #450
 
 完了条件: GUIで改善ページ回帰が再発せず、YouTube client_id設定済みビルドで連携開始へ進め、未設定ビルドでは明確に無効化され、MP4準備がYouTube投稿フロー内で確認でき、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、両EXEスモーク、実YouTube private投稿E2Eまたは外部ゲート記録が完了すること。
+
+## V1.4.2: 更新EXE起動検証とOAuth診断hotfix
+
+状態: 外部検証待ち
+
+- アプリ更新で取得したGUI EXEを置換前に起動検証し、Python DLL展開失敗などの起動不能assetを適用しない
+- GitHub Release公開後に公開済みassetを再ダウンロードし、CLI/GUIスモークを公開物へ直接実行する
+- YouTube OAuth token交換HTTP 400の本文を読み取り、secretやtokenを伏せたうえで原因分類と次の確認事項を表示する
+- V1.4.2配布ビルドへ新しいYouTube OAuth `client_id`だけをGitHub Secretから同梱する
+- README、設計文書、リリースノート、検証記録、バージョン情報、配布物検証を`1.4.2`へ整合する
+
+追跡: [V1.4.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/62)、親Issue #452、子Issue #453 - #457
+
+完了条件: 更新対象GUI EXEの事前スモークで起動不能assetを拒否でき、公開済みRelease assetの再スモークがCIで成功し、OAuth 400時に秘匿済み診断と対処を表示し、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、両EXEスモーク、Release Contract確認、GitHub Release、更新確認からのダウンロード検証が成功すること。
