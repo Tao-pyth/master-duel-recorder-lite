@@ -87,6 +87,21 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
             "windows_notifications_enabled", _boolean
         ),
         "upload.privacy_status": ConfigField("upload_privacy_status", _lower_text),
+        "interaction.readiness_check_seconds": ConfigField(
+            "readiness_check_seconds", _integer
+        ),
+        "interaction.setup_wizard_completed": ConfigField(
+            "setup_wizard_completed", _boolean
+        ),
+        "interaction.shortcuts_enabled": ConfigField("hotkeys_enabled", _boolean),
+        "interaction.shortcut_record_toggle": ConfigField(
+            "hotkey_record_toggle", _stripped_text
+        ),
+        "interaction.shortcut_marker": ConfigField("hotkey_marker", _stripped_text),
+        "interaction.shortcut_watch_toggle": ConfigField(
+            "hotkey_watch_toggle", _stripped_text
+        ),
+        "interaction.tray_enabled": ConfigField("tray_enabled", _boolean),
         "runtime.auto_create_user_data": ConfigField("auto_create_user_data", _boolean),
     }
 )

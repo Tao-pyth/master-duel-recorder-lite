@@ -72,6 +72,8 @@ GUIでFFmpegを導入した場合、実行ファイルを既定では`%LOCALAPPD
 
 `upload.privacy_status` はアップロード準備とYouTube投稿メタデータの既定公開範囲です。安全のため `private` が既定で、明示した場合だけ `unlisted` または `public` を使用できます。OAuthトークン、APIキー、クライアントシークレットは設定・メタデータ・マニフェストへ保存しません。YouTube OAuth資格情報はOS資格情報ストアだけに保存します。
 
+`[interaction]`はV1.2.0の利用者操作に関する非シークレット設定です。`readiness_check_seconds`は5から120秒、`setup_wizard_completed`は初回導入確認の完了状態、`hotkeys_enabled`、`hotkey_record_toggle`、`hotkey_marker`、`hotkey_watch_toggle`、`tray_enabled`はショートカットとトレイ入口を扱います。これらはOAuth token、API key、client secretを含めてはいけません。CLIの公開設定キーでは、秘密情報との混同を避けるため`interaction.shortcut_*`という名前で扱います。
+
 V0.1.xで作成した設定には新しい項目がありませんが、読込時に上記の既定値を補うため手動移行は不要です。
 
 ## 実行時データの上書き

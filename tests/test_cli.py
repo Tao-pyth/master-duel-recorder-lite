@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -66,6 +67,25 @@ class CliTest(unittest.TestCase):
                 )
 
                 self.assertEqual(_resolve_youtube_upload_command(args), expected)
+
+    def test_reliability_hotkeys_outputs_non_secret_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--user-data-dir",
+                        str(Path(tmp_dir) / "user_data"),
+                        "reliability",
+                        "hotkeys",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        document = json.loads(output.getvalue())
+        self.assertFalse(document["enabled"])
+        self.assertIn("Ctrl+Alt+R", document["bindings"])
 
     def test_doctor_returns_two_when_preflight_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

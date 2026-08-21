@@ -63,6 +63,13 @@ class AppConfig:
     visual_detection_minimum_confidence: float = 0.70
     windows_notifications_enabled: bool = True
     upload_privacy_status: str = "private"
+    readiness_check_seconds: int = 30
+    setup_wizard_completed: bool = False
+    hotkeys_enabled: bool = False
+    hotkey_record_toggle: str = "Ctrl+Alt+R"
+    hotkey_marker: str = "Ctrl+Alt+M"
+    hotkey_watch_toggle: str = "Ctrl+Alt+W"
+    tray_enabled: bool = True
     auto_create_user_data: bool = True
 
 
@@ -97,6 +104,7 @@ def load_app_config(
         recorder_table = _table(raw, "recorder")
         detection_table = _table(raw, "detection")
         upload_table = _table(raw, "upload")
+        interaction_table = _table(raw, "interaction")
         runtime_table = _table(raw, "runtime")
 
         legacy_audio_input = _optional_string_value(
@@ -218,6 +226,43 @@ def load_app_config(
             upload_privacy_status=_privacy_status(
                 _string_value(upload_table, "privacy_status", AppConfig.upload_privacy_status)
             ),
+            readiness_check_seconds=_int_value(
+                interaction_table,
+                "readiness_check_seconds",
+                AppConfig.readiness_check_seconds,
+            ),
+            setup_wizard_completed=_bool_value(
+                interaction_table,
+                "setup_wizard_completed",
+                AppConfig.setup_wizard_completed,
+            ),
+            hotkeys_enabled=_bool_value(
+                interaction_table, "hotkeys_enabled", AppConfig.hotkeys_enabled
+            ),
+            hotkey_record_toggle=_hotkey_value(
+                _string_value(
+                    interaction_table,
+                    "hotkey_record_toggle",
+                    AppConfig.hotkey_record_toggle,
+                )
+            ),
+            hotkey_marker=_hotkey_value(
+                _string_value(
+                    interaction_table,
+                    "hotkey_marker",
+                    AppConfig.hotkey_marker,
+                )
+            ),
+            hotkey_watch_toggle=_hotkey_value(
+                _string_value(
+                    interaction_table,
+                    "hotkey_watch_toggle",
+                    AppConfig.hotkey_watch_toggle,
+                )
+            ),
+            tray_enabled=_bool_value(
+                interaction_table, "tray_enabled", AppConfig.tray_enabled
+            ),
             auto_create_user_data=_bool_value(
                 runtime_table, "auto_create_user_data", AppConfig.auto_create_user_data
             ),
@@ -250,6 +295,17 @@ def validate_app_config(config: AppConfig) -> None:
     _recording_number_values(config)
     _detection_values(config)
     _privacy_status(config.upload_privacy_status)
+    if config.readiness_check_seconds < 5 or config.readiness_check_seconds > 120:
+        raise ValueError("readiness_check_seconds は5から120の整数である必要があります")
+    if not isinstance(config.setup_wizard_completed, bool):
+        raise ValueError("setup_wizard_completed はtrueまたはfalseである必要があります")
+    if not isinstance(config.hotkeys_enabled, bool):
+        raise ValueError("hotkeys_enabled はtrueまたはfalseである必要があります")
+    _hotkey_value(config.hotkey_record_toggle)
+    _hotkey_value(config.hotkey_marker)
+    _hotkey_value(config.hotkey_watch_toggle)
+    if not isinstance(config.tray_enabled, bool):
+        raise ValueError("tray_enabled はtrueまたはfalseである必要があります")
     if not isinstance(config.windows_notifications_enabled, bool):
         raise ValueError("windows_notifications_enabled はtrueまたはfalseである必要があります")
     if not isinstance(config.auto_create_user_data, bool):
@@ -324,6 +380,15 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 "",
                 "[upload]",
                 f"privacy_status = {_toml_string(config.upload_privacy_status)}",
+                "",
+                "[interaction]",
+                f"readiness_check_seconds = {config.readiness_check_seconds}",
+                f"setup_wizard_completed = {_toml_bool(config.setup_wizard_completed)}",
+                f"hotkeys_enabled = {_toml_bool(config.hotkeys_enabled)}",
+                f"hotkey_record_toggle = {_toml_string(config.hotkey_record_toggle)}",
+                f"hotkey_marker = {_toml_string(config.hotkey_marker)}",
+                f"hotkey_watch_toggle = {_toml_string(config.hotkey_watch_toggle)}",
+                f"tray_enabled = {_toml_bool(config.tray_enabled)}",
                 "",
                 "[runtime]",
                 f"auto_create_user_data = {_toml_bool(config.auto_create_user_data)}",
@@ -426,6 +491,13 @@ def _privacy_status(value: str) -> str:
     normalized = value.lower()
     if normalized not in ALLOWED_PRIVACY_STATUSES:
         raise ValueError("privacy_status は private、unlisted、public のいずれかである必要があります")
+    return normalized
+
+
+def _hotkey_value(value: str) -> str:
+    normalized = "+".join(part.strip() for part in value.split("+") if part.strip())
+    if not normalized or len(normalized) > 80:
+        raise ValueError("hotkey は1文字以上80文字以下で指定してください")
     return normalized
 
 

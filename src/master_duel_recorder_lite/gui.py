@@ -54,6 +54,8 @@ from .operation_state import OperationAction
 from .recording_browsing import RecordingReference
 from .recording_session import RecordingState
 from .season_reports import SeasonReport
+from .hotkey_actions import default_hotkey_bindings
+from .setup_wizard import initial_wizard_state
 from .uninstall import (
     CONFIRMATION_TEXT,
     UninstallPlan,
@@ -478,6 +480,9 @@ class RecorderGui:
         self.prepare_candidates_by_label: dict[str, object] = {}
         self.pending_preparation_recording_id: str | None = None
         self.pending_update_path: Path | None = None
+        self.reliability_check_var = tk.StringVar(value="未実行")
+        self.reliability_wizard_var = tk.StringVar(value="未確認")
+        self.reliability_hotkey_var = tk.StringVar(value="未確認")
 
         self._configure_window()
         self._configure_styles()
@@ -488,6 +493,7 @@ class RecorderGui:
         self._build_catalog_pages()
         self._build_seasons_page()
         self._build_prepare_page()
+        self._build_reliability_page()
         self._build_settings_page()
         self.show_page("record")
         self.root.protocol("WM_DELETE_WINDOW", self.request_close)
@@ -757,6 +763,7 @@ class RecorderGui:
             ("tags", "タグ"),
             ("seasons", "シーズン"),
             ("prepare", "MP4準備"),
+            ("reliability", "信頼性"),
             ("settings", "設定"),
         ):
             button = tk.Button(
@@ -1849,6 +1856,38 @@ class RecorderGui:
         self.widgets["prepare_table"] = self.prepare_tree
         self.widgets["prepare_recording"] = self.prepare_recording_combo
 
+    def _build_reliability_page(self) -> None:
+        page = self._new_page("reliability")
+        panel = self._surface(page)
+        panel.pack(fill="x", pady=(0, 10))
+        ttk.Label(panel, text="自動録画の信頼性", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w"
+        )
+        rows = (
+            ("30秒事前チェック", self.reliability_check_var),
+            ("初回導入ウィザード", self.reliability_wizard_var),
+            ("ホットキーとトレイ", self.reliability_hotkey_var),
+        )
+        for row, (label, variable) in enumerate(rows, start=1):
+            ttk.Label(panel, text=label, style="Body.TLabel").grid(
+                row=row, column=0, sticky="w", pady=(12, 0)
+            )
+            ttk.Label(
+                panel,
+                textvariable=variable,
+                style="Body.TLabel",
+                wraplength=760,
+                justify="left",
+            ).grid(row=row, column=1, sticky="ew", pady=(12, 0))
+        ttk.Button(
+            panel,
+            text="状態を更新",
+            style="Primary.TButton",
+            command=self.refresh_reliability,
+        ).grid(row=4, column=0, sticky="w", pady=(16, 0))
+        panel.columnconfigure(1, weight=1)
+        self.widgets["reliability_status"] = panel
+
     def _build_settings_page(self) -> None:
         page = self._new_page("settings")
         notebook = ttk.Notebook(page)
@@ -2296,6 +2335,7 @@ class RecorderGui:
             "tags": "タグ",
             "seasons": "シーズン",
             "prepare": "MP4準備",
+            "reliability": "信頼性",
             "settings": "設定",
         }
         for page in self.pages.values():
@@ -2327,6 +2367,8 @@ class RecorderGui:
             selected_id = self.pending_preparation_recording_id
             self.pending_preparation_recording_id = None
             self.refresh_preparation_candidates(selected_id)
+        elif key == "reliability":
+            self.refresh_reliability()
         elif key == "settings":
             self.load_settings()
             self.refresh_data_protection()
@@ -5942,6 +5984,37 @@ class RecorderGui:
         if self.smoke_mode:
             return
         self._run(self.service.list_preparations, self._preparations_loaded)
+
+    def refresh_reliability(self) -> None:
+        if self.smoke_mode:
+            self.reliability_check_var.set("30秒チェック入口を表示できます")
+            self.reliability_wizard_var.set("未完了")
+            self.reliability_hotkey_var.set("無効 / トレイ有効")
+            return
+        try:
+            config = self.service.load_config().config
+            wizard = initial_wizard_state(completed=config.setup_wizard_completed)
+            bindings = default_hotkey_bindings(
+                record_toggle=config.hotkey_record_toggle,
+                marker=config.hotkey_marker,
+                watch_toggle=config.hotkey_watch_toggle,
+            )
+        except Exception as exc:
+            self.reliability_check_var.set(f"設定を確認できません: {exc}")
+            self.reliability_wizard_var.set("未確認")
+            self.reliability_hotkey_var.set("未確認")
+            return
+        self.reliability_check_var.set(
+            f"{config.readiness_check_seconds}秒で録画環境とMaster Duel画面を確認します"
+        )
+        self.reliability_wizard_var.set(
+            "完了済み" if wizard.completed else f"次の確認: {wizard.next_step.value}"
+        )
+        self.reliability_hotkey_var.set(
+            f"{'有効' if config.hotkeys_enabled else '無効'} / "
+            f"トレイ{'有効' if config.tray_enabled else '無効'} / "
+            + "、".join(f"{key}: {command.value}" for key, command in bindings.items())
+        )
 
     def refresh_preparation_candidates(self, selected_id: str | None = None) -> None:
         if self.smoke_mode:

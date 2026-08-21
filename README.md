@@ -8,7 +8,7 @@ master-duel-recorder-liteは、OBSに依存せず、Yu-Gi-Oh! Master Duelの対�
 
 ## 中核機能
 
-V1.1.0では、次の中核機能を提供します。
+V1.2.0では、次の中核機能を提供します。
 
 - FFmpeg、録画入力、保存先を確認する録画環境の初期化
 - 画面と音声を録画し、正常停止して再生可能なファイルを保存する最小録画
@@ -18,6 +18,7 @@ V1.1.0では、次の中核機能を提供します。
 - 動画検証、remux、メタデータ、キュー、マニフェストを扱うアップロード準備
 - YouTube公式OAuth連携、MP4自動アップロード、履歴への動画URL保存
 - タイムライン時刻からの投稿用クリップ出力と、OAuth未接続でも使える投稿素材生成
+- 自動録画の事前チェック、初回導入状態、既存動画後解析、ホットキー・トレイ操作入口
 - 初期化からアップロード準備までを一貫して操作する設定・運用CLI
 - 録画履歴から動画を再生し、保存場所へ到達する録画の閲覧
 - 勝敗、先後、デッキ、対戦種別、タグ、メモを後編集できる対戦記録管理
@@ -28,9 +29,18 @@ V1.1.0では、次の中核機能を提供します。
 
 ## 現在の状態
 
-現在の正式版は `1.1.0`、「YouTube公式連携 + MP4自動アップロード」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、MP4対象選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理を整備しました。
+現在の正式版は `1.2.0`、「自動録画の信頼性と後解析」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、MP4対象選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理、自動録画の信頼性確認を整備しました。
 
 CSV移行は適用前バックアップと単一DBトランザクションで既存データを保護します。単体音声はWindows build 20348以上が対象で、非対応・ゲーム未起動・ヘルパー障害時には別音源へ無断で切り替えず、警告を残して映像のみ継続します。YouTube OAuth資格情報はOS資格情報ストアだけに保存し、設定、manifest、queue、標準出力、ログへ保存しません。
+
+## V1.2.0の信頼性機能
+
+- `mdrl reliability check`で録画環境、Master Duelウィンドウ、利用者向け理由をまとめて確認できます
+- `mdrl reliability wizard`でFFmpeg、保存先、録画対象、音声、事前チェック、テスト録画、再生確認の導入状態を確認できます
+- `mdrl reliability analyze PATH --mode replay`で既存動画やリプレイ録画を読み取り専用で後解析できます
+- `mdrl reliability hotkeys`で録画開始/停止、マーカー追加、自動監視切替のショートカットとトレイ設定を確認できます
+- GUIには「信頼性」ページを追加し、30秒事前チェック、初回導入、ホットキー・トレイの状態入口をまとめました
+- V1.2.0の設定追加は`[interaction]`の非シークレット項目だけで、既存設定は既定値補完により手動移行不要です
 
 ## V1.1.0のYouTube連携
 
@@ -135,6 +145,9 @@ python -m master_duel_recorder_lite timeline list RECORDING_ID
 python -m master_duel_recorder_lite timeline add RECORDING_ID --elapsed-ms 3000 --type marker --label "重要局面"
 python -m master_duel_recorder_lite prepare list
 python -m master_duel_recorder_lite prepare run
+python -m master_duel_recorder_lite reliability check
+python -m master_duel_recorder_lite reliability wizard
+python -m master_duel_recorder_lite reliability hotkeys
 python -m master_duel_recorder_lite youtube account
 python -m master_duel_recorder_lite youtube materials RECORDING_ID
 python -m master_duel_recorder_lite youtube upload RECORDING_ID --title "対戦記録"

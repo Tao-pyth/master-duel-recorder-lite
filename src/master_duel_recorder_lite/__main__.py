@@ -10,6 +10,7 @@ import time
 
 from . import __version__
 from .application import ApplicationEvent, RecorderApplicationService
+from .auto_check import AutoCheckResult, evaluate_auto_check
 from .capture_targets import CaptureTargetCatalog
 from .clip_export import ClipExportError, ClipExportService
 from .config import (
@@ -47,6 +48,12 @@ from .duel_timeline import (
 from .ffmpeg import discover_ffmpeg, enumerate_windows_inputs
 from .game_window import GameWindowMonitor, GameWindowObservation, GameWindowStatus
 from .operational_status import collect_operational_status
+from .hotkey_actions import default_hotkey_bindings
+from .offline_analysis import (
+    OfflineAnalysisError,
+    OfflineAnalysisMode,
+    OfflineAnalysisService,
+)
 from .preflight import CheckStatus, PreflightReport, run_preflight
 from .recording_history import (
     HISTORY_STATES,
@@ -108,6 +115,7 @@ from .youtube_uploads import (
     YouTubeUploadRepository,
     YouTubeUploadState,
 )
+from .setup_wizard import initial_wizard_state
 
 
 EXIT_SUCCESS = 0
@@ -220,6 +228,37 @@ def build_parser() -> argparse.ArgumentParser:
     targets_parser.add_argument(
         "--json", action="store_true", help="機械可読JSONで表示します。"
     )
+    reliability_parser = subparsers.add_parser(
+        "reliability",
+        help="自動録画の事前チェック、導入、後解析、操作入口を扱います。",
+        description="録画ファイルやDBを変更せず、自動録画を任せられる状態か確認します。",
+    )
+    reliability_subparsers = reliability_parser.add_subparsers(
+        dest="reliability_command", required=True
+    )
+    reliability_check = reliability_subparsers.add_parser(
+        "check", help="自動録画の事前チェックを実行します。"
+    )
+    reliability_check.add_argument(
+        "--duration-seconds", type=_positive_seconds, default=None
+    )
+    reliability_check.add_argument("--json", action="store_true")
+    reliability_wizard = reliability_subparsers.add_parser(
+        "wizard", help="初回導入ウィザード状態を表示します。"
+    )
+    reliability_wizard.add_argument("--json", action="store_true")
+    reliability_analyze = reliability_subparsers.add_parser(
+        "analyze", help="既存動画またはリプレイ録画を読み取り専用で後解析します。"
+    )
+    reliability_analyze.add_argument("source_path", type=Path)
+    reliability_analyze.add_argument(
+        "--mode", choices=("past_video", "replay"), default="past_video"
+    )
+    reliability_analyze.add_argument("--json", action="store_true")
+    reliability_hotkeys = reliability_subparsers.add_parser(
+        "hotkeys", help="ホットキーとトレイ設定を表示します。"
+    )
+    reliability_hotkeys.add_argument("--json", action="store_true")
     config_parser = subparsers.add_parser(
         "config",
         help="非シークレット設定を安全に管理します。",
@@ -623,6 +662,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
         return 0
 
+    if args.command == "reliability":
+        return _run_reliability_command(
+            paths=paths,
+            args=args,
+            project_root=args.project_root,
+            user_data_dir=args.user_data_dir,
+        )
+
     if args.command == "config":
         return _run_config_command(paths=paths, args=args)
 
@@ -775,6 +822,132 @@ def _load_config_or_report(
 def _print_cli_error(code: str, summary: str, action: str) -> None:
     print(f"[ERROR] {code}: {summary}", file=sys.stderr)
     print(f"対処: {action}", file=sys.stderr)
+
+
+def _run_reliability_command(
+    *,
+    paths: RuntimePaths,
+    args: argparse.Namespace,
+    project_root: Path | None,
+    user_data_dir: Path | None,
+) -> int:
+    loaded = _load_config_or_report(project_root, user_data_dir)
+    if loaded is None:
+        return EXIT_CONFIGURATION
+    command = args.reliability_command
+    if command == "check":
+        report = run_preflight(
+            paths=paths, config=loaded.config, config_loaded=loaded.config_loaded
+        )
+        observation = None
+        try:
+            observation = GameWindowMonitor(
+                process_name=loaded.config.game_process_name,
+                title_contains=loaded.config.game_window_title_contains,
+            ).observe()
+        except RuntimeError:
+            observation = None
+        duration = int(args.duration_seconds or loaded.config.readiness_check_seconds)
+        result = evaluate_auto_check(
+            preflight=report,
+            game_window=observation,
+            duration_seconds=duration,
+            minimum_confidence=loaded.config.visual_detection_minimum_confidence,
+        )
+        if args.json:
+            print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
+        else:
+            _print_auto_check_result(result)
+        return EXIT_SUCCESS if result.succeeded else EXIT_ATTENTION
+
+    if command == "wizard":
+        state = initial_wizard_state(completed=loaded.config.setup_wizard_completed)
+        if args.json:
+            print(json.dumps(state.to_dict(), ensure_ascii=False, sort_keys=True))
+        else:
+            print("初回導入ウィザード: " + ("完了済み" if state.completed else "未完了"))
+            for step in state.steps:
+                print(f"{step.step.value}: {step.status.value} - {step.message}")
+        return EXIT_SUCCESS if state.completed else EXIT_ATTENTION
+
+    if command == "hotkeys":
+        try:
+            bindings = default_hotkey_bindings(
+                record_toggle=loaded.config.hotkey_record_toggle,
+                marker=loaded.config.hotkey_marker,
+                watch_toggle=loaded.config.hotkey_watch_toggle,
+            )
+        except ValueError as exc:
+            _print_cli_error(
+                "E_HOTKEY_CONFIG",
+                str(exc),
+                "config set interaction.shortcut_* で重複しない値を指定してください。",
+            )
+            return EXIT_CONFIGURATION
+        document = {
+            "schema_version": 1,
+            "enabled": loaded.config.hotkeys_enabled,
+            "tray_enabled": loaded.config.tray_enabled,
+            "bindings": {
+                key: command.value for key, command in sorted(bindings.items())
+            },
+        }
+        if args.json:
+            print(json.dumps(document, ensure_ascii=False, sort_keys=True))
+        else:
+            print(f"ホットキー: {'有効' if loaded.config.hotkeys_enabled else '無効'}")
+            print(f"タスクトレイ: {'有効' if loaded.config.tray_enabled else '無効'}")
+            for key, value in document["bindings"].items():
+                print(f"{key}: {value}")
+        return EXIT_SUCCESS
+
+    if command == "analyze":
+        discovery = discover_ffmpeg(loaded.config.ffmpeg_path)
+        if not discovery.found or discovery.executable is None:
+            _print_cli_error(
+                "E_FFMPEG_NOT_FOUND",
+                "FFmpegが見つかりません。",
+                "doctorで詳細を確認してください。",
+            )
+            return EXIT_CONFIGURATION
+        service = OfflineAnalysisService(
+            validator=UploadMediaValidator(
+                ffprobe_executable=find_ffprobe(discovery.executable)
+            )
+        )
+        try:
+            result = service.analyze(
+                args.source_path,
+                mode=OfflineAnalysisMode(args.mode),
+            )
+        except (OfflineAnalysisError, ValueError) as exc:
+            _print_cli_error(
+                "E_OFFLINE_ANALYSIS",
+                str(exc),
+                "動画ファイル、FFmpeg、対応形式を確認してください。",
+            )
+            return EXIT_OPERATION
+        if args.json:
+            print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
+        else:
+            print(f"source: {result.source_path.name}")
+            print(f"mode: {result.mode.value}")
+            print(f"duration: {result.duration_seconds or '-'}")
+            print(f"candidates: {len(result.candidates)}")
+            for warning in result.warnings:
+                print(f"[WARN] {warning}")
+        return EXIT_SUCCESS
+
+    raise AssertionError(f"未対応のreliabilityコマンドです: {command}")
+
+
+def _print_auto_check_result(result: AutoCheckResult) -> None:
+    print(f"事前チェック: {result.status.value}")
+    print(result.headline)
+    print(f"確認秒数: {result.duration_seconds}")
+    print(f"サンプル数: {result.sampled_frames}")
+    for reason in result.reasons:
+        print(f"- {reason}")
 
 
 def _run_config_command(*, paths: RuntimePaths, args: argparse.Namespace) -> int:
