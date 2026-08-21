@@ -786,3 +786,65 @@
 追跡: [V1.0.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/54)、親Issue #393、子Issue #394 - #398
 
 完了条件: Ruff、全単体テスト、配布ビルド、GUIスモーク、Release Contract確認に合格し、コード、文書、`v1.0.2`タグ、GitHub Releaseを一致させること。
+
+## V1.0.3: GUI操作性改善
+
+状態: 完了
+
+- カレンダーピッカーのヘッダーを7列グリッドへ整理し、前月、年月、今月へ、翌月を1:3:2:1で配置する
+- 年月タイトルを火・水・木列へまたがる大きめの表示にする
+- 月曜から日曜までの曜日ラベルと日付セルを等幅で揃え、土曜日列だけ歪まないようにする
+- 戦績の簡易入力、未完了処理、詳細編集、一括編集で固定択一項目をボタン選択へ変更する
+- 一括編集の「変更しない」と「未設定」を視覚的にも保存値としても分離する
+- 更新時変更ログ表示方針をリリース確認文書へ残す
+
+追跡: [V1.0.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/55)、親Issue #409、子Issue #399 - #400
+
+完了条件: カレンダーと固定択一UIのGUIスモーク、Ruff、全単体テスト、CLI/GUI EXEビルド、両スモーク、Release Contract確認に合格し、コード、文書、`v1.0.3`タグ、GitHub Releaseを一致させること。
+
+## V1.1.0: YouTube公式連携 + MP4自動アップロード
+
+状態: 計画済み
+
+- YouTube投稿向け公開範囲と概要欄テンプレートを定義する
+- 履歴DBにYouTubeアップロード状態と動画URLを保存する
+- OAuth 2.0をOS資格情報ストアで管理し、秘密情報を設定、manifest、queue、ログへ保存しない
+- 既存prepare結果を再利用し、MP4準備からアップロード待ちまでを自動化する
+- YouTube Data APIのresumable upload、再試行、通信断・5xx・rate/quota・401/403分類を実装する
+- `mdrl youtube` CLIと履歴URL表示を追加する
+- タイムラインマーカーから投稿用クリップを元録画非破壊で出力する
+- OAuth未接続でも投稿素材、サムネ候補、投稿チェックリストを生成できるようにする
+
+追跡: [V1.1.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/56)、親Issue #401、子Issue #402 - #408、#410 - #411
+
+完了条件: MP4準備からYouTube投稿、履歴URL表示、クリップ出力、投稿素材生成、秘密情報非保存、DB移行、Ruff、全単体テスト、fake client結合テスト、CLI/GUI EXEビルド、両スモーク、手動E2E、GitHub Releaseが成功すること。
+
+## V1.2.0: 自動録画の信頼性と後解析
+
+状態: 計画済み
+
+- 対戦前の30秒自動録画事前チェックと利用者向け判定理由を提供する
+- 初回導入ウィザードへFFmpeg確認、保存先確認、テスト録画、再生確認を統合する
+- 既存動画とゲーム内リプレイ録画の後解析入口を追加する
+- グローバルホットキーとタスクトレイから録画操作と状態確認を行えるようにする
+- 数値診断と利用者向け判定を分離したまま文書と検証を更新する
+
+追跡: [V1.2.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/57)、親Issue #412、子Issue #413 - #417
+
+完了条件: 30秒チェック、初回ウィザード、後解析、ホットキー、トレイ、設定後方互換、必要なDB判断、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、Windows CI、GitHub Releaseが成功すること。
+
+## V1.3.0: 入力削減・デッキ改善・運用管理
+
+状態: 計画済み
+
+- 相手デッキ、前回値、最近値、タグテンプレートを使った入力候補を強化する
+- 録画なし戦績のミニ入力モードを追加する
+- 自分デッキ別に対面、先後、コイン、シーズンを分析するデッキ改善ビューを追加する
+- ユーザー定義タグテンプレート、目標管理、練習メニューを追加する
+- 古い録画、失敗録画、出力済み、未入力、重要タグを使うストレージ管理候補を提示する
+- 設定、DB、デッキ辞書、タグ、シーズンの安全な移行パックを実装する
+- クリップ再生、マーカー、戦績編集をまとめる軽量レビュー画面を追加する
+
+追跡: [V1.3.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/58)、親Issue #418、子Issue #419 - #426
+
+完了条件: 入力候補、ミニ入力、改善ビュー、目標、ストレージ候補、移行パック、軽量レビュー、DB移行、録画ファイル保護、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、Windows CI、GitHub Releaseが成功すること。

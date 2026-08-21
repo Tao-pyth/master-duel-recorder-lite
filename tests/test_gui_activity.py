@@ -14,6 +14,7 @@ from master_duel_recorder_lite.gui import (
     WAITING_ACTIVITY_PREFIX,
     _format_statistics_detail,
     _format_win_rate,
+    calendar_header_contract,
     _parse_filter_date,
     incomplete_duel_count_presentation,
     record_status_presentation,
@@ -78,6 +79,18 @@ class GuiActivityTest(unittest.TestCase):
         )
         self.assertTrue(
             all(ord(ICON_GLYPHS[item[0]]) >= 0xE000 for item in HISTORY_ROW_ACTIONS)
+        )
+
+    def test_calendar_header_uses_same_seven_column_grid_as_weekdays(self) -> None:
+        contract = calendar_header_contract()
+
+        self.assertEqual(contract["previous"], {"column": 0, "columnspan": 1})
+        self.assertEqual(contract["title"], {"column": 1, "columnspan": 3})
+        self.assertEqual(contract["today"], {"column": 4, "columnspan": 2})
+        self.assertEqual(contract["next"], {"column": 6, "columnspan": 1})
+        self.assertEqual(
+            sum(item["columnspan"] for item in contract.values()),
+            7,
         )
 
     def test_removing_waiting_activity_preserves_other_history(self) -> None:

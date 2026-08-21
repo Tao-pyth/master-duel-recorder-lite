@@ -108,6 +108,18 @@ HISTORY_ROW_ACTIONS = (
     ("folder", "保存場所を開く", "Ctrl+O"),
     ("delete", "削除", "Delete"),
 )
+CALENDAR_HEADER_LAYOUT = {
+    "previous": {"column": 0, "columnspan": 1},
+    "title": {"column": 1, "columnspan": 3},
+    "today": {"column": 4, "columnspan": 2},
+    "next": {"column": 6, "columnspan": 1},
+}
+CALENDAR_COLUMNS = 7
+
+
+def calendar_header_contract() -> dict[str, dict[str, int]]:
+    """カレンダーヘッダーの7列グリッド契約をテストから確認しやすくする。"""
+    return {key: dict(value) for key, value in CALENDAR_HEADER_LAYOUT.items()}
 
 
 @dataclass(frozen=True)
@@ -518,6 +530,12 @@ class RecorderGui:
             font=("Segoe UI Semibold", 11),
         )
         style.configure(
+            "Calendar.Title.TLabel",
+            background=self.COLORS["surface"],
+            foreground=self.COLORS["text"],
+            font=("Segoe UI Semibold", 13),
+        )
+        style.configure(
             "Body.TLabel",
             background=self.COLORS["surface"],
             foreground=self.COLORS["text"],
@@ -614,6 +632,22 @@ class RecorderGui:
                 ("disabled", "#9da8a6"),
             ],
         )
+        style.configure(
+            "Choice.Selected.TButton",
+            foreground=self.COLORS["on_primary"],
+            background=self.COLORS["primary"],
+            padding=(10, 7),
+        )
+        style.map(
+            "Choice.Selected.TButton",
+            background=[
+                ("pressed", "#004f4f"),
+                ("active", self.COLORS["primary_hover"]),
+                ("disabled", self.COLORS["primary"]),
+            ],
+            foreground=[("disabled", self.COLORS["on_primary"])],
+        )
+        style.configure("Choice.TButton", padding=(10, 7))
         style.configure(
             "Record.TButton", foreground="#ffffff", background=self.COLORS["red"]
         )
@@ -832,6 +866,49 @@ class RecorderGui:
         button.accessible_name = accessible_name  # type: ignore[attr-defined]
         self.tooltips.append(WidgetTooltip(button, accessible_name))
         return button
+
+    def _choice_button_group(
+        self,
+        parent: tk.Misc,
+        variable: tk.StringVar,
+        choices: tuple[str, ...],
+        *,
+        columns: int = 4,
+        state: str = "normal",
+    ) -> tuple[ttk.Frame, tuple[ttk.Button, ...]]:
+        panel = ttk.Frame(parent)
+        buttons: list[ttk.Button] = []
+
+        def refresh(*_args: object) -> None:
+            selected = variable.get()
+            for button in buttons:
+                button.configure(
+                    style=(
+                        "Choice.Selected.TButton"
+                        if str(button.cget("text")) == selected
+                        else "Choice.TButton"
+                    )
+                )
+
+        for index, choice in enumerate(choices):
+            button = ttk.Button(
+                panel,
+                text=choice,
+                state=state,
+                command=lambda value=choice: variable.set(value),
+            )
+            button.grid(
+                row=index // columns,
+                column=index % columns,
+                sticky="ew",
+                padx=(0 if index % columns == 0 else 6, 0),
+                pady=(0 if index < columns else 6, 0),
+            )
+            panel.columnconfigure(index % columns, weight=1, uniform="choice")
+            buttons.append(button)
+        variable.trace_add("write", refresh)
+        refresh()
+        return panel, tuple(buttons)
 
     def _date_picker(
         self,
@@ -2444,15 +2521,19 @@ class RecorderGui:
         frame = ttk.Frame(dialog, padding=12)
         frame.pack(fill="both", expand=True)
         current = [selected.year, selected.month]
-        title = ttk.Label(frame, style="Heading.TLabel")
-        title.grid(row=0, column=1, columnspan=4)
+        for column in range(CALENDAR_COLUMNS):
+            frame.columnconfigure(column, weight=1, uniform="calendar")
+        title = ttk.Label(frame, style="Calendar.Title.TLabel", anchor="center")
+        title.grid(row=0, sticky="ew", padx=2, **CALENDAR_HEADER_LAYOUT["title"])
         today = date.today()
         today_button = ttk.Button(frame, text="今月へ", width=6)
-        today_button.grid(row=0, column=5, padx=2)
+        today_button.grid(
+            row=0, sticky="ew", padx=2, **CALENDAR_HEADER_LAYOUT["today"]
+        )
 
         def render() -> None:
             for child in frame.grid_slaves():
-                if int(child.grid_info().get("row", 0)) >= 2:
+                if int(child.grid_info().get("row", 0)) >= 1:
                     child.destroy()
             title.configure(text=f"{current[0]}年 {current[1]}月")
             today_button.configure(
@@ -2461,21 +2542,33 @@ class RecorderGui:
                 else "normal"
             )
             for column, label in enumerate(("月", "火", "水", "木", "金", "土", "日")):
-                ttk.Label(frame, text=label).grid(row=2, column=column, padx=4, pady=4)
+                ttk.Label(frame, text=label, anchor="center").grid(
+                    row=1,
+                    column=column,
+                    sticky="ew",
+                    padx=2,
+                    pady=(10, 4),
+                )
             for week_index, week in enumerate(calendar.monthcalendar(*current)):
                 for column, day in enumerate(week):
                     if day:
                         ttk.Button(
                             frame,
                             text=str(day),
-                            width=3,
+                            width=4,
                             command=lambda value=day: (
                                 variable.set(
                                     date(current[0], current[1], value).isoformat()
                                 ),
                                 dialog.destroy(),
                             ),
-                        ).grid(row=3 + week_index, column=column, padx=2, pady=2)
+                        ).grid(
+                            row=2 + week_index,
+                            column=column,
+                            sticky="ew",
+                            padx=2,
+                            pady=2,
+                        )
 
         def move(delta: int) -> None:
             current[1] += delta
@@ -2490,10 +2583,10 @@ class RecorderGui:
             render()
 
         ttk.Button(frame, text="‹", width=3, command=lambda: move(-1)).grid(
-            row=0, column=0, padx=2
+            row=0, sticky="ew", padx=2, **CALENDAR_HEADER_LAYOUT["previous"]
         )
         ttk.Button(frame, text="›", width=3, command=lambda: move(1)).grid(
-            row=0, column=6, padx=2
+            row=0, sticky="ew", padx=2, **CALENDAR_HEADER_LAYOUT["next"]
         )
         today_button.configure(command=move_to_current_month)
         render()
@@ -4109,12 +4202,6 @@ class RecorderGui:
                 else datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
             )
         )
-        fields = [
-            ("勝敗", result_var, duel_choice_labels("result")),
-            ("先後", order_var, duel_choice_labels("play_order")),
-            ("自分デッキ", deck_var, tuple(item.name for item in visible_decks)),
-            ("シーズン", season_var, tuple(seasons)),
-        ]
         row = 2
         if is_manual:
             ttk.Label(frame, text="対戦日時").grid(row=row, column=0, sticky="w", pady=7)
@@ -4122,7 +4209,18 @@ class RecorderGui:
                 row=row, column=1, sticky="ew", pady=7
             )
             row += 1
-        for label, variable, choices in fields:
+        for label, variable, choices in (
+            ("勝敗", result_var, duel_choice_labels("result")),
+            ("先後", order_var, duel_choice_labels("play_order")),
+        ):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
+            group, _buttons = self._choice_button_group(frame, variable, choices)
+            group.grid(row=row, column=1, sticky="ew", pady=7)
+            row += 1
+        for label, variable, choices in (
+            ("自分デッキ", deck_var, tuple(item.name for item in visible_decks)),
+            ("シーズン", season_var, tuple(seasons)),
+        ):
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
             ttk.Combobox(
                 frame,
@@ -4318,13 +4416,18 @@ class RecorderGui:
                     row=row, column=1, sticky="ew", pady=7
                 )
                 row += 1
-            fields = (
-                ("勝敗", result_var, duel_choice_labels("result"), "readonly"),
-                ("先後", order_var, duel_choice_labels("play_order"), "readonly"),
+            for label, variable, choices in (
+                ("勝敗", result_var, duel_choice_labels("result")),
+                ("先後", order_var, duel_choice_labels("play_order")),
+            ):
+                ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=7)
+                group, _buttons = self._choice_button_group(form, variable, choices)
+                group.grid(row=row, column=1, sticky="ew", pady=7)
+                row += 1
+            for label, variable, choices, state_name in (
                 ("自分デッキ", deck_var, tuple(deck.name for deck in visible_decks), "normal"),
                 ("シーズン", season_var, tuple(seasons), "readonly"),
-            )
-            for label, variable, choices, state_name in fields:
+            ):
                 ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=7)
                 ttk.Combobox(
                     form,
@@ -4462,14 +4565,25 @@ class RecorderGui:
         rows = (
             ("シーズン", season_var, tuple(season_values)),
             ("自分デッキ", deck_var, deck_values),
-            ("コイントス", coin_var, coin_values),
-            ("対戦種別", type_var, type_values),
         )
         for row, (label, variable, choices) in enumerate(rows, start=1):
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
             ttk.Combobox(frame, textvariable=variable, values=choices, state="readonly").grid(
                 row=row, column=1, sticky="ew", pady=7
             )
+        for row, (label, variable, choices) in enumerate(
+            (
+                ("コイントス", coin_var, coin_values),
+                ("対戦種別", type_var, type_values),
+            ),
+            start=3,
+        ):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
+            columns = 3 if label == "対戦種別" else 4
+            group, _buttons = self._choice_button_group(
+                frame, variable, choices, columns=columns
+            )
+            group.grid(row=row, column=1, sticky="ew", pady=7)
         for row, (label, variable) in enumerate(
             (("追加タグ（カンマ区切り）", add_tags_var), ("削除タグ（カンマ区切り）", remove_tags_var)),
             start=5,
@@ -4610,14 +4724,15 @@ class RecorderGui:
             ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=5)
             variable = tk.StringVar(value=duel_choice_label(key, current))
             variables[key] = variable
-            combo = ttk.Combobox(
+            columns = 3 if key == "duel_type" else 4
+            group, buttons = self._choice_button_group(
                 form,
-                textvariable=variable,
-                values=duel_choice_labels(key),
-                state="readonly",
+                variable,
+                duel_choice_labels(key),
+                columns=columns,
             )
-            combo.grid(row=row, column=1, sticky="ew", pady=5)
-            editable_widgets.append(combo)
+            group.grid(row=row, column=1, sticky="ew", pady=5)
+            editable_widgets.extend(buttons)
             row += 1
         visible_decks = tuple(
             entry for entry in data.decks if not entry.hidden_from_history_statistics
@@ -6728,10 +6843,42 @@ def main(argv: list[str] | None = None) -> int:
             for widget in descendants(calendar_dialog)
             if isinstance(widget, ttk.Button)
         }
+        calendar_labels = {
+            str(widget.cget("text")): widget
+            for widget in descendants(calendar_dialog)
+            if isinstance(widget, ttk.Label)
+        }
+        header_contract = calendar_header_contract()
+        title_widget = calendar_labels[
+            f"{date.today().year}年 {date.today().month}月"
+        ]
+        title_grid = title_widget.grid_info()
+        today_grid = calendar_buttons["今月へ"].grid_info()
+        previous_grid = calendar_buttons["‹"].grid_info()
+        next_grid = calendar_buttons["›"].grid_info()
+        weekday_columns = tuple(
+            int(calendar_labels[label].grid_info()["column"])
+            for label in ("月", "火", "水", "木", "金", "土", "日")
+        )
+        day_buttons = [
+            widget for text, widget in calendar_buttons.items() if text.isdecimal()
+        ]
         calendar_contract = (
             int(calendar_buttons["‹"].cget("width")) == 3
             and int(calendar_buttons["›"].cget("width")) == 3
             and str(calendar_buttons["今月へ"].cget("state")) == "disabled"
+            and int(previous_grid["column"]) == header_contract["previous"]["column"]
+            and int(previous_grid["columnspan"])
+            == header_contract["previous"]["columnspan"]
+            and int(title_grid["column"]) == header_contract["title"]["column"]
+            and int(title_grid["columnspan"]) == header_contract["title"]["columnspan"]
+            and int(today_grid["column"]) == header_contract["today"]["column"]
+            and int(today_grid["columnspan"]) == header_contract["today"]["columnspan"]
+            and int(next_grid["column"]) == header_contract["next"]["column"]
+            and int(next_grid["columnspan"]) == header_contract["next"]["columnspan"]
+            and weekday_columns == tuple(range(CALENDAR_COLUMNS))
+            and day_buttons
+            and len({button.winfo_width() for button in day_buttons}) == 1
         )
         calendar_dialog.destroy()
         geometry = {
