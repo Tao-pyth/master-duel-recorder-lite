@@ -64,7 +64,7 @@ GUIでは録画IDの手入力を要求せず、完了済みで実ファイルが
 
 YouTube投稿は`youtube_uploads`テーブルで管理します。状態は`waiting -> preparing -> uploading -> completed/failed/cancelled`です。完了済み録画に対して既存のcompleted prepareがあれば再利用し、なければ`UploadPreparationService`でMP4準備を行ってから投稿します。同一録画のcompleted投稿は既定で重複作成せず、明示した再投稿だけを許可します。
 
-OAuth資格情報はWindows資格情報ストアへ保存します。アプリ設定、準備キュー、manifest、投稿状態DB、標準出力、ログにはclient secret、refresh token、access tokenを保存しません。V1.4.0の一般導線では、配布者管理OAuth Clientのclient_idを使い、PKCEと`127.0.0.1:<random port>/callback`のloopback callbackで認証コードを自動受信します。認証画面はアプリ内WebViewではなく既定ブラウザで開きます。開発者向けfallbackとして`--client-secrets`と`--authorization-code`は残しますが、通常ユーザーにはGoogle Cloud Console操作を要求しません。
+OAuth資格情報はWindows資格情報ストアへ保存します。V1.4.4以降の配布EXEは、ユーザー操作を増やさずGUI通常導線でtoken交換を通すため、配布者管理OAuth Clientの`client_id`と`client_secret`を同梱します。`client_secret`は配布EXE内assetとOS資格情報ストアに限定し、アプリ設定、準備キュー、manifest、投稿状態DB、標準出力、ログには保存しません。`refresh_token`、`access_token`、認可コードは配布物、設定、DB、queue、manifest、ログへ含めません。V1.4.0以降の一般導線では、PKCEと`127.0.0.1:<random port>/callback`のloopback callbackで認証コードを自動受信します。認証画面はアプリ内WebViewではなく既定ブラウザで開きます。開発者向けfallbackとして`--client-secrets`と`--authorization-code`は残しますが、通常ユーザーにはGoogle Cloud Console操作を要求しません。
 
 YouTube Data APIはresumable uploadを使い、通信断、5xx、rate/quota、401/403、不明応答を分類します。通信断と5xxは指数バックオフで再試行し、401は再認証、quota/rateはquota待ち、403は権限またはOAuth審査確認、不明応答はYouTube Studioでの手動確認を促します。完了時はvideo_idとwatch_urlを履歴表示へ渡します。
 

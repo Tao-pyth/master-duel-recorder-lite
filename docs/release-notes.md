@@ -1,5 +1,19 @@
 # リリースノート
 
+## V1.4.4: YouTube OAuth client_secret同梱hotfix - 2026-08-22
+
+- GUIの通常YouTube連携でOAuth token交換時に`client_secret`を送信できるよう、配布EXEへ`client_id`と`client_secret`を同梱する方針へ変更した
+- release workflowで`MDRL_YOUTUBE_OAUTH_CLIENT_SECRET`を受け取り、releaseビルドでは`client_id`と`client_secret`の両方を必須にした
+- release toolingテストを更新し、配布assetに`client_secret`が含まれることと、`refresh_token`、`access_token`を拒否することを確認するようにした
+- OAuth token交換テストを追加し、`client_secret`設定済みのOAuth clientではtoken requestへ`client_secret`を含めることを確認した
+- DBスキーマ、設定形式、録画ファイル、prepare queueは変更しない。`refresh_token`、`access_token`、認可コードは配布物、設定、DB、queue、manifest、ログへ含めない
+- Ruff、全545テスト、CLI/GUI/updater one-file EXEビルド、3 EXEスモークに合格した
+- ローカルrelease相当CLI EXE SHA-256: `2BA3829638C42D7BF2785F7C7789E06AA0F3135E54D2291933263306C6A6DE8A`
+- ローカルrelease相当GUI EXE SHA-256: `20539D31D4EC65104C1D9A7B5386EA3865187275AE6576F84C0CF67CBCC54522`
+- ローカルrelease相当updater EXE SHA-256: `E454B48A734F9F83864CF5EDA4498808627D4E5C9E0D7A0214D9A2EF2BCB2272`
+
+追跡: [V1.4.4 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/64)、Issue #468
+
 ## V1.4.3: アプリ内自動更新updater化 - 2026-08-22
 
 - アプリ内更新を手動ダウンロードへ退避せず、GUIへ同梱した専用`master-duel-recorder-lite-updater.exe`で自動適用するようにした

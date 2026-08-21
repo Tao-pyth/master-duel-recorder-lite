@@ -271,6 +271,31 @@ class YouTubeOAuthTest(unittest.TestCase):
         self.assertEqual(captured["code_verifier"], ["verifier"])
         self.assertNotIn("client_secret", captured)
 
+    def test_exchange_authorization_code_sends_client_secret_when_configured(self) -> None:
+        client = OAuthClientInfo(
+            client_id="client",
+            client_secret="client-secret",
+            auth_uri="https://example.test/auth",
+            token_uri="https://example.test/token",
+        )
+        captured: dict[str, list[str]] = {}
+
+        def succeed(request, timeout):
+            captured.update(parse_qs(request.data.decode("utf-8")))  # type: ignore[union-attr]
+            return _Response(json.dumps({"refresh_token": "refresh"}).encode())
+
+        with patch("urllib.request.urlopen", succeed):
+            credentials = exchange_authorization_code(
+                client,
+                code="code",
+                redirect_uri="http://127.0.0.1:1234/callback",
+                code_verifier="verifier",
+            )
+
+        self.assertEqual(credentials.refresh_token, "refresh")
+        self.assertEqual(credentials.client_secret, "client-secret")
+        self.assertEqual(captured["client_secret"], ["client-secret"])
+
 
 if __name__ == "__main__":
     unittest.main()

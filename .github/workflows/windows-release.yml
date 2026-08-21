@@ -48,6 +48,7 @@ jobs:
       - name: Build Windows EXE
         env:
           MDRL_YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.MDRL_YOUTUBE_OAUTH_CLIENT_ID }}
+          MDRL_YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.MDRL_YOUTUBE_OAUTH_CLIENT_SECRET }}
         run: python scripts/build_windows_exe.py --require-youtube-oauth-client
       - name: Smoke test Windows EXEs
         shell: pwsh

@@ -130,7 +130,10 @@ class ReleaseToolingTest(unittest.TestCase):
             build_root = root / "build"
             with patch.dict(
                 "os.environ",
-                {"MDRL_YOUTUBE_OAUTH_CLIENT_ID": "client-id"},
+                {
+                    "MDRL_YOUTUBE_OAUTH_CLIENT_ID": "client-id",
+                    "MDRL_YOUTUBE_OAUTH_CLIENT_SECRET": "client-secret",
+                },
                 clear=True,
             ):
                 asset = resolve_youtube_oauth_client_asset(
@@ -142,19 +145,35 @@ class ReleaseToolingTest(unittest.TestCase):
             self.assertIsNotNone(asset)
             content = asset.read_text(encoding="utf-8")
             self.assertIn("client-id", content)
-            self.assertNotIn("client_secret", content)
+            self.assertIn("client-secret", content)
 
-    def test_release_oauth_client_asset_rejects_secret_values(self) -> None:
+    def test_release_oauth_client_asset_requires_secret_for_release_build(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            build_root = root / "build"
+            with patch.dict(
+                "os.environ",
+                {"MDRL_YOUTUBE_OAUTH_CLIENT_ID": "client-id"},
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "client_secret"):
+                    resolve_youtube_oauth_client_asset(
+                        root,
+                        build_root,
+                        require=True,
+                    )
+
+    def test_release_oauth_client_asset_rejects_token_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             asset = root / "assets" / "youtube-oauth-client.json"
             asset.parent.mkdir()
             asset.write_text(
-                '{"installed":{"client_id":"client","client_secret":"secret"}}',
+                '{"installed":{"client_id":"client","client_secret":"secret","refresh_token":"token"}}',
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(RuntimeError, "secret"):
+            with self.assertRaisesRegex(RuntimeError, "token"):
                 resolve_youtube_oauth_client_asset(root, root / "build", require=True)
 
     def test_release_oauth_client_asset_is_required_for_release_build(self) -> None:
