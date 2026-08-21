@@ -1,8 +1,10 @@
 import json
+import sys
 import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 import urllib.request
@@ -11,6 +13,7 @@ from unittest.mock import patch
 from master_duel_recorder_lite.youtube_oauth import (
     MemoryCredentialStore,
     OAuthClientInfo,
+    WindowsCredentialStore,
     YouTubeCredentials,
     YouTubeOAuthError,
     authorize_with_loopback,
@@ -53,6 +56,37 @@ class YouTubeOAuthTest(unittest.TestCase):
         self.assertEqual(restored.client_id, "client")
         self.assertEqual(restored.client_secret, "")
         self.assertEqual(restored.refresh_token, "refresh")
+
+    def test_windows_store_writes_credential_blob_as_text(self) -> None:
+        writes: list[dict[str, object]] = []
+        fake_win32cred = SimpleNamespace(
+            CRED_TYPE_GENERIC=1,
+            CRED_PERSIST_LOCAL_MACHINE=2,
+            CredWrite=lambda credential, _flags: writes.append(credential),
+        )
+        credentials = YouTubeCredentials("client", "secret", "refresh")
+
+        with patch.dict(sys.modules, {"win32cred": fake_win32cred}):
+            WindowsCredentialStore("target").write(credentials)
+
+        self.assertEqual(len(writes), 1)
+        blob = writes[0]["CredentialBlob"]
+        self.assertIsInstance(blob, str)
+        self.assertEqual(YouTubeCredentials.from_json(blob), credentials)
+
+    def test_windows_store_reads_utf16_credential_blob(self) -> None:
+        credentials = YouTubeCredentials("client", "secret", "refresh")
+        fake_win32cred = SimpleNamespace(
+            CRED_TYPE_GENERIC=1,
+            CredRead=lambda _target, _type: {
+                "CredentialBlob": credentials.to_json().encode("utf-16-le")
+            },
+        )
+
+        with patch.dict(sys.modules, {"win32cred": fake_win32cred}):
+            restored = WindowsCredentialStore("target").read()
+
+        self.assertEqual(restored, credentials)
 
     def test_load_client_secrets_supports_installed_client(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
