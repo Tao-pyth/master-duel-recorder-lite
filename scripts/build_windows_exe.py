@@ -20,6 +20,7 @@ NATIVE_HELPER_OUTPUT = Path("native/audio_loopback/bin/mdrl-audio-loopback.exe")
 APP_ICON = Path("assets/mdrl.ico")
 YOUTUBE_OAUTH_CLIENT_ASSET = Path("assets/youtube-oauth-client.json")
 YOUTUBE_OAUTH_CLIENT_ID_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_ID"
+YOUTUBE_OAUTH_CLIENT_SECRET_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_SECRET"
 
 
 def read_project_version(project_root: Path = PROJECT_ROOT) -> str:
@@ -139,37 +140,40 @@ def resolve_youtube_oauth_client_asset(
 ) -> Path | None:
     configured = project_root / YOUTUBE_OAUTH_CLIENT_ASSET
     if configured.is_file():
-        _validate_youtube_oauth_client_asset(configured)
+        _validate_youtube_oauth_client_asset(configured, require_secret=require)
         return configured
     client_id = os.environ.get(YOUTUBE_OAUTH_CLIENT_ID_ENV, "").strip()
+    client_secret = os.environ.get(YOUTUBE_OAUTH_CLIENT_SECRET_ENV, "").strip()
     if client_id:
         build_root.mkdir(parents=True, exist_ok=True)
         generated = build_root / YOUTUBE_OAUTH_CLIENT_ASSET.name
+        client = {
+            "client_id": client_id,
+            "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        if client_secret:
+            client["client_secret"] = client_secret
         generated.write_text(
             json.dumps(
-                {
-                    "installed": {
-                        "client_id": client_id,
-                        "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                    }
-                },
+                {"installed": client},
                 ensure_ascii=False,
                 sort_keys=True,
             ),
             encoding="utf-8",
         )
-        _validate_youtube_oauth_client_asset(generated)
+        _validate_youtube_oauth_client_asset(generated, require_secret=require)
         return generated
     if require:
         raise RuntimeError(
-            "YouTube OAuth client_idが未設定です。"
-            f"{YOUTUBE_OAUTH_CLIENT_ASSET}または{YOUTUBE_OAUTH_CLIENT_ID_ENV}を設定してください。"
+            "YouTube OAuth client_id/client_secretが未設定です。"
+            f"{YOUTUBE_OAUTH_CLIENT_ASSET}または"
+            f"{YOUTUBE_OAUTH_CLIENT_ID_ENV}/{YOUTUBE_OAUTH_CLIENT_SECRET_ENV}を設定してください。"
         )
     return None
 
 
-def _validate_youtube_oauth_client_asset(path: Path) -> None:
+def _validate_youtube_oauth_client_asset(path: Path, *, require_secret: bool = False) -> None:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -182,11 +186,16 @@ def _validate_youtube_oauth_client_asset(path: Path) -> None:
     client_id = client.get("client_id")
     if not isinstance(client_id, str) or not client_id.strip():
         raise RuntimeError("YouTube OAuth client_idは空でない文字列である必要があります")
-    forbidden = {"client_secret", "refresh_token", "access_token"}
+    client_secret = client.get("client_secret", "")
+    if client_secret and not isinstance(client_secret, str):
+        raise RuntimeError("YouTube OAuth client_secretは文字列である必要があります")
+    if require_secret and not str(client_secret).strip():
+        raise RuntimeError("YouTube OAuth client_secretは空でない文字列である必要があります")
+    forbidden = {"refresh_token", "access_token"}
     leaked = sorted(key for key in forbidden if str(client.get(key, "")).strip())
     if leaked:
         raise RuntimeError(
-            "配布用YouTube OAuth client設定にsecret相当値を含めないでください: "
+            "配布用YouTube OAuth client設定にtoken相当値を含めないでください: "
             + ", ".join(leaked)
         )
 
