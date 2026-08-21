@@ -46,7 +46,9 @@ jobs:
       - name: Test
         run: python -W error::ResourceWarning -m unittest discover -s tests
       - name: Build Windows EXE
-        run: python scripts/build_windows_exe.py
+        env:
+          MDRL_YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.MDRL_YOUTUBE_OAUTH_CLIENT_ID }}
+        run: python scripts/build_windows_exe.py --require-youtube-oauth-client
       - name: Smoke test Windows EXEs
         shell: pwsh
         run: |
@@ -103,3 +105,6 @@ jobs:
             --verify-tag `
             --title "master-duel-recorder-lite ${{ github.ref_name }}" `
             --notes-file $notes
+      - name: Verify published release assets
+        if: github.event_name == 'push'
+        run: python scripts/verify_release_assets.py "${{ github.ref_name }}"

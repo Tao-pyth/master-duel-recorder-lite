@@ -110,8 +110,10 @@ from .youtube_client import HttpYouTubeClient
 from .youtube_oauth import (
     WindowsCredentialStore,
     YouTubeOAuthError,
+    authorize_with_loopback,
     authorization_url,
     exchange_authorization_code,
+    load_distributed_oauth_client,
     load_client_secrets,
 )
 from .youtube_service import YouTubeServiceError, YouTubeUploadService
@@ -526,11 +528,16 @@ def build_parser() -> argparse.ArgumentParser:
     youtube_connect = youtube_subparsers.add_parser(
         "connect", help="YouTube OAuth資格情報を保存します。"
     )
-    youtube_connect.add_argument("--client-secrets", type=Path, required=True)
+    youtube_connect.add_argument(
+        "--client-secrets",
+        type=Path,
+        default=None,
+        help="開発者向けfallbackのOAuth client secrets JSONです。通常配布では不要です。",
+    )
     youtube_connect.add_argument(
         "--authorization-code",
         default=None,
-        help="ブラウザ認可後に取得した認可コード。未指定時は認可URLを表示します。",
+        help="開発者向けfallbackの認可コード。通常配布ではloopback callbackを使います。",
     )
     youtube_connect.add_argument(
         "--redirect-uri",
@@ -1902,7 +1909,17 @@ def _run_youtube_command(
     store = WindowsCredentialStore()
     try:
         if args.youtube_command == "connect":
-            client = load_client_secrets(args.client_secrets)
+            client = (
+                load_client_secrets(args.client_secrets)
+                if args.client_secrets is not None
+                else load_distributed_oauth_client(project_root=project_root)
+            )
+            if args.authorization_code is None and args.client_secrets is None:
+                result = authorize_with_loopback(client)
+                store.write(result.credentials)
+                print("YouTube OAuth資格情報をOS資格情報ストアへ保存しました。")
+                print(f"redirect_uri: {result.redirect_uri}")
+                return EXIT_SUCCESS
             if args.authorization_code is None:
                 url = authorization_url(
                     client,

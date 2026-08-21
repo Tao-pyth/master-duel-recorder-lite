@@ -42,6 +42,7 @@ class AppUpdateServiceTest(unittest.TestCase):
 
         def opener(request, timeout):
             self.assertEqual(timeout, 20)
+            self.assertEqual(request.headers["Cache-control"], "no-cache")
             url = request.full_url
             if url.endswith("releases/latest"):
                 return _Response(json.dumps(release).encode())

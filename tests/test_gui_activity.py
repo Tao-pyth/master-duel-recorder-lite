@@ -5,7 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from master_duel_recorder_lite.application import RecordingSnapshot
+from master_duel_recorder_lite.application import (
+    RecordingSnapshot,
+    YouTubeConnectionStatus,
+)
 from master_duel_recorder_lite.gui import (
     HISTORY_ROW_ACTIONS,
     ICON_GLYPHS,
@@ -234,6 +237,54 @@ class GuiActivityTest(unittest.TestCase):
         self.assertEqual(_format_win_rate(metric), "85.7%")
         self.assertEqual(_format_statistics_detail(metric), "7戦  6勝  1敗  0引分")
         self.assertEqual(_format_win_rate(StatisticsMetric(0, 0, 0, 0)), "-")
+
+    def test_refresh_improvement_uses_history_view_query(self) -> None:
+        gui = RecorderGui.__new__(RecorderGui)
+        gui.smoke_mode = False
+        gui.service = Mock()
+        gui.service.list_history_views.return_value = ("view",)
+        gui.service.list_decks.return_value = ("deck",)
+        gui.service.list_tags.return_value = ("tag",)
+        gui.improvement_status_var = Mock()
+
+        def run_now(operation, callback=None, error_callback=None):
+            del error_callback
+            value = operation()
+            if callback is not None:
+                callback(value)
+
+        gui._run = run_now  # type: ignore[method-assign]
+
+        gui.refresh_improvement()
+
+        gui.service.list_history_views.assert_called_once()
+        self.assertIn("query", gui.service.list_history_views.call_args.kwargs)
+        gui.service.list_decks.assert_called_once_with()
+        gui.service.list_tags.assert_called_once_with()
+        gui.improvement_status_var.set.assert_called_once_with(
+            "最近の戦績候補: 1件 / デッキ: 1件 / タグ: 1件"
+        )
+
+    def test_youtube_unconfigured_status_disables_connect_action(self) -> None:
+        gui = RecorderGui.__new__(RecorderGui)
+        gui.youtube_status_var = Mock()
+        gui.youtube_scope_var = Mock()
+        gui.youtube_connect_button = Mock()
+        gui.youtube_disconnect_button = Mock()
+        gui.youtube_test_button = Mock()
+
+        gui._render_youtube_status(
+            YouTubeConnectionStatus(
+                "unconfigured",
+                "このビルドではYouTube連携を開始できません。",
+                can_connect=False,
+            )
+        )
+
+        gui.youtube_status_var.set.assert_called_once()
+        gui.youtube_connect_button.configure.assert_called_once_with(state="disabled")
+        gui.youtube_disconnect_button.configure.assert_called_once_with(state="disabled")
+        gui.youtube_test_button.configure.assert_called_once_with(state="disabled")
 
 
 if __name__ == "__main__":

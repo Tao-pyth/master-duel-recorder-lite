@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 from pathlib import Path
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,12 +19,29 @@ class YouTubeUploadFailureKind(str, Enum):
     QUOTA = "quota"
     FORBIDDEN = "forbidden"
     PERMANENT = "permanent"
+    MANUAL_REVIEW = "manual_review"
+
+
+class YouTubeUserAction(str, Enum):
+    RETRY = "retry"
+    REAUTHORIZE = "reauthorize"
+    WAIT_QUOTA = "wait_quota"
+    CHECK_PERMISSION = "check_permission"
+    MANUAL_REVIEW = "manual_review"
+    NONE = "none"
 
 
 class YouTubeClientError(RuntimeError):
-    def __init__(self, message: str, *, kind: YouTubeUploadFailureKind) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: YouTubeUploadFailureKind,
+        user_action: YouTubeUserAction | None = None,
+    ) -> None:
         super().__init__(message)
         self.kind = kind
+        self.user_action = user_action or _default_user_action(kind)
 
 
 @dataclass(frozen=True)
@@ -93,14 +111,14 @@ class HttpYouTubeClient(YouTubeClient):
         )
 
     def _refresh_access_token(self, credentials: YouTubeCredentials) -> str:
-        data = urllib.parse.urlencode(
-            {
-                "client_id": credentials.client_id,
-                "client_secret": credentials.client_secret,
-                "refresh_token": credentials.refresh_token,
-                "grant_type": "refresh_token",
-            }
-        ).encode("utf-8")
+        fields = {
+            "client_id": credentials.client_id,
+            "refresh_token": credentials.refresh_token,
+            "grant_type": "refresh_token",
+        }
+        if credentials.client_secret:
+            fields["client_secret"] = credentials.client_secret
+        data = urllib.parse.urlencode(fields).encode("utf-8")
         request = urllib.request.Request(
             "https://oauth2.googleapis.com/token",
             data=data,
@@ -113,7 +131,9 @@ class HttpYouTubeClient(YouTubeClient):
         except urllib.error.HTTPError as exc:
             raise _classified_http_error(exc) from exc
         except OSError as exc:
-            raise YouTubeClientError(str(exc), kind=YouTubeUploadFailureKind.RETRIABLE) from exc
+            raise YouTubeClientError(
+                str(exc), kind=YouTubeUploadFailureKind.RETRIABLE
+            ) from exc
         token = payload.get("access_token") if isinstance(payload, dict) else None
         if not isinstance(token, str) or not token:
             raise YouTubeClientError(
@@ -160,7 +180,9 @@ class HttpYouTubeClient(YouTubeClient):
         except urllib.error.HTTPError as exc:
             raise _classified_http_error(exc) from exc
         except OSError as exc:
-            raise YouTubeClientError(str(exc), kind=YouTubeUploadFailureKind.RETRIABLE) from exc
+            raise YouTubeClientError(
+                str(exc), kind=YouTubeUploadFailureKind.RETRIABLE
+            ) from exc
         if not location:
             raise YouTubeClientError(
                 "resumable upload URLを取得できません",
@@ -195,9 +217,14 @@ class HttpYouTubeClient(YouTubeClient):
         except urllib.error.HTTPError as exc:
             raise _classified_http_error(exc) from exc
         except OSError as exc:
-            raise YouTubeClientError(str(exc), kind=YouTubeUploadFailureKind.RETRIABLE) from exc
+            raise YouTubeClientError(
+                str(exc), kind=YouTubeUploadFailureKind.RETRIABLE
+            ) from exc
         if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
-            raise YouTubeClientError("YouTube upload応答にvideo idがありません", kind=YouTubeUploadFailureKind.PERMANENT)
+            raise YouTubeClientError(
+                "YouTube upload応答にvideo idがありません。YouTube Studioで投稿状態を確認してください。",
+                kind=YouTubeUploadFailureKind.MANUAL_REVIEW,
+            )
         video_id = payload["id"]
         actual_privacy = (
             payload.get("status", {}).get("privacyStatus")
@@ -216,10 +243,16 @@ class HttpYouTubeClient(YouTubeClient):
 
 
 def _classified_http_error(error: urllib.error.HTTPError) -> YouTubeClientError:
-    detail = error.read().decode("utf-8", errors="replace")[-1000:]
+    detail = redact_youtube_diagnostics(error.read().decode("utf-8", errors="replace"))[-1000:]
+    reason, message = _google_error_details(detail)
+    normalized = f"{reason} {message} {detail}".casefold()
     if error.code == 401:
         kind = YouTubeUploadFailureKind.REAUTHORIZE
-    elif error.code == 403 and ("quota" in detail.casefold() or "rate" in detail.casefold()):
+    elif error.code in {403, 429} and (
+        "quota" in normalized
+        or "rate" in normalized
+        or reason in {"quotaExceeded", "dailyLimitExceeded", "userRateLimitExceeded"}
+    ):
         kind = YouTubeUploadFailureKind.QUOTA
     elif error.code == 403:
         kind = YouTubeUploadFailureKind.FORBIDDEN
@@ -228,3 +261,78 @@ def _classified_http_error(error: urllib.error.HTTPError) -> YouTubeClientError:
     else:
         kind = YouTubeUploadFailureKind.PERMANENT
     return YouTubeClientError(f"HTTP {error.code}: {detail}", kind=kind)
+
+
+def user_action_message(kind: YouTubeUploadFailureKind) -> str:
+    action = _default_user_action(kind)
+    return {
+        YouTubeUserAction.RETRY: "通信状態を確認して再試行してください。",
+        YouTubeUserAction.REAUTHORIZE: "YouTube連携をやり直してください。",
+        YouTubeUserAction.WAIT_QUOTA: "YouTube APIのquotaまたはrate制限が戻ってから再試行してください。",
+        YouTubeUserAction.CHECK_PERMISSION: "YouTubeチャンネル、OAuth審査、投稿権限を確認してください。",
+        YouTubeUserAction.MANUAL_REVIEW: "YouTube Studioで投稿状態を確認してから再試行または手動処理してください。",
+        YouTubeUserAction.NONE: "入力内容を確認してください。",
+    }[action]
+
+
+def redact_youtube_diagnostics(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): "[REDACTED]"
+            if _is_secret_key(str(key))
+            else redact_youtube_diagnostics(raw_value)
+            for key, raw_value in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_youtube_diagnostics(item) for item in value]
+    if isinstance(value, str):
+        redacted = value
+        redacted = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", redacted)
+        redacted = re.sub(
+            r"(authorization_code|refresh_token|access_token|client_secret)=([^&\s\"']+)",
+            r"\1=[REDACTED]",
+            redacted,
+            flags=re.IGNORECASE,
+        )
+        return redacted
+    return value
+
+
+def _default_user_action(kind: YouTubeUploadFailureKind) -> YouTubeUserAction:
+    return {
+        YouTubeUploadFailureKind.RETRIABLE: YouTubeUserAction.RETRY,
+        YouTubeUploadFailureKind.REAUTHORIZE: YouTubeUserAction.REAUTHORIZE,
+        YouTubeUploadFailureKind.QUOTA: YouTubeUserAction.WAIT_QUOTA,
+        YouTubeUploadFailureKind.FORBIDDEN: YouTubeUserAction.CHECK_PERMISSION,
+        YouTubeUploadFailureKind.PERMANENT: YouTubeUserAction.NONE,
+        YouTubeUploadFailureKind.MANUAL_REVIEW: YouTubeUserAction.MANUAL_REVIEW,
+    }[kind]
+
+
+def _is_secret_key(key: str) -> bool:
+    normalized = key.casefold().replace("-", "_")
+    return (
+        normalized in {"access_token", "authorization", "authorization_code", "client_secret", "refresh_token", "token"}
+        or normalized.endswith("_token")
+        or normalized.endswith("_secret")
+    )
+
+
+def _google_error_details(content: str) -> tuple[str, str]:
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return "", content
+    if not isinstance(parsed, dict):
+        return "", content
+    error = parsed.get("error")
+    if not isinstance(error, dict):
+        return "", content
+    message = error.get("message", "")
+    reason = ""
+    errors = error.get("errors", [])
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+        raw_reason = errors[0].get("reason", "")
+        if isinstance(raw_reason, str):
+            reason = raw_reason
+    return reason, message if isinstance(message, str) else ""

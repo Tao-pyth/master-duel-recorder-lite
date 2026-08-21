@@ -25,6 +25,7 @@ from .application import (
     RecorderApplicationService,
     RecordingHistoryDashboard,
     RecordingSnapshot,
+    YouTubeConnectionStatus,
 )
 from .capture_targets import CaptureTarget
 from .duel_catalog import DuelCatalogEntry
@@ -764,9 +765,7 @@ class RecorderGui:
             ("decks", "デッキ名"),
             ("tags", "タグ"),
             ("seasons", "シーズン"),
-            ("prepare", "MP4準備"),
             ("reliability", "信頼性"),
-            ("improve", "改善"),
             ("settings", "設定"),
         ):
             button = tk.Button(
@@ -1245,14 +1244,14 @@ class RecorderGui:
             self.open_history_columns_menu,
         )
         self.history_columns_button.pack(side="left", padx=(6, 0))
-        self.history_prepare_button = self._icon_button(
+        self.history_youtube_button = self._icon_button(
             action_bar,
-            "export",
-            "選択した録画をMP4準備へ送る",
-            self.prepare_selected_history,
+            "link",
+            "選択した録画をYouTubeへ投稿",
+            self.open_youtube_upload_dialog,
             state="disabled",
         )
-        self.history_prepare_button.pack(side="left", padx=(6, 0))
+        self.history_youtube_button.pack(side="left", padx=(6, 0))
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
         columns = (
@@ -1335,7 +1334,7 @@ class RecorderGui:
         self.widgets["history_bulk"] = self.history_bulk_button
         self.widgets["history_refresh"] = self.history_refresh_button
         self.widgets["history_columns"] = self.history_columns_button
-        self.widgets["history_prepare"] = self.history_prepare_button
+        self.widgets["history_youtube"] = self.history_youtube_button
 
     def _build_statistics_page(self) -> None:
         page = self._new_page("statistics")
@@ -2098,6 +2097,54 @@ class RecorderGui:
         self._icon_button(
             footer, "save", "設定を保存", self.save_settings, style="Primary.TButton"
         ).pack(side="right", padx=(0, 8))
+        youtube_panel = self._surface(notebook, padding=(20, 18))
+        notebook.add(youtube_panel, text="YouTube")
+        ttk.Label(youtube_panel, text="YouTube連携", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
+        self.youtube_status_var = tk.StringVar(value="YouTube連携状態を確認していません")
+        ttk.Label(
+            youtube_panel,
+            textvariable=self.youtube_status_var,
+            style="Body.TLabel",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(14, 8))
+        self.youtube_scope_var = tk.StringVar(value="")
+        ttk.Label(
+            youtube_panel,
+            textvariable=self.youtube_scope_var,
+            style="Muted.TLabel",
+        ).grid(row=2, column=0, columnspan=3, sticky="w")
+        self.youtube_connect_button = ttk.Button(
+            youtube_panel,
+            text="連携する",
+            command=self.connect_youtube,
+        )
+        self.youtube_connect_button.grid(row=3, column=0, sticky="ew", pady=(18, 0), padx=(0, 8))
+        self.youtube_disconnect_button = ttk.Button(
+            youtube_panel,
+            text="切断する",
+            command=self.disconnect_youtube,
+        )
+        self.youtube_disconnect_button.grid(row=3, column=1, sticky="ew", pady=(18, 0), padx=(0, 8))
+        self.youtube_refresh_button = ttk.Button(
+            youtube_panel,
+            text="接続確認",
+            command=self.refresh_youtube_status,
+        )
+        self.youtube_refresh_button.grid(row=3, column=2, sticky="ew", pady=(18, 0))
+        self.youtube_test_button = ttk.Button(
+            youtube_panel,
+            text="最新録画でprivateテスト投稿",
+            command=self.open_latest_youtube_test_upload,
+        )
+        self.youtube_test_button.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+        for column in range(3):
+            youtube_panel.columnconfigure(column, weight=1, uniform="youtube-actions")
+        self.widgets["youtube_status"] = youtube_panel
+        self.widgets["youtube_connect"] = self.youtube_connect_button
+        self.widgets["youtube_disconnect"] = self.youtube_disconnect_button
+        self.widgets["youtube_refresh"] = self.youtube_refresh_button
+        self.widgets["youtube_test_upload"] = self.youtube_test_button
         data_panel = self._surface(notebook, padding=(20, 18))
         notebook.add(data_panel, text="管理データ")
         data_header = ttk.Frame(data_panel, style="Surface.TFrame")
@@ -3282,6 +3329,160 @@ class RecorderGui:
         self.pending_preparation_recording_id = selected.recording_id
         self.show_page("prepare")
 
+    def open_youtube_upload_dialog(self) -> None:
+        selected = self._selected_history_view()
+        if selected is None or selected.recording_id is None:
+            return
+        default_title = (
+            f"Master Duel 対戦記録 {selected.occurred_at.astimezone().strftime('%Y-%m-%d')}"
+        )
+        dialog = tk.Toplevel(self.root)
+        dialog.title("YouTubeへ投稿")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        frame = self._surface(dialog, padding=(18, 16))
+        frame.pack(fill="both", expand=True)
+        title_var = tk.StringVar(value=default_title)
+        privacy_var = tk.StringVar(value="private")
+        tags_var = tk.StringVar(value="Master Duel")
+        status_var = tk.StringVar(value="投稿前に内容を確認してください")
+        preparation_var = tk.StringVar(value="投稿用MP4準備状態を確認しています")
+        ttk.Label(frame, text="タイトル", style="Body.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=title_var, width=54).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(4, 10)
+        )
+        ttk.Label(frame, text="概要欄", style="Body.TLabel").grid(row=2, column=0, sticky="w")
+        description = tk.Text(frame, width=54, height=6, wrap="word")
+        description.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 10))
+        ttk.Label(frame, text="タグ（カンマ区切り）", style="Body.TLabel").grid(row=4, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=tags_var, width=54).grid(
+            row=5, column=0, columnspan=2, sticky="ew", pady=(4, 10)
+        )
+        ttk.Label(frame, text="公開範囲", style="Body.TLabel").grid(row=6, column=0, sticky="w")
+        ttk.Combobox(
+            frame,
+            textvariable=privacy_var,
+            values=("private", "unlisted", "public"),
+            state="readonly",
+            width=18,
+        ).grid(row=7, column=0, sticky="w", pady=(4, 10))
+        ttk.Label(frame, textvariable=preparation_var, style="Muted.TLabel").grid(
+            row=8, column=0, columnspan=2, sticky="w", pady=(0, 12)
+        )
+        ttk.Label(frame, textvariable=status_var, style="Muted.TLabel").grid(
+            row=9, column=0, columnspan=2, sticky="w", pady=(0, 12)
+        )
+
+        def preparation_loaded(status: object) -> None:
+            preparation_var.set(getattr(status, "message", str(status)))
+
+        self._run(
+            lambda: self.service.youtube_preparation_status(selected.recording_id),
+            preparation_loaded,
+            lambda exc: preparation_var.set(f"投稿用MP4準備状態を確認できません: {exc}"),
+        )
+
+        def submit() -> None:
+            title = title_var.get().strip()
+            if not title:
+                messagebox.showerror("YouTube投稿", "タイトルを入力してください。", parent=dialog)
+                return
+            privacy = privacy_var.get()
+            if privacy == "public" and not messagebox.askyesno(
+                "公開投稿の確認",
+                "公開範囲がpublicです。YouTube上で公開されます。\n本当に続行しますか？",
+                parent=dialog,
+            ):
+                return
+            tag_values = tuple(
+                tag.strip() for tag in tags_var.get().split(",") if tag.strip()
+            )
+            text = description.get("1.0", "end").strip()
+            status_var.set("YouTube投稿を開始しています")
+            upload_button.configure(state="disabled")
+            self._run(
+                lambda: self.service.upload_history_to_youtube(
+                    recording_id=selected.recording_id,
+                    title=title,
+                    description=text,
+                    tags=tag_values,
+                    privacy=privacy,
+                ),
+                lambda outcome: (
+                    self._activity(outcome.message),
+                    dialog.destroy(),
+                    self.refresh_history(),
+                ),
+                lambda exc: (
+                    status_var.set(str(exc)),
+                    upload_button.configure(state="normal"),
+                    self._show_error(exc),
+                ),
+            )
+
+        upload_button = ttk.Button(frame, text="投稿する", command=submit)
+        upload_button.grid(row=10, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(frame, text="キャンセル", command=dialog.destroy).grid(
+            row=10, column=1, sticky="ew"
+        )
+        frame.columnconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+        dialog.grab_set()
+
+    def open_latest_youtube_test_upload(self) -> None:
+        views = [view for view in self.history_views_by_id.values() if view.recording_id]
+        if not views:
+            messagebox.showinfo(
+                "YouTube privateテスト投稿",
+                "投稿できる録画履歴がありません。",
+                parent=self.root,
+            )
+            return
+        selected = sorted(views, key=lambda view: view.occurred_at, reverse=True)[0]
+        self.history_tree.selection_set(selected.row_id)
+        self.history_tree.focus(selected.row_id)
+        self.open_youtube_upload_dialog()
+
+    def refresh_youtube_status(self) -> None:
+        if self.smoke_mode:
+            self._render_youtube_status(
+                YouTubeConnectionStatus("disconnected", "YouTubeは未連携です")
+            )
+            return
+        self._run(self.service.youtube_connection_status, self._render_youtube_status)
+
+    def _render_youtube_status(self, status: YouTubeConnectionStatus) -> None:
+        self.youtube_status_var.set(status.message)
+        self.youtube_scope_var.set(f"scope: {status.scope}" if status.scope else "")
+        connected = status.state == "connected"
+        self.youtube_connect_button.configure(
+            state="normal" if status.can_connect and not connected else "disabled"
+        )
+        self.youtube_disconnect_button.configure(state="normal" if connected else "disabled")
+        self.youtube_test_button.configure(state="normal" if connected else "disabled")
+
+    def connect_youtube(self) -> None:
+        self.youtube_status_var.set("ブラウザでYouTube連携を許可してください")
+        self.youtube_connect_button.configure(state="disabled")
+        self._run(
+            lambda: self.service.connect_youtube(),
+            self._render_youtube_status,
+            lambda exc: (
+                self.youtube_status_var.set(str(exc)),
+                self.youtube_connect_button.configure(state="normal"),
+                self._show_error(exc),
+            ),
+        )
+
+    def disconnect_youtube(self) -> None:
+        if not messagebox.askyesno(
+            "YouTube連携を切断",
+            "保存済みのYouTube OAuth資格情報を削除しますか？",
+            parent=self.root,
+        ):
+            return
+        self._run(self.service.disconnect_youtube, self._render_youtube_status)
+
     def refresh_active_seasons(self) -> None:
         if self.smoke_mode:
             return
@@ -3670,7 +3871,9 @@ class RecorderGui:
         self.history_action_buttons["delete"].configure(
             state="normal" if len(selection) == 1 and view is not None else "disabled"
         )
-        self.history_prepare_button.configure(state=media_state)
+        self.history_youtube_button.configure(
+            state="normal" if has_recording and len(selection) == 1 else "disabled"
+        )
 
         missing_recording = False
         if has_recording and view is not None and view.entry is not None:
@@ -6061,12 +6264,12 @@ class RecorderGui:
             return
         self._run(
             lambda: (
-                self.service.list_history(DuelManagementQuery(limit=100)),
+                self.service.list_history_views(query=DuelManagementQuery(limit=100)),
                 self.service.list_decks(),
                 self.service.list_tags(),
             ),
             lambda result: self.improvement_status_var.set(
-                f"最近の戦績候補: {len(result[0].items)}件 / "
+                f"最近の戦績候補: {len(result[0])}件 / "
                 f"デッキ: {len(result[1])}件 / タグ: {len(result[2])}件"
             ),
         )
@@ -6191,6 +6394,7 @@ class RecorderGui:
         self.audio_choice_var.set(config.audio_input or "音声なし")
         self._audio_mode_selected()
         self.refresh_audio_inputs()
+        self.refresh_youtube_status()
 
     def select_existing_ffmpeg(self) -> None:
         selected = filedialog.askopenfilename(
@@ -7013,11 +7217,18 @@ def main(argv: list[str] | None = None) -> int:
             "width": root.winfo_width(),
             "height": root.winfo_height(),
             "widgets": sorted(app.widgets),
+            "nav_pages": sorted(app.nav_buttons),
             "title": root.title(),
             "version": __version__,
             "runtime_data": str(service.paths.root),
             "history_refresh_visible": history_refresh_right <= root.winfo_width(),
             "calendar_contract": calendar_contract,
+            "youtube_flow_contract": (
+                "prepare" not in app.nav_buttons
+                and "improve" not in app.nav_buttons
+                and "history_youtube" in app.widgets
+                and "youtube_status" in app.widgets
+            ),
         }
         if (
             geometry["width"] < 900
@@ -7025,6 +7236,7 @@ def main(argv: list[str] | None = None) -> int:
             or len(app.widgets) < 8
             or not geometry["history_refresh_visible"]
             or not geometry["calendar_contract"]
+            or not geometry["youtube_flow_contract"]
         ):
             app._destroy()
             return 1
