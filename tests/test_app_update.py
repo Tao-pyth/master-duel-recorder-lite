@@ -2,11 +2,17 @@ import hashlib
 from io import BytesIO
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from master_duel_recorder_lite.app_update import AppUpdateError, AppUpdateService
+from master_duel_recorder_lite.app_update import (
+    AppUpdateError,
+    AppUpdateService,
+    launch_update_after_exit,
+)
 
 
 class _Response(BytesIO):
@@ -37,6 +43,16 @@ class AppUpdateServiceTest(unittest.TestCase):
                     "name": "master-duel-recorder-lite-gui.exe.sha256",
                     "size": 80,
                     "browser_download_url": "https://example.invalid/app.sha256",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe",
+                    "size": 8,
+                    "browser_download_url": "https://example.invalid/updater.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe.sha256",
+                    "size": 80,
+                    "browser_download_url": "https://example.invalid/updater.sha256",
                 },
             ],
         }
@@ -160,6 +176,46 @@ class AppUpdateServiceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with self.assertRaisesRegex(AppUpdateError, "起動検証結果"):
                 service.download_and_verify(release, Path(tmp_dir) / "update.exe")
+
+    def test_launch_update_after_exit_uses_bundled_updater_not_powershell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            current = root / "app" / "master-duel-recorder-lite-gui.exe"
+            downloaded = root / "data" / "updates" / "mdrl-gui-1.4.3.exe"
+            bundled = root / "bundle" / "master-duel-recorder-lite-updater.exe"
+            current.parent.mkdir(parents=True)
+            downloaded.parent.mkdir(parents=True)
+            bundled.parent.mkdir(parents=True)
+            current.write_bytes(b"current")
+            downloaded.write_bytes(b"candidate")
+            bundled.write_bytes(b"updater")
+            launches: list[tuple[str, ...]] = []
+
+            class _Process:
+                pass
+
+            def popen(args, **_kwargs):
+                launches.append(tuple(str(item) for item in args))
+                return _Process()
+
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(sys, "executable", str(current)),
+                patch.object(sys, "_MEIPASS", str(bundled.parent), create=True),
+                patch("subprocess.Popen", popen),
+            ):
+                updater = launch_update_after_exit(
+                    downloaded,
+                    expected_version="1.4.3",
+                )
+
+            self.assertEqual(updater.resolve(), (downloaded.parent / bundled.name).resolve())
+            self.assertEqual(updater.read_bytes(), b"updater")
+            self.assertEqual(len(launches), 1)
+            self.assertEqual(Path(launches[0][0]), updater)
+            self.assertNotIn("powershell.exe", launches[0])
+            self.assertIn("--candidate", launches[0])
+            self.assertIn(str(downloaded.resolve()), launches[0])
 
 
 if __name__ == "__main__":

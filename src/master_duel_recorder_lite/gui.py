@@ -6529,7 +6529,10 @@ class RecorderGui:
 
     def _update_downloaded(self, path: Path) -> None:
         try:
-            launch_update_after_exit(path)
+            release = self.available_update
+            if release is None:
+                raise ValueError("適用する更新情報が見つかりません")
+            launch_update_after_exit(path, expected_version=release.version)
         except Exception as exc:
             self._show_error(exc)
             return

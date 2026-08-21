@@ -8,6 +8,7 @@ from unittest.mock import patch
 from scripts.build_windows_exe import (
     EXECUTABLE_NAME,
     GUI_EXECUTABLE_NAME,
+    UPDATER_EXECUTABLE_NAME,
     APP_ICON,
     build_command,
     PROJECT_ROOT,
@@ -31,11 +32,11 @@ class ReleaseToolingTest(unittest.TestCase):
     def test_windows_version_resource_uses_project_version(self) -> None:
         version = read_project_version()
         resource = windows_version_resource(version)
+        major, minor, fix = (int(item) for item in version.split("."))
 
-        self.assertEqual(version, "1.4.2")
-        self.assertEqual(windows_version_tuple(version), (1, 4, 2, 0))
-        self.assertIn("filevers=(1, 4, 2, 0)", resource)
-        self.assertIn("ProductVersion', '1.4.2'", resource)
+        self.assertEqual(windows_version_tuple(version), (major, minor, fix, 0))
+        self.assertIn(f"filevers=({major}, {minor}, {fix}, 0)", resource)
+        self.assertIn(f"ProductVersion', '{version}'", resource)
         self.assertIn(EXECUTABLE_NAME, resource)
 
     def test_build_command_is_onefile_console_without_upx(self) -> None:
@@ -93,6 +94,36 @@ class ReleaseToolingTest(unittest.TestCase):
         self.assertIn("--add-data", command)
         self.assertIn(f"{asset};assets", command)
 
+    def test_gui_build_command_can_bundle_updater_executable(self) -> None:
+        root = Path("project").resolve()
+        updater = root / "dist" / UPDATER_EXECUTABLE_NAME
+
+        command = build_command(
+            root,
+            root / "build" / "gui-version.txt",
+            executable_name=GUI_EXECUTABLE_NAME,
+            entrypoint="mdrl_gui_entry.py",
+            windowed=True,
+            extra_binaries=((updater, "."),),
+        )
+
+        self.assertIn("--add-binary", command)
+        self.assertIn(f"{updater};.", command)
+
+    def test_updater_build_command_is_console_entrypoint(self) -> None:
+        root = Path("project").resolve()
+        command = build_command(
+            root,
+            root / "build" / "updater-version.txt",
+            executable_name=UPDATER_EXECUTABLE_NAME,
+            entrypoint="mdrl_updater_entry.py",
+            windowed=False,
+        )
+
+        self.assertIn("--console", command)
+        self.assertNotIn("--windowed", command)
+        self.assertIn(str(root / "packaging" / "mdrl_updater_entry.py"), command)
+
     def test_release_oauth_client_asset_can_be_generated_from_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -138,13 +169,13 @@ class ReleaseToolingTest(unittest.TestCase):
                     )
 
     def test_release_tag_matches_both_version_sources(self) -> None:
-        self.assertEqual(read_package_version(), "1.4.2")
-        self.assertEqual(verify_project_version(), "1.4.2")
-        self.assertEqual(verify_release_tag("v1.4.2"), "1.4.2")
+        version = verify_project_version()
+        self.assertEqual(read_package_version(), version)
+        self.assertEqual(verify_release_tag(f"v{version}"), version)
 
     def test_release_tag_script_supports_direct_execution(self) -> None:
         completed = subprocess.run(
-            [sys.executable, "scripts/verify_release_tag.py", "v1.4.2"],
+            [sys.executable, "scripts/verify_release_tag.py", f"v{verify_project_version()}"],
             cwd=PROJECT_ROOT,
             check=False,
             capture_output=True,
@@ -152,7 +183,7 @@ class ReleaseToolingTest(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout.strip(), "1.4.2")
+        self.assertEqual(completed.stdout.strip(), verify_project_version())
 
     def test_release_tag_mismatch_fails(self) -> None:
         with self.assertRaises(ValueError):
@@ -192,6 +223,16 @@ class ReleaseToolingTest(unittest.TestCase):
                     "digest": "sha256:" + "b" * 64,
                     "browser_download_url": "https://example.invalid/gui.sha256",
                 },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe",
+                    "digest": "sha256:" + "c" * 64,
+                    "browser_download_url": "https://example.invalid/updater.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe.sha256",
+                    "digest": "sha256:" + "d" * 64,
+                    "browser_download_url": "https://example.invalid/updater.sha256",
+                },
             ]
         }
 
@@ -203,6 +244,10 @@ class ReleaseToolingTest(unittest.TestCase):
                 return (("1" * 64) + "  master-duel-recorder-lite.exe\n").encode()
             if "gui.sha256" in url:
                 return (("a" * 64) + "  master-duel-recorder-lite-gui.exe\n").encode()
+            if "updater.sha256" in url:
+                return (
+                    ("c" * 64) + "  master-duel-recorder-lite-updater.exe\n"
+                ).encode()
             raise AssertionError(url)
 
         with patch("scripts.verify_release_assets._read_bytes", read_bytes):
@@ -211,6 +256,7 @@ class ReleaseToolingTest(unittest.TestCase):
                 [
                     "master-duel-recorder-lite.exe: " + "1" * 64,
                     "master-duel-recorder-lite-gui.exe: " + "a" * 64,
+                    "master-duel-recorder-lite-updater.exe: " + "c" * 64,
                 ],
             )
 
@@ -237,6 +283,16 @@ class ReleaseToolingTest(unittest.TestCase):
                     "digest": "sha256:" + "b" * 64,
                     "browser_download_url": "https://example.invalid/gui.sha256",
                 },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe",
+                    "digest": "sha256:" + "c" * 64,
+                    "browser_download_url": "https://example.invalid/updater.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe.sha256",
+                    "digest": "sha256:" + "d" * 64,
+                    "browser_download_url": "https://example.invalid/updater.sha256",
+                },
             ]
         }
 
@@ -247,6 +303,10 @@ class ReleaseToolingTest(unittest.TestCase):
                 return (("0" * 64) + "  master-duel-recorder-lite.exe\n").encode()
             if "gui.sha256" in url:
                 return (("a" * 64) + "  master-duel-recorder-lite-gui.exe\n").encode()
+            if "updater.sha256" in url:
+                return (
+                    ("c" * 64) + "  master-duel-recorder-lite-updater.exe\n"
+                ).encode()
             raise AssertionError(url)
 
         with patch("scripts.verify_release_assets._read_bytes", read_bytes):

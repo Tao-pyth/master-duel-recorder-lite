@@ -15,7 +15,7 @@ EXEはCPythonランタイム、標準ライブラリ、`master_duel_recorder_lit
 - ProductName: `master-duel-recorder-lite`
 - OriginalFilename: `master-duel-recorder-lite.exe`
 
-GUI版のOriginalFilenameは`master-duel-recorder-lite-gui.exe`で、コンソールウィンドウを表示しません。V1.0.1からGUIとCLIへ専用ICOを埋め込み、GUI起動時には同じアイコンと固定AppUserModelIDを設定してウィンドウ、タスクバー、エクスプローラーの識別を揃えます。
+GUI版のOriginalFilenameは`master-duel-recorder-lite-gui.exe`で、コンソールウィンドウを表示しません。V1.4.3からアプリ内更新用の`master-duel-recorder-lite-updater.exe`も生成し、GUI EXEへ同梱します。updaterは通常利用者が直接起動する画面ではなく、GUI終了後に現在EXEを退避、置換、スモーク、ロールバック、再起動するための小さな配布物です。V1.0.1からGUIとCLIへ専用ICOを埋め込み、GUI起動時には同じアイコンと固定AppUserModelIDを設定してウィンドウ、タスクバー、エクスプローラーの識別を揃えます。
 
 ## 実行時データ
 
@@ -39,9 +39,10 @@ python -W error::ResourceWarning -m unittest discover -s tests
 python scripts/build_windows_exe.py
 .\scripts\smoke_windows_exe.ps1 -ExePath .\dist\master-duel-recorder-lite.exe -ExpectedVersion 1.0.2
 .\scripts\smoke_windows_gui.ps1 -ExePath .\dist\master-duel-recorder-lite-gui.exe -ExpectedVersion 1.0.2
+.\scripts\smoke_windows_updater.ps1 -ExePath .\dist\master-duel-recorder-lite-updater.exe -ExpectedVersion 1.0.2
 ```
 
-CLIスモークは`--version`、`--help`、`config show --json`を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。両EXEを一時フォルダへコピーして起動し、EXE隣接`user_data/`を作成せず、既定パスが分離した`LOCALAPPDATA`配下になることを確認します。読取操作だけではその既定パスも作成しません。
+CLIスモークは`--version`、`--help`、`config show --json`を検証します。GUIスモークは実ウィンドウの寸法、主要操作部品、バージョン、正常終了を検証します。updaterスモークは`--version`と必須引数のhelp表示を検証します。CLI/GUIは一時フォルダへコピーして起動し、EXE隣接`user_data/`を作成せず、既定パスが分離した`LOCALAPPDATA`配下になることを確認します。読取操作だけではその既定パスも作成しません。
 
 ## GitHub Release
 
@@ -49,11 +50,11 @@ CLIスモークは`--version`、`--help`、`config show --json`を検証しま�
 
 1. タグ、`pyproject.toml`、`__version__`の一致検証
 2. Ruff、ネイティブ音声ヘルパーのx64ビルド・probe、全単体テスト
-3. ヘルパーと第三者ライセンス表示を含むone-file EXEビルドと実EXEスモーク
+3. ヘルパーと第三者ライセンス表示を含むone-file EXEビルド、updater同梱、実EXEスモーク
 4. SHA-256ファイル生成
 5. GitHub artifact attestationによるbuild provenance作成
-6. EXEとSHA-256をGitHub Releaseへ公開
-7. 公開済みRelease assetを再ダウンロードし、CLI/GUIスモークを公開物そのもので再実行
+6. CLI/GUI/updater EXEとSHA-256をGitHub Releaseへ公開
+7. 公開済みRelease assetを再ダウンロードし、CLI/GUI/updaterスモークを公開物そのもので再実行
 
 公開前の検証が失敗した場合はReleaseを作成しません。公開済みassetの再スモークが失敗した場合は、Release workflowを失敗として扱い、該当Releaseを修正版で置き換えるまで利用者へ案内しません。Actionsはタグ名ではなく検証済みcommit SHAへ固定します。
 

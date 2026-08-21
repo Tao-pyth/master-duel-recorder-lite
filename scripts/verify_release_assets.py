@@ -15,6 +15,7 @@ RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/tags"
 EXECUTABLES = (
     "master-duel-recorder-lite.exe",
     "master-duel-recorder-lite-gui.exe",
+    "master-duel-recorder-lite-updater.exe",
 )
 SHA256_PATTERN = re.compile(r"(?i)(?<![0-9a-f])([0-9a-f]{64})(?![0-9a-f])")
 
