@@ -58,10 +58,13 @@ jobs:
           ./scripts/smoke_windows_gui.ps1 `
             -ExePath ./dist/master-duel-recorder-lite-gui.exe `
             -ExpectedVersion $env:MDRL_VERSION
+          ./scripts/smoke_windows_updater.ps1 `
+            -ExePath ./dist/master-duel-recorder-lite-updater.exe `
+            -ExpectedVersion $env:MDRL_VERSION
       - name: Create SHA-256 files
         shell: pwsh
         run: |
-          foreach ($name in @("master-duel-recorder-lite.exe", "master-duel-recorder-lite-gui.exe")) {
+          foreach ($name in @("master-duel-recorder-lite.exe", "master-duel-recorder-lite-gui.exe", "master-duel-recorder-lite-updater.exe")) {
             $path = "dist/$name"
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
             [System.IO.File]::WriteAllText(
@@ -76,6 +79,7 @@ jobs:
           subject-path: |
             dist/master-duel-recorder-lite.exe
             dist/master-duel-recorder-lite-gui.exe
+            dist/master-duel-recorder-lite-updater.exe
       - name: Upload workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -85,6 +89,8 @@ jobs:
             dist/master-duel-recorder-lite.exe.sha256
             dist/master-duel-recorder-lite-gui.exe
             dist/master-duel-recorder-lite-gui.exe.sha256
+            dist/master-duel-recorder-lite-updater.exe
+            dist/master-duel-recorder-lite-updater.exe.sha256
           if-no-files-found: error
           retention-days: 30
       - name: Publish GitHub Release
@@ -102,6 +108,8 @@ jobs:
             "dist/master-duel-recorder-lite.exe.sha256" `
             "dist/master-duel-recorder-lite-gui.exe" `
             "dist/master-duel-recorder-lite-gui.exe.sha256" `
+            "dist/master-duel-recorder-lite-updater.exe" `
+            "dist/master-duel-recorder-lite-updater.exe.sha256" `
             --verify-tag `
             --title "master-duel-recorder-lite ${{ github.ref_name }}" `
             --notes-file $notes
@@ -125,4 +133,7 @@ jobs:
             -ExpectedVersion $env:MDRL_VERSION
           ./scripts/smoke_windows_gui.ps1 `
             -ExePath "$download/master-duel-recorder-lite-gui.exe" `
+            -ExpectedVersion $env:MDRL_VERSION
+          ./scripts/smoke_windows_updater.ps1 `
+            -ExePath "$download/master-duel-recorder-lite-updater.exe" `
             -ExpectedVersion $env:MDRL_VERSION

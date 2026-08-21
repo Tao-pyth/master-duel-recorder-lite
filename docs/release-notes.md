@@ -1,5 +1,21 @@
 # リリースノート
 
+## V1.4.3: アプリ内自動更新updater化 - 2026-08-22
+
+- アプリ内更新を手動ダウンロードへ退避せず、GUIへ同梱した専用`master-duel-recorder-lite-updater.exe`で自動適用するようにした
+- 旧GUI終了待機、候補SHA-256再確認、`.staged`コピー、`.previous`退避、置換後GUIスモーク、失敗時ロールバック、成功時再起動をupdaterへ分離した
+- release workflowでCLI/GUI/updaterの3 EXEとSHA-256を公開し、公開済みassetを再ダウンロードして3 EXEをスモークするようにした
+- release toolingテストの固定バージョン期待値を`pyproject.toml`と`__version__`から導出し、Fixリリース時の更新漏れを防ぐようにした
+- V1.4.1/V1.4.2の旧更新コードでは、置換対象GUI EXEの起動前スモークだけでは更新適用時のPyInstaller展開失敗を防げないことを検証記録へ残す
+- YouTube OAuth client_id同梱、OAuth 400診断、Windows CredentialBlob互換修正は維持した
+- DBスキーマ、設定形式、録画ファイル、prepare queue、OAuth資格情報保存先は変更しない
+- Ruff、全543テスト、Python GUIスモーク、CLI/GUI/updater one-file EXEビルド、3 EXEスモーク、updater置換スモークに合格した
+- ローカルrelease相当CLI EXE SHA-256: `A024F4F6581EED64ED48B0B3DC6CC1AC133604AE518C4B7EF071C27D61C68394`
+- ローカルrelease相当GUI EXE SHA-256: `F766FE003C7205DF78D4F184DE0D2521C794DE7D4412BD3413C6C074555AA30D`
+- ローカルrelease相当updater EXE SHA-256: `0FEE2ABB045C1E0C06E9631CD096D44342F81784F0F1C71B8B725B4848C7B2B2`
+
+追跡: [V1.4.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/63)、親Issue #459、#462、子Issue #460 - #461、#463 - #465
+
 ## V1.4.2: 更新EXE起動検証とOAuth診断hotfix - 2026-08-21
 
 - アプリ更新でGUI EXEを取得した後、置換前に`--smoke-test`で起動検証し、Python DLL展開失敗などの起動不能EXEを適用しないようにした

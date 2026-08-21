@@ -13,6 +13,7 @@ import tomllib
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE_NAME = "master-duel-recorder-lite.exe"
 GUI_EXECUTABLE_NAME = "master-duel-recorder-lite-gui.exe"
+UPDATER_EXECUTABLE_NAME = "master-duel-recorder-lite-updater.exe"
 VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 NATIVE_HELPER_PROJECT = Path("native/audio_loopback/mdrl_audio_loopback.vcxproj")
 NATIVE_HELPER_OUTPUT = Path("native/audio_loopback/bin/mdrl-audio-loopback.exe")
@@ -87,6 +88,7 @@ def build_command(
     entrypoint: str = "mdrl_entry.py",
     windowed: bool = False,
     youtube_oauth_client_asset: Path | None = None,
+    extra_binaries: tuple[tuple[Path, str], ...] = (),
 ) -> tuple[str, ...]:
     command = [
         sys.executable,
@@ -123,6 +125,8 @@ def build_command(
         command.extend(["--add-data", f"{icon};assets"])
     if youtube_oauth_client_asset is not None:
         command.extend(["--add-data", f"{youtube_oauth_client_asset};assets"])
+    for source, destination in extra_binaries:
+        command.extend(["--add-binary", f"{source};{destination}"])
     command.append(str(project_root / "packaging" / entrypoint))
     return tuple(command)
 
@@ -288,11 +292,44 @@ def build_windows_executable(
     return executable
 
 
+def build_updater_executable(project_root: Path = PROJECT_ROOT) -> Path:
+    if sys.platform != "win32":
+        raise RuntimeError("Windows updater EXEはWindows上でビルドする必要があります")
+    version = read_project_version(project_root)
+    build_root = project_root / "build"
+    build_root.mkdir(parents=True, exist_ok=True)
+    version_file = build_root / "windows-updater-version-info.txt"
+    version_file.write_text(
+        windows_version_resource(
+            version,
+            executable_name=UPDATER_EXECUTABLE_NAME,
+            description="Master Duel Recorder Lite Updater",
+        ),
+        encoding="utf-8",
+    )
+    command = build_command(
+        project_root,
+        version_file,
+        executable_name=UPDATER_EXECUTABLE_NAME,
+        entrypoint="mdrl_updater_entry.py",
+        windowed=False,
+    )
+    completed = subprocess.run(command, cwd=project_root, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"Updater版PyInstallerビルドに失敗しました: exit code {completed.returncode}"
+        )
+    executable = project_root / "dist" / UPDATER_EXECUTABLE_NAME
+    if not executable.is_file() or executable.stat().st_size <= 0:
+        raise RuntimeError(f"Updater EXEが生成されませんでした: {executable}")
+    return executable
+
+
 def build_windows_executables(
     project_root: Path = PROJECT_ROOT,
     *,
     require_youtube_oauth_client: bool = False,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path]:
     version = read_project_version(project_root)
     build_root = project_root / "build"
     youtube_oauth_client_asset = resolve_youtube_oauth_client_asset(
@@ -301,6 +338,7 @@ def build_windows_executables(
         require=require_youtube_oauth_client,
     )
     build_native_audio_helper(project_root)
+    updater_executable = build_updater_executable(project_root)
     cli_executable = build_windows_executable(
         project_root,
         youtube_oauth_client_asset=youtube_oauth_client_asset,
@@ -321,6 +359,7 @@ def build_windows_executables(
         entrypoint="mdrl_gui_entry.py",
         windowed=True,
         youtube_oauth_client_asset=youtube_oauth_client_asset,
+        extra_binaries=((updater_executable, "."),),
     )
     completed = subprocess.run(command, cwd=project_root, check=False)
     if completed.returncode != 0:
@@ -328,7 +367,7 @@ def build_windows_executables(
     gui_executable = project_root / "dist" / GUI_EXECUTABLE_NAME
     if not gui_executable.is_file() or gui_executable.stat().st_size <= 0:
         raise RuntimeError(f"GUI EXEが生成されませんでした: {gui_executable}")
-    return cli_executable, gui_executable
+    return cli_executable, gui_executable, updater_executable
 
 
 def main() -> int:

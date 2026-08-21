@@ -894,3 +894,19 @@
 追跡: [V1.4.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/62)、親Issue #452、子Issue #453 - #457
 
 完了条件: 更新対象GUI EXEの事前スモークで起動不能assetを拒否でき、公開済みRelease assetの再スモークがCIで成功し、OAuth 400時に秘匿済み診断と対処を表示し、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、両EXEスモーク、Release Contract確認、GitHub Release、更新確認からのダウンロード検証が成功すること。
+
+## V1.4.3: アプリ内自動更新updater化
+
+状態: 実装中
+
+- release toolingの固定バージョン期待値をプロジェクト版から導出し、Fixリリース時のテスト更新漏れを防ぐ
+- GUIの自己置換用PowerShellを廃止し、GUIへ同梱した専用updater EXEから現在GUI EXEを置換する
+- 専用updaterで親GUI終了待機、候補SHA-256再確認、`.staged`コピー、`.previous`退避、置換後スモーク、失敗時ロールバック、成功時再起動を行う
+- release workflowでCLI/GUI/updaterの3 EXEとSHA-256を公開し、公開済みassetを再ダウンロードして3 EXEをスモークする
+- V1.4.1/V1.4.2の旧更新コードでは起動前スモークだけでPyInstaller展開失敗を防げない理由を検証記録へ残す
+- V1.4.2で入れたYouTube OAuth client_id同梱、OAuth 400診断、Windows CredentialBlob互換修正を維持する
+- README、設計文書、リリースノート、検証記録、バージョン情報、配布物検証を`1.4.3`へ整合する
+
+追跡: [V1.4.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/63)、親Issue #459、#462、子Issue #460 - #461、#463 - #465
+
+完了条件: アプリ内更新が手動ダウンロードなしで専用updaterから適用でき、失敗時に旧GUIへロールバックでき、release toolingの固定期待値が消え、Ruff、全単体テスト、Python GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、updater置換スモーク、Release Contract確認、GitHub Release、更新確認からのダウンロード検証が成功すること。

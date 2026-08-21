@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,7 @@ from urllib.request import Request, urlopen
 
 RELEASE_API = "https://api.github.com/repos/Tao-pyth/master-duel-recorder-lite/releases/latest"
 GUI_ASSET_NAME = "master-duel-recorder-lite-gui.exe"
+UPDATER_ASSET_NAME = "master-duel-recorder-lite-updater.exe"
 MAX_UPDATE_BYTES = 256 * 1024 * 1024
 VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
@@ -77,11 +79,25 @@ class AppUpdateService:
         }
         executable = by_name.get(GUI_ASSET_NAME)
         checksum = by_name.get(f"{GUI_ASSET_NAME}.sha256")
-        if not isinstance(executable, dict) or not isinstance(checksum, dict):
-            raise AppUpdateError("GUI EXEまたはSHA-256成果物がReleaseにありません")
+        updater = by_name.get(UPDATER_ASSET_NAME)
+        updater_checksum = by_name.get(f"{UPDATER_ASSET_NAME}.sha256")
+        if (
+            not isinstance(executable, dict)
+            or not isinstance(checksum, dict)
+            or not isinstance(updater, dict)
+            or not isinstance(updater_checksum, dict)
+        ):
+            raise AppUpdateError("GUI EXE、updater EXE、またはSHA-256成果物がReleaseにありません")
         size = executable.get("size")
         if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= MAX_UPDATE_BYTES:
             raise AppUpdateError("更新EXEのサイズが安全範囲外です")
+        updater_size = updater.get("size")
+        if (
+            isinstance(updater_size, bool)
+            or not isinstance(updater_size, int)
+            or not 0 < updater_size <= MAX_UPDATE_BYTES
+        ):
+            raise AppUpdateError("更新updater EXEのサイズが安全範囲外です")
         release = UpdateRelease(
             ".".join(str(value) for value in latest),
             str(document.get("name") or tag),
@@ -210,54 +226,60 @@ class AppUpdateService:
         return data
 
 
-def launch_update_after_exit(downloaded_executable: Path) -> Path:
+def launch_update_after_exit(downloaded_executable: Path, *, expected_version: str) -> Path:
     if not bool(getattr(sys, "frozen", False)):
         raise AppUpdateError("アプリ更新の適用は配布EXEでのみ利用できます")
     current = Path(sys.executable).resolve()
     downloaded = downloaded_executable.expanduser().resolve()
     if not downloaded.is_file() or downloaded.stat().st_size <= 0:
         raise AppUpdateError("取得済み更新EXEが見つかりません")
-    script = downloaded.parent / "apply-mdrl-update.ps1"
+    updater_source = _bundled_updater_executable()
+    updater_target = downloaded.parent / UPDATER_ASSET_NAME
+    if updater_source.resolve() != updater_target.resolve():
+        shutil.copy2(updater_source, updater_target)
+    digest = _file_sha256(downloaded)
     backup = current.with_suffix(f"{current.suffix}.previous")
-    quoted_current = str(current).replace("'", "''")
-    quoted_downloaded = str(downloaded).replace("'", "''")
-    quoted_backup = str(backup).replace("'", "''")
-    script.write_text(
-        "\n".join(
-            (
-                "$ErrorActionPreference = 'Stop'",
-                f"$current = '{quoted_current}'",
-                f"$downloaded = '{quoted_downloaded}'",
-                f"$backup = '{quoted_backup}'",
-                f"Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue",
-                "Start-Sleep -Milliseconds 500",
-                "Copy-Item -LiteralPath $current -Destination $backup -Force",
-                "Copy-Item -LiteralPath $downloaded -Destination $current -Force",
-                "$updated = Start-Process -FilePath $current -PassThru",
-                "Start-Sleep -Seconds 5",
-                "if ($updated.HasExited -and $updated.ExitCode -ne 0) {",
-                "  Copy-Item -LiteralPath $backup -Destination $current -Force",
-                "  Start-Process -FilePath $current",
-                "}",
-                "Remove-Item -LiteralPath $downloaded -Force -ErrorAction SilentlyContinue",
-                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
-            )
-        ),
-        encoding="utf-8-sig",
-    )
     subprocess.Popen(
         (
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script),
+            str(updater_target),
+            "--parent-pid",
+            str(os.getpid()),
+            "--current",
+            str(current),
+            "--candidate",
+            str(downloaded),
+            "--backup",
+            str(backup),
+            "--expected-sha256",
+            digest,
+            "--expected-version",
+            expected_version,
         ),
+        cwd=str(current.parent),
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         close_fds=True,
     )
-    return script
+    return updater_target
+
+
+def _bundled_updater_executable() -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    candidates = (
+        base / UPDATER_ASSET_NAME,
+        Path(sys.executable).resolve().with_name(UPDATER_ASSET_NAME),
+    )
+    for candidate in candidates:
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate
+    raise AppUpdateError("更新用updater EXEが配布物に含まれていません")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _version(value: str) -> tuple[int, int, int]:
