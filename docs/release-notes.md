@@ -1,5 +1,19 @@
 # リリースノート
 
+## V1.4.5: YouTube OAuth資格情報ストアhotfix - 2026-08-22
+
+- 配布EXEからWindows資格情報ストアのYouTube OAuth資格情報を読み取れず、GUIの`接続確認`や投稿ダイアログで未連携扱いになる問題を修正した
+- `WindowsCredentialStore`をWindows Credential APIの直接呼び出しへ変更し、PyInstaller EXEでの`win32cred`差異に依存しないようにした
+- 資格情報なし、Windows API失敗、保存済みJSON不正を区別し、`read/delete`の失敗を成功扱いにしないようにした
+- CLI EXEスモークへ、隔離したCredential targetでのYouTube OAuth資格情報読み取りと削除の検証を追加した
+- DBスキーマ、設定形式、録画ファイル、prepare queueは変更しない。`refresh_token`、`access_token`、認可コードは配布物、設定、DB、queue、manifest、ログへ含めない
+- Ruff、全550テスト、CLI/GUI/updater one-file EXEビルド、3 EXEスモークに合格した
+- ローカルrelease相当CLI EXE SHA-256: `9D658C7E41A38318C0321B3EF591400C2F1644517CC7E728EFEFBAD02A556521`
+- ローカルrelease相当GUI EXE SHA-256: `7E842975AF78B2D8D8691C2096D2EF1CF68469FE72521BAD4B69B4AFB6E9B953`
+- ローカルrelease相当updater EXE SHA-256: `863A61D7152A51C35C911F8BA14A0C1C7E2AA2B2B40308CF863DCC34DD8DFD08`
+
+追跡: [V1.4.5 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/65)、Issue #466
+
 ## V1.4.4: YouTube OAuth client_secret同梱hotfix - 2026-08-22
 
 - GUIの通常YouTube連携でOAuth token交換時に`client_secret`を送信できるよう、配布EXEへ`client_id`と`client_secret`を同梱する方針へ変更した

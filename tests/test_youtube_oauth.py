@@ -1,10 +1,9 @@
 import json
-import sys
+import os
 import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 import urllib.request
@@ -34,6 +33,33 @@ class _Response(BytesIO):
         self.close()
 
 
+class _FakeCredentialApi:
+    def __init__(self, read_blob: bytes | None = None) -> None:
+        self.read_blob = read_blob
+        self.writes: list[tuple[str, bytes, str]] = []
+        self.deleted: list[str] = []
+        self.read_error: YouTubeOAuthError | None = None
+        self.write_error: YouTubeOAuthError | None = None
+        self.delete_error: YouTubeOAuthError | None = None
+
+    def read(self, target: str) -> bytes | None:
+        if self.read_error is not None:
+            raise self.read_error
+        return self.read_blob
+
+    def write(self, target: str, blob: bytes, *, username: str) -> None:
+        if self.write_error is not None:
+            raise self.write_error
+        self.writes.append((target, blob, username))
+        self.read_blob = blob
+
+    def delete(self, target: str) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.deleted.append(target)
+        self.read_blob = None
+
+
 class YouTubeOAuthTest(unittest.TestCase):
     def test_memory_store_round_trips_without_config_file(self) -> None:
         store = MemoryCredentialStore()
@@ -57,36 +83,61 @@ class YouTubeOAuthTest(unittest.TestCase):
         self.assertEqual(restored.client_secret, "")
         self.assertEqual(restored.refresh_token, "refresh")
 
-    def test_windows_store_writes_credential_blob_as_text(self) -> None:
-        writes: list[dict[str, object]] = []
-        fake_win32cred = SimpleNamespace(
-            CRED_TYPE_GENERIC=1,
-            CRED_PERSIST_LOCAL_MACHINE=2,
-            CredWrite=lambda credential, _flags: writes.append(credential),
-        )
+    def test_windows_store_writes_utf8_credential_blob(self) -> None:
+        api = _FakeCredentialApi()
         credentials = YouTubeCredentials("client", "secret", "refresh")
 
-        with patch.dict(sys.modules, {"win32cred": fake_win32cred}):
-            WindowsCredentialStore("target").write(credentials)
+        WindowsCredentialStore("target", api=api).write(credentials)
 
-        self.assertEqual(len(writes), 1)
-        blob = writes[0]["CredentialBlob"]
-        self.assertIsInstance(blob, str)
-        self.assertEqual(YouTubeCredentials.from_json(blob), credentials)
+        self.assertEqual(len(api.writes), 1)
+        target, blob, username = api.writes[0]
+        self.assertEqual(target, "target")
+        self.assertEqual(username, "youtube")
+        self.assertIsInstance(blob, bytes)
+        self.assertEqual(YouTubeCredentials.from_json(blob.decode("utf-8")), credentials)
 
     def test_windows_store_reads_utf16_credential_blob(self) -> None:
         credentials = YouTubeCredentials("client", "secret", "refresh")
-        fake_win32cred = SimpleNamespace(
-            CRED_TYPE_GENERIC=1,
-            CredRead=lambda _target, _type: {
-                "CredentialBlob": credentials.to_json().encode("utf-16-le")
-            },
+        api = _FakeCredentialApi(
+            read_blob=credentials.to_json().encode("utf-16-le") + b"\x00\x00",
         )
 
-        with patch.dict(sys.modules, {"win32cred": fake_win32cred}):
-            restored = WindowsCredentialStore("target").read()
+        restored = WindowsCredentialStore("target", api=api).read()
 
         self.assertEqual(restored, credentials)
+
+    def test_windows_store_reports_missing_credentials_as_disconnected(self) -> None:
+        store = WindowsCredentialStore("target", api=_FakeCredentialApi())
+
+        self.assertIsNone(store.read())
+
+    def test_windows_store_propagates_api_failures(self) -> None:
+        api = _FakeCredentialApi()
+        api.read_error = YouTubeOAuthError("Windows資格情報ストアの読み取りに失敗しました")
+
+        with self.assertRaisesRegex(YouTubeOAuthError, "読み取りに失敗"):
+            WindowsCredentialStore("target", api=api).read()
+
+    def test_windows_store_propagates_delete_failures(self) -> None:
+        api = _FakeCredentialApi()
+        api.delete_error = YouTubeOAuthError("Windows資格情報ストアの削除に失敗しました")
+
+        with self.assertRaisesRegex(YouTubeOAuthError, "削除に失敗"):
+            WindowsCredentialStore("target", api=api).delete()
+
+    def test_windows_store_reports_invalid_json(self) -> None:
+        api = _FakeCredentialApi(read_blob=b"not-json")
+
+        with self.assertRaisesRegex(YouTubeOAuthError, "JSON"):
+            WindowsCredentialStore("target", api=api).read()
+
+    def test_windows_store_target_can_be_overridden_for_smoke_tests(self) -> None:
+        api = _FakeCredentialApi()
+
+        with patch.dict(os.environ, {"MDRL_YOUTUBE_CREDENTIAL_TARGET": "target-smoke"}):
+            store = WindowsCredentialStore(api=api)
+
+        self.assertEqual(store.target, "target-smoke")
 
     def test_load_client_secrets_supports_installed_client(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
