@@ -111,14 +111,14 @@ class HttpYouTubeClient(YouTubeClient):
         )
 
     def _refresh_access_token(self, credentials: YouTubeCredentials) -> str:
-        data = urllib.parse.urlencode(
-            {
-                "client_id": credentials.client_id,
-                "client_secret": credentials.client_secret,
-                "refresh_token": credentials.refresh_token,
-                "grant_type": "refresh_token",
-            }
-        ).encode("utf-8")
+        fields = {
+            "client_id": credentials.client_id,
+            "refresh_token": credentials.refresh_token,
+            "grant_type": "refresh_token",
+        }
+        if credentials.client_secret:
+            fields["client_secret"] = credentials.client_secret
+        data = urllib.parse.urlencode(fields).encode("utf-8")
         request = urllib.request.Request(
             "https://oauth2.googleapis.com/token",
             data=data,

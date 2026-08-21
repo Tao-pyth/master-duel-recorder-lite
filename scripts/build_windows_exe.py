@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -16,6 +17,8 @@ VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 NATIVE_HELPER_PROJECT = Path("native/audio_loopback/mdrl_audio_loopback.vcxproj")
 NATIVE_HELPER_OUTPUT = Path("native/audio_loopback/bin/mdrl-audio-loopback.exe")
 APP_ICON = Path("assets/mdrl.ico")
+YOUTUBE_OAUTH_CLIENT_ASSET = Path("assets/youtube-oauth-client.json")
+YOUTUBE_OAUTH_CLIENT_ID_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_ID"
 
 
 def read_project_version(project_root: Path = PROJECT_ROOT) -> str:
@@ -83,6 +86,7 @@ def build_command(
     executable_name: str = EXECUTABLE_NAME,
     entrypoint: str = "mdrl_entry.py",
     windowed: bool = False,
+    youtube_oauth_client_asset: Path | None = None,
 ) -> tuple[str, ...]:
     command = [
         sys.executable,
@@ -117,8 +121,70 @@ def build_command(
     icon = project_root / APP_ICON
     if icon.is_file():
         command.extend(["--add-data", f"{icon};assets"])
+    if youtube_oauth_client_asset is not None:
+        command.extend(["--add-data", f"{youtube_oauth_client_asset};assets"])
     command.append(str(project_root / "packaging" / entrypoint))
     return tuple(command)
+
+
+def resolve_youtube_oauth_client_asset(
+    project_root: Path,
+    build_root: Path,
+    *,
+    require: bool = False,
+) -> Path | None:
+    configured = project_root / YOUTUBE_OAUTH_CLIENT_ASSET
+    if configured.is_file():
+        _validate_youtube_oauth_client_asset(configured)
+        return configured
+    client_id = os.environ.get(YOUTUBE_OAUTH_CLIENT_ID_ENV, "").strip()
+    if client_id:
+        build_root.mkdir(parents=True, exist_ok=True)
+        generated = build_root / YOUTUBE_OAUTH_CLIENT_ASSET.name
+        generated.write_text(
+            json.dumps(
+                {
+                    "installed": {
+                        "client_id": client_id,
+                        "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        _validate_youtube_oauth_client_asset(generated)
+        return generated
+    if require:
+        raise RuntimeError(
+            "YouTube OAuth client_idが未設定です。"
+            f"{YOUTUBE_OAUTH_CLIENT_ASSET}または{YOUTUBE_OAUTH_CLIENT_ID_ENV}を設定してください。"
+        )
+    return None
+
+
+def _validate_youtube_oauth_client_asset(path: Path) -> None:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"YouTube OAuth client設定を読めません: {path}: {exc}") from exc
+    if not isinstance(document, dict):
+        raise RuntimeError("YouTube OAuth client設定のルートはobjectである必要があります")
+    client = document.get("installed") or document.get("web")
+    if not isinstance(client, dict):
+        raise RuntimeError("YouTube OAuth client設定にはinstalledまたはweb objectが必要です")
+    client_id = client.get("client_id")
+    if not isinstance(client_id, str) or not client_id.strip():
+        raise RuntimeError("YouTube OAuth client_idは空でない文字列である必要があります")
+    forbidden = {"client_secret", "refresh_token", "access_token"}
+    leaked = sorted(key for key in forbidden if str(client.get(key, "")).strip())
+    if leaked:
+        raise RuntimeError(
+            "配布用YouTube OAuth client設定にsecret相当値を含めないでください: "
+            + ", ".join(leaked)
+        )
 
 
 def build_native_audio_helper(project_root: Path = PROJECT_ROOT) -> Path:
@@ -196,7 +262,11 @@ def _find_msbuild() -> Path:
     raise RuntimeError("MSBuildとC++ Build Toolsが見つかりません")
 
 
-def build_windows_executable(project_root: Path = PROJECT_ROOT) -> Path:
+def build_windows_executable(
+    project_root: Path = PROJECT_ROOT,
+    *,
+    youtube_oauth_client_asset: Path | None = None,
+) -> Path:
     if sys.platform != "win32":
         raise RuntimeError("Windows EXEはWindows上でビルドする必要があります")
     version = read_project_version(project_root)
@@ -204,7 +274,11 @@ def build_windows_executable(project_root: Path = PROJECT_ROOT) -> Path:
     build_root.mkdir(parents=True, exist_ok=True)
     version_file = build_root / "windows-version-info.txt"
     version_file.write_text(windows_version_resource(version), encoding="utf-8")
-    command = build_command(project_root, version_file)
+    command = build_command(
+        project_root,
+        version_file,
+        youtube_oauth_client_asset=youtube_oauth_client_asset,
+    )
     completed = subprocess.run(command, cwd=project_root, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"PyInstallerビルドに失敗しました: exit code {completed.returncode}")
@@ -214,11 +288,23 @@ def build_windows_executable(project_root: Path = PROJECT_ROOT) -> Path:
     return executable
 
 
-def build_windows_executables(project_root: Path = PROJECT_ROOT) -> tuple[Path, Path]:
-    build_native_audio_helper(project_root)
-    cli_executable = build_windows_executable(project_root)
+def build_windows_executables(
+    project_root: Path = PROJECT_ROOT,
+    *,
+    require_youtube_oauth_client: bool = False,
+) -> tuple[Path, Path]:
     version = read_project_version(project_root)
     build_root = project_root / "build"
+    youtube_oauth_client_asset = resolve_youtube_oauth_client_asset(
+        project_root,
+        build_root,
+        require=require_youtube_oauth_client,
+    )
+    build_native_audio_helper(project_root)
+    cli_executable = build_windows_executable(
+        project_root,
+        youtube_oauth_client_asset=youtube_oauth_client_asset,
+    )
     gui_version_file = build_root / "windows-gui-version-info.txt"
     gui_version_file.write_text(
         windows_version_resource(
@@ -234,6 +320,7 @@ def build_windows_executables(project_root: Path = PROJECT_ROOT) -> tuple[Path, 
         executable_name=GUI_EXECUTABLE_NAME,
         entrypoint="mdrl_gui_entry.py",
         windowed=True,
+        youtube_oauth_client_asset=youtube_oauth_client_asset,
     )
     completed = subprocess.run(command, cwd=project_root, check=False)
     if completed.returncode != 0:
@@ -246,9 +333,16 @@ def build_windows_executables(project_root: Path = PROJECT_ROOT) -> tuple[Path, 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Windows向けone-file EXEを生成します。")
-    parser.parse_args()
+    parser.add_argument(
+        "--require-youtube-oauth-client",
+        action="store_true",
+        help="YouTube OAuth client_id未設定のまま配布EXEを作ることを拒否します。",
+    )
+    args = parser.parse_args()
     try:
-        executables = build_windows_executables()
+        executables = build_windows_executables(
+            require_youtube_oauth_client=args.require_youtube_oauth_client
+        )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 1

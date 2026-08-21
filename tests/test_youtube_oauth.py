@@ -33,6 +33,15 @@ class YouTubeOAuthTest(unittest.TestCase):
         store.delete()
         self.assertIsNone(store.read())
 
+    def test_credentials_can_round_trip_without_client_secret(self) -> None:
+        credentials = YouTubeCredentials("client", "", "refresh")
+
+        restored = YouTubeCredentials.from_json(credentials.to_json())
+
+        self.assertEqual(restored.client_id, "client")
+        self.assertEqual(restored.client_secret, "")
+        self.assertEqual(restored.refresh_token, "refresh")
+
     def test_load_client_secrets_supports_installed_client(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "client.json"
@@ -96,6 +105,29 @@ class YouTubeOAuthTest(unittest.TestCase):
         )
 
         self.assertEqual(client.client_id, "client-id")
+        self.assertEqual(client.client_secret, "")
+
+    def test_distributed_oauth_client_can_come_from_project_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            asset = root / "assets" / "youtube-oauth-client.json"
+            asset.parent.mkdir()
+            asset.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "asset-client",
+                            "auth_uri": "https://example.test/auth",
+                            "token_uri": "https://example.test/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            client = load_distributed_oauth_client(environ={}, project_root=root)
+
+        self.assertEqual(client.client_id, "asset-client")
         self.assertEqual(client.client_secret, "")
 
     def test_loopback_authorization_receives_code_without_copy_paste(self) -> None:

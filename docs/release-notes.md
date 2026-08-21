@@ -1,5 +1,21 @@
 # リリースノート
 
+## V1.4.1: YouTube一般配布導線hotfix - 2026-08-21
+
+- 改善ページの状態更新で`list_history()`の引数不整合により例外が出る回帰を修正した
+- YouTube OAuth client_idを配布EXEへ同梱できるようにし、releaseビルドでは未設定を検出するようにした
+- OAuth client_id未設定時はGUIでYouTube連携開始を無効化し、配布ビルド側の前提不足として表示するようにした
+- `MP4準備`をGUIの独立主要ナビから外し、録画履歴からのYouTube投稿フロー内で投稿前処理として扱うようにした
+- `改善`を未成熟な主要ナビとして露出しないよう整理し、録画なし戦績追加など必要な操作は戦績管理側から維持した
+- PKCE/loopback、OS資格情報ストア、prepare queue、manifest、DB V16、secret非保存契約は維持した
+- 実YouTube private投稿E2Eは、配布者管理OAuth ClientとGoogleアカウント許可が必要な外部ゲートとして残る
+- Ruff、全531テスト、Python GUIスモーク、CLI/GUI one-file EXEビルド、両スモークに合格した
+- release用OAuth client_id必須検証は未設定時にビルド前失敗することを確認した
+- ローカルCLI EXE SHA-256: `558E74835F97CDE2A9431DF00DE56E614B2C7D28F982960E8E951DFCE118C864`
+- ローカルGUI EXE SHA-256: `08483D56FA8A91DA0A895D0C8C14440F4576AE3468C0CF5347EC2A6EC646638D`
+
+追跡: [V1.4.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/61)、親Issue #444、子Issue #445 - #450
+
 ## V1.4.0: YouTube一般配布導線 - 2026-08-21
 
 - YouTube OAuthをPKCEと`127.0.0.1:<random port>` loopback callbackに対応させ、通常導線で認可コードのコピー&ペーストを不要にした

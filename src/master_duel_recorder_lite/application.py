@@ -116,7 +116,7 @@ from .upload_manifest import UploadManifestWriter
 from .upload_media import UploadMediaValidator, find_ffprobe
 from .upload_metadata import UploadMetadata, UploadPrivacy
 from .upload_preparation import UploadPreparationResult, UploadPreparationService
-from .upload_queue import UploadQueueItem, UploadQueueStore
+from .upload_queue import UploadQueueItem, UploadQueueState, UploadQueueStore
 from .visual_detection import DetectionCandidate, FrameAnalysis
 from .visual_diagnostics import VisualDiagnosticSession
 from .visual_worker import VisualDetectionStatus
@@ -127,6 +127,7 @@ from .youtube_oauth import (
     CredentialStore,
     WindowsCredentialStore,
     authorize_with_loopback,
+    distributed_oauth_client_configured,
     load_distributed_oauth_client,
 )
 from .youtube_service import YouTubeUploadOutcome, YouTubeUploadService
@@ -288,6 +289,14 @@ class YouTubeConnectionStatus:
     state: str
     message: str
     scope: str = ""
+    can_connect: bool = False
+
+
+@dataclass(frozen=True)
+class YouTubePreparationStatus:
+    state: str
+    message: str
+    queue_id: str = ""
 
 
 EventCallback = Callable[[ApplicationEvent], None]
@@ -318,6 +327,7 @@ class RecorderApplicationService:
         ffmpeg_installer: FfmpegInstaller | None = None,
         youtube_credential_store: CredentialStore | None = None,
         youtube_client: YouTubeClient | None = None,
+        youtube_oauth_environ: Mapping[str, str] | None = None,
     ) -> None:
         self.project_root = project_root
         self.user_data_dir = user_data_dir
@@ -329,6 +339,7 @@ class RecorderApplicationService:
         self._ffmpeg_installer = ffmpeg_installer or FfmpegInstaller()
         self._youtube_credential_store = youtube_credential_store or WindowsCredentialStore()
         self._youtube_client = youtube_client
+        self._youtube_oauth_environ = youtube_oauth_environ
         self._lock = threading.RLock()
         self._current: PreparedRecording | None = None
         self._automatic_snapshot: RecordingSnapshot | None = None
@@ -945,22 +956,77 @@ class RecorderApplicationService:
         return entry
 
     def youtube_connection_status(self) -> YouTubeConnectionStatus:
+        client_configured = distributed_oauth_client_configured(
+            environ=self._youtube_oauth_environ,
+            project_root=self.project_root,
+        )
         try:
             credentials = self._youtube_credential_store.read()
         except Exception as exc:
             return YouTubeConnectionStatus("error", f"YouTube連携状態を確認できません: {exc}")
         if credentials is None:
-            return YouTubeConnectionStatus("disconnected", "YouTubeは未連携です")
+            if not client_configured:
+                return YouTubeConnectionStatus(
+                    "unconfigured",
+                    "このビルドではYouTube連携を開始できません。配布者のOAuth client_id設定が必要です。",
+                    can_connect=False,
+                )
+            return YouTubeConnectionStatus(
+                "disconnected",
+                "YouTubeは未連携です",
+                can_connect=True,
+            )
         return YouTubeConnectionStatus("connected", "YouTubeは連携済みです", credentials.scope)
 
     def connect_youtube(self, *, timeout_seconds: float = 180.0) -> YouTubeConnectionStatus:
         try:
-            client = load_distributed_oauth_client(project_root=self.project_root)
+            client = load_distributed_oauth_client(
+                environ=self._youtube_oauth_environ,
+                project_root=self.project_root,
+            )
             result = authorize_with_loopback(client, timeout_seconds=timeout_seconds)
             self._youtube_credential_store.write(result.credentials)
         except Exception as exc:
             raise ApplicationOperationError(f"YouTube連携を完了できません: {exc}") from exc
         return self.youtube_connection_status()
+
+    def youtube_preparation_status(self, recording_id: str) -> YouTubePreparationStatus:
+        self.get_history(recording_id)
+        items = [
+            item for item in UploadQueueStore(self.paths).list() if item.recording_id == recording_id
+        ]
+        completed = next((item for item in items if item.state is UploadQueueState.COMPLETED), None)
+        if completed is not None:
+            return YouTubePreparationStatus(
+                "completed",
+                "投稿用MP4は準備済みです。既存の準備結果を再利用します。",
+                completed.queue_id,
+            )
+        active = next(
+            (
+                item
+                for item in items
+                if item.state in {UploadQueueState.WAITING, UploadQueueState.PROCESSING}
+            ),
+            None,
+        )
+        if active is not None:
+            return YouTubePreparationStatus(
+                active.state.value,
+                "投稿用MP4準備は待機中または処理中です。投稿時に同じ準備キューを確認します。",
+                active.queue_id,
+            )
+        failed = next((item for item in items if item.state is UploadQueueState.FAILED), None)
+        if failed is not None:
+            return YouTubePreparationStatus(
+                "failed",
+                f"前回の投稿用MP4準備に失敗しています。投稿時に再準備が必要です: {failed.error or '詳細なし'}",
+                failed.queue_id,
+            )
+        return YouTubePreparationStatus(
+            "not_prepared",
+            "投稿用MP4は未準備です。投稿時に元録画を保持したまま自動で準備します。",
+        )
 
     def disconnect_youtube(self) -> YouTubeConnectionStatus:
         try:

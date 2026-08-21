@@ -306,6 +306,27 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertEqual(outcome.upload.watch_url, "https://youtu.be/fake-video-id")
         self.assertEqual(len(client.uploaded), 1)
 
+    def test_youtube_status_distinguishes_unconfigured_and_connectable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            unconfigured = RecorderApplicationService(
+                user_data_dir=Path(tmp_dir) / "unconfigured",
+                youtube_credential_store=MemoryCredentialStore(),
+                youtube_oauth_environ={},
+            )
+            connectable = RecorderApplicationService(
+                user_data_dir=Path(tmp_dir) / "connectable",
+                youtube_credential_store=MemoryCredentialStore(),
+                youtube_oauth_environ={"MDRL_YOUTUBE_OAUTH_CLIENT_ID": "client-id"},
+            )
+
+            unconfigured_status = unconfigured.youtube_connection_status()
+            connectable_status = connectable.youtube_connection_status()
+
+        self.assertEqual(unconfigured_status.state, "unconfigured")
+        self.assertFalse(unconfigured_status.can_connect)
+        self.assertEqual(connectable_status.state, "disconnected")
+        self.assertTrue(connectable_status.can_connect)
+
     def test_manual_duel_write_is_rejected_during_watch(self) -> None:
         service = RecorderApplicationService()
         service._watch_thread = SimpleNamespace(is_alive=lambda: True)

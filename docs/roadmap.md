@@ -865,3 +865,18 @@
 追跡: [V1.4.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/59)、親Issue #427、子Issue #428 - #433
 
 完了条件: GUIだけでYouTube連携とprivate投稿が完了し、秘密情報非保存、既存CLI fallback互換、実YouTube private投稿E2E、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、両EXEスモーク、Release Contract確認、GitHub Releaseが成功すること。
+
+## V1.4.1: YouTube一般配布導線hotfix
+
+状態: 外部検証待ち
+
+- 改善ページの履歴取得回帰を修正する
+- 配布EXEへYouTube OAuth client_idを安全に供給し、未設定releaseビルドを検出する
+- OAuth client_id未設定時のGUI導線を、例外ダイアログではなく状態表示と操作可否で扱う
+- MP4準備をYouTube投稿導線へ統合し、独立した主要ナビとして露出しない
+- 改善ページの主要ナビ露出を整理し、必要な操作は戦績管理などへ移す
+- V1.4.1のバージョン、リリースノート、検証記録、配布物を整合する
+
+追跡: [V1.4.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/61)、親Issue #444、子Issue #445 - #450
+
+完了条件: GUIで改善ページ回帰が再発せず、YouTube client_id設定済みビルドで連携開始へ進め、未設定ビルドでは明確に無効化され、MP4準備がYouTube投稿フロー内で確認でき、Ruff、全単体テスト、GUIスモーク、CLI/GUI EXEビルド、両EXEスモーク、実YouTube private投稿E2Eまたは外部ゲート記録が完了すること。

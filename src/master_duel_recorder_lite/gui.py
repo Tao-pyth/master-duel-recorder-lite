@@ -765,9 +765,7 @@ class RecorderGui:
             ("decks", "デッキ名"),
             ("tags", "タグ"),
             ("seasons", "シーズン"),
-            ("prepare", "MP4準備"),
             ("reliability", "信頼性"),
-            ("improve", "改善"),
             ("settings", "設定"),
         ):
             button = tk.Button(
@@ -1246,14 +1244,6 @@ class RecorderGui:
             self.open_history_columns_menu,
         )
         self.history_columns_button.pack(side="left", padx=(6, 0))
-        self.history_prepare_button = self._icon_button(
-            action_bar,
-            "export",
-            "選択した録画をMP4準備へ送る",
-            self.prepare_selected_history,
-            state="disabled",
-        )
-        self.history_prepare_button.pack(side="left", padx=(6, 0))
         self.history_youtube_button = self._icon_button(
             action_bar,
             "link",
@@ -1344,7 +1334,6 @@ class RecorderGui:
         self.widgets["history_bulk"] = self.history_bulk_button
         self.widgets["history_refresh"] = self.history_refresh_button
         self.widgets["history_columns"] = self.history_columns_button
-        self.widgets["history_prepare"] = self.history_prepare_button
         self.widgets["history_youtube"] = self.history_youtube_button
 
     def _build_statistics_page(self) -> None:
@@ -3357,6 +3346,7 @@ class RecorderGui:
         privacy_var = tk.StringVar(value="private")
         tags_var = tk.StringVar(value="Master Duel")
         status_var = tk.StringVar(value="投稿前に内容を確認してください")
+        preparation_var = tk.StringVar(value="投稿用MP4準備状態を確認しています")
         ttk.Label(frame, text="タイトル", style="Body.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Entry(frame, textvariable=title_var, width=54).grid(
             row=1, column=0, columnspan=2, sticky="ew", pady=(4, 10)
@@ -3376,8 +3366,20 @@ class RecorderGui:
             state="readonly",
             width=18,
         ).grid(row=7, column=0, sticky="w", pady=(4, 10))
-        ttk.Label(frame, textvariable=status_var, style="Muted.TLabel").grid(
+        ttk.Label(frame, textvariable=preparation_var, style="Muted.TLabel").grid(
             row=8, column=0, columnspan=2, sticky="w", pady=(0, 12)
+        )
+        ttk.Label(frame, textvariable=status_var, style="Muted.TLabel").grid(
+            row=9, column=0, columnspan=2, sticky="w", pady=(0, 12)
+        )
+
+        def preparation_loaded(status: object) -> None:
+            preparation_var.set(getattr(status, "message", str(status)))
+
+        self._run(
+            lambda: self.service.youtube_preparation_status(selected.recording_id),
+            preparation_loaded,
+            lambda exc: preparation_var.set(f"投稿用MP4準備状態を確認できません: {exc}"),
         )
 
         def submit() -> None:
@@ -3419,9 +3421,9 @@ class RecorderGui:
             )
 
         upload_button = ttk.Button(frame, text="投稿する", command=submit)
-        upload_button.grid(row=9, column=0, sticky="ew", padx=(0, 8))
+        upload_button.grid(row=10, column=0, sticky="ew", padx=(0, 8))
         ttk.Button(frame, text="キャンセル", command=dialog.destroy).grid(
-            row=9, column=1, sticky="ew"
+            row=10, column=1, sticky="ew"
         )
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
@@ -3453,7 +3455,9 @@ class RecorderGui:
         self.youtube_status_var.set(status.message)
         self.youtube_scope_var.set(f"scope: {status.scope}" if status.scope else "")
         connected = status.state == "connected"
-        self.youtube_connect_button.configure(state="disabled" if connected else "normal")
+        self.youtube_connect_button.configure(
+            state="normal" if status.can_connect and not connected else "disabled"
+        )
         self.youtube_disconnect_button.configure(state="normal" if connected else "disabled")
         self.youtube_test_button.configure(state="normal" if connected else "disabled")
 
@@ -3867,7 +3871,6 @@ class RecorderGui:
         self.history_action_buttons["delete"].configure(
             state="normal" if len(selection) == 1 and view is not None else "disabled"
         )
-        self.history_prepare_button.configure(state=media_state)
         self.history_youtube_button.configure(
             state="normal" if has_recording and len(selection) == 1 else "disabled"
         )
@@ -7214,11 +7217,18 @@ def main(argv: list[str] | None = None) -> int:
             "width": root.winfo_width(),
             "height": root.winfo_height(),
             "widgets": sorted(app.widgets),
+            "nav_pages": sorted(app.nav_buttons),
             "title": root.title(),
             "version": __version__,
             "runtime_data": str(service.paths.root),
             "history_refresh_visible": history_refresh_right <= root.winfo_width(),
             "calendar_contract": calendar_contract,
+            "youtube_flow_contract": (
+                "prepare" not in app.nav_buttons
+                and "improve" not in app.nav_buttons
+                and "history_youtube" in app.widgets
+                and "youtube_status" in app.widgets
+            ),
         }
         if (
             geometry["width"] < 900
@@ -7226,6 +7236,7 @@ def main(argv: list[str] | None = None) -> int:
             or len(app.widgets) < 8
             or not geometry["history_refresh_visible"]
             or not geometry["calendar_contract"]
+            or not geometry["youtube_flow_contract"]
         ):
             app._destroy()
             return 1

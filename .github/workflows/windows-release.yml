@@ -46,7 +46,9 @@ jobs:
       - name: Test
         run: python -W error::ResourceWarning -m unittest discover -s tests
       - name: Build Windows EXE
-        run: python scripts/build_windows_exe.py
+        env:
+          MDRL_YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.MDRL_YOUTUBE_OAUTH_CLIENT_ID }}
+        run: python scripts/build_windows_exe.py --require-youtube-oauth-client
       - name: Smoke test Windows EXEs
         shell: pwsh
         run: |

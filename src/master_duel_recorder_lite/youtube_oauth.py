@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -59,7 +60,7 @@ class YouTubeCredentials:
         try:
             return cls(
                 client_id=_required_text(document.get("client_id"), "client_id"),
-                client_secret=_required_text(document.get("client_secret"), "client_secret"),
+                client_secret=str(document.get("client_secret", "")).strip(),
                 refresh_token=_required_text(document.get("refresh_token"), "refresh_token"),
                 scope=_required_text(document.get("scope", YOUTUBE_UPLOAD_SCOPE), "scope"),
             )
@@ -203,16 +204,36 @@ def load_distributed_oauth_client(
             auth_uri="https://accounts.google.com/o/oauth2/v2/auth",
             token_uri="https://oauth2.googleapis.com/token",
         )
-    candidates: list[Path] = []
-    if project_root is not None:
-        candidates.append(project_root / "assets" / YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE)
-    candidates.append(Path(__file__).resolve().parents[2] / "assets" / YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE)
+    candidates = _distributed_oauth_client_candidates(project_root=project_root)
     for candidate in candidates:
         if candidate.is_file():
             return load_client_secrets(candidate)
     raise YouTubeOAuthError(
         "YouTube OAuthクライアントが未設定です。配布ビルドへOAuth client_idを組み込んでください。"
     )
+
+
+def distributed_oauth_client_configured(
+    *,
+    environ: Mapping[str, str] | None = None,
+    project_root: Path | None = None,
+) -> bool:
+    try:
+        load_distributed_oauth_client(environ=environ, project_root=project_root)
+    except YouTubeOAuthError:
+        return False
+    return True
+
+
+def _distributed_oauth_client_candidates(*, project_root: Path | None) -> list[Path]:
+    candidates: list[Path] = []
+    if project_root is not None:
+        candidates.append(project_root / "assets" / YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE)
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if isinstance(frozen_root, str):
+        candidates.append(Path(frozen_root) / "assets" / YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE)
+    candidates.append(Path(__file__).resolve().parents[2] / "assets" / YOUTUBE_OAUTH_BUNDLED_CLIENT_FILE)
+    return candidates
 
 
 def new_pkce_code_verifier() -> str:
