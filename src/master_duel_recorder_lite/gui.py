@@ -6261,12 +6261,12 @@ class RecorderGui:
             return
         self._run(
             lambda: (
-                self.service.list_history(DuelManagementQuery(limit=100)),
+                self.service.list_history_views(query=DuelManagementQuery(limit=100)),
                 self.service.list_decks(),
                 self.service.list_tags(),
             ),
             lambda result: self.improvement_status_var.set(
-                f"最近の戦績候補: {len(result[0].items)}件 / "
+                f"最近の戦績候補: {len(result[0])}件 / "
                 f"デッキ: {len(result[1])}件 / タグ: {len(result[2])}件"
             ),
         )

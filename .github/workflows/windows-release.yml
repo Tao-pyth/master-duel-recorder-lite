@@ -103,3 +103,6 @@ jobs:
             --verify-tag `
             --title "master-duel-recorder-lite ${{ github.ref_name }}" `
             --notes-file $notes
+      - name: Verify published release assets
+        if: github.event_name == 'push'
+        run: python scripts/verify_release_assets.py "${{ github.ref_name }}"

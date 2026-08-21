@@ -117,7 +117,13 @@ class AppUpdateService:
         return document
 
     def _read_bytes(self, url: str, maximum: int) -> bytes:
-        request = Request(url, headers={"User-Agent": "master-duel-recorder-lite-update"})
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "master-duel-recorder-lite-update",
+                "Cache-Control": "no-cache",
+            },
+        )
         try:
             with self.opener(request, timeout=20) as response:  # type: ignore[attr-defined]
                 data = response.read(maximum + 1)

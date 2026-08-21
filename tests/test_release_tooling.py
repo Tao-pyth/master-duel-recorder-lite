@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.build_windows_exe import (
     EXECUTABLE_NAME,
@@ -18,6 +19,10 @@ from scripts.verify_release_tag import (
     read_package_version,
     verify_project_version,
     verify_release_tag,
+)
+from scripts.verify_release_assets import (
+    ReleaseAssetVerificationError,
+    verify_release_assets,
 )
 
 
@@ -105,6 +110,90 @@ class ReleaseToolingTest(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 read_project_version(root)
+
+    def test_release_asset_verification_accepts_matching_checksums(self) -> None:
+        release = {
+            "assets": [
+                {
+                    "name": "master-duel-recorder-lite.exe",
+                    "digest": "sha256:" + "1" * 64,
+                    "browser_download_url": "https://example.invalid/cli.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite.exe.sha256",
+                    "digest": "sha256:" + "2" * 64,
+                    "browser_download_url": "https://example.invalid/cli.sha256",
+                },
+                {
+                    "name": "master-duel-recorder-lite-gui.exe",
+                    "digest": "sha256:" + "a" * 64,
+                    "browser_download_url": "https://example.invalid/gui.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-gui.exe.sha256",
+                    "digest": "sha256:" + "b" * 64,
+                    "browser_download_url": "https://example.invalid/gui.sha256",
+                },
+            ]
+        }
+
+        def read_bytes(url: str, maximum: int) -> bytes:
+            self.assertGreaterEqual(maximum, 4096)
+            if url.endswith("/v1.4.0"):
+                return __import__("json").dumps(release).encode()
+            if "cli.sha256" in url:
+                return (("1" * 64) + "  master-duel-recorder-lite.exe\n").encode()
+            if "gui.sha256" in url:
+                return (("a" * 64) + "  master-duel-recorder-lite-gui.exe\n").encode()
+            raise AssertionError(url)
+
+        with patch("scripts.verify_release_assets._read_bytes", read_bytes):
+            self.assertEqual(
+                verify_release_assets("v1.4.0"),
+                [
+                    "master-duel-recorder-lite.exe: " + "1" * 64,
+                    "master-duel-recorder-lite-gui.exe: " + "a" * 64,
+                ],
+            )
+
+    def test_release_asset_verification_rejects_mismatched_checksum(self) -> None:
+        release = {
+            "assets": [
+                {
+                    "name": "master-duel-recorder-lite.exe",
+                    "digest": "sha256:" + "1" * 64,
+                    "browser_download_url": "https://example.invalid/cli.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite.exe.sha256",
+                    "digest": "sha256:" + "2" * 64,
+                    "browser_download_url": "https://example.invalid/cli.sha256",
+                },
+                {
+                    "name": "master-duel-recorder-lite-gui.exe",
+                    "digest": "sha256:" + "a" * 64,
+                    "browser_download_url": "https://example.invalid/gui.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-gui.exe.sha256",
+                    "digest": "sha256:" + "b" * 64,
+                    "browser_download_url": "https://example.invalid/gui.sha256",
+                },
+            ]
+        }
+
+        def read_bytes(url: str, _maximum: int) -> bytes:
+            if url.endswith("/v1.4.0"):
+                return __import__("json").dumps(release).encode()
+            if "cli.sha256" in url:
+                return (("0" * 64) + "  master-duel-recorder-lite.exe\n").encode()
+            if "gui.sha256" in url:
+                return (("a" * 64) + "  master-duel-recorder-lite-gui.exe\n").encode()
+            raise AssertionError(url)
+
+        with patch("scripts.verify_release_assets._read_bytes", read_bytes):
+            with self.assertRaisesRegex(ReleaseAssetVerificationError, "一致しません"):
+                verify_release_assets("v1.4.0")
 
 
 if __name__ == "__main__":
