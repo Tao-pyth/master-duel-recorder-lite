@@ -1,5 +1,18 @@
 # Third-party notices
 
+## PySide6 / Qt for Python
+
+The optional in-app review preview uses PySide6 / Qt for Python when the
+`review` extra or release build dependencies are installed. PySide6 and Qt are
+provided by The Qt Company and contributors under the licenses published with
+the PySide6 wheels and Qt runtime components, including LGPL terms for the Qt
+libraries used by this project.
+
+See:
+
+- https://doc.qt.io/qtforpython/licenses.html
+- https://www.qt.io/licensing/open-source-lgpl-obligations
+
 ## Microsoft Windows classic samples
 
 The `mdrl-audio-loopback` helper contains code derived from the Microsoft

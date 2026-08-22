@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "master-duel-recorder-lite"
-version = "1.4.6"
+version = "1.5.0"
 description = "OBSに依存しないMaster Duel向け軽量録画支援ツール"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,7 +13,13 @@ authors = [{ name = "Tao-pyth" }]
 dependencies = ["pywin32>=306; platform_system == 'Windows'"]
 
 [project.optional-dependencies]
-build = ["pyinstaller==6.21.0", "pyinstaller-hooks-contrib==2026.6", "Pillow==11.3.0"]
+review = ["PySide6>=6.7,<7"]
+build = [
+    "pyinstaller==6.21.0",
+    "pyinstaller-hooks-contrib==2026.6",
+    "Pillow==11.3.0",
+    "PySide6>=6.7,<7",
+]
 dev = ["ruff==0.15.21"]
 
 [project.scripts]

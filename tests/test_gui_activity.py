@@ -17,6 +17,7 @@ from master_duel_recorder_lite.gui import (
     WAITING_ACTIVITY_PREFIX,
     _format_statistics_detail,
     _format_win_rate,
+    _review_launch_command,
     calendar_header_contract,
     _parse_filter_date,
     incomplete_duel_count_presentation,
@@ -83,6 +84,17 @@ class GuiActivityTest(unittest.TestCase):
         self.assertTrue(
             all(ord(ICON_GLYPHS[item[0]]) >= 0xE000 for item in HISTORY_ROW_ACTIONS)
         )
+
+    def test_review_launch_command_uses_cli_entry_in_development(self) -> None:
+        command = _review_launch_command(
+            "recording-id",
+            user_data_dir=Path("user_data"),
+        )
+
+        self.assertIn("-m", command)
+        self.assertIn("master_duel_recorder_lite", command)
+        self.assertEqual(command[-3:], ("launch", "recording-id", "--fallback-external"))
+        self.assertIn("--user-data-dir", command)
 
     def test_calendar_header_uses_same_seven_column_grid_as_weekdays(self) -> None:
         contract = calendar_header_contract()

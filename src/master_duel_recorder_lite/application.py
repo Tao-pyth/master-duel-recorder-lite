@@ -29,6 +29,7 @@ from .capture_targets import (
     capture_input_for_window_region,
     resolve_configured_capture,
 )
+from .clip_export import ClipExportResult, ClipExportService
 from .config import (
     AppConfig,
     LoadedAppConfig,
@@ -107,6 +108,12 @@ from .recording_history import (
 )
 from .recording_browsing import RecordingBrowser, RecordingReference
 from .recording_session import RecordingResult, RecordingState
+from .review_viewmodel import (
+    ReviewClipExportRequest,
+    ReviewMarkerRequest,
+    ReviewViewModel,
+    build_review_view_model,
+)
 from .season_report_html import SeasonReportHtmlExporter
 from .season_reports import SeasonReport, SeasonReportService
 from .seasons import Season, SeasonRepository
@@ -1507,6 +1514,48 @@ class RecorderApplicationService:
 
     def reject_timeline_event(self, event_id: str) -> DuelEvent:
         return DuelTimelineRepository.from_runtime_paths(self.paths).reject(event_id)
+
+    def get_review_view_model(self, recording_id: str) -> ReviewViewModel:
+        history = self.get_history(recording_id)
+        reference = self.resolve_recording(recording_id)
+        upload = YouTubeUploadRepository.from_runtime_paths(self.paths).completed_for_recording(
+            recording_id
+        )
+        return build_review_view_model(
+            history=history,
+            reference=reference,
+            duel_record=self.get_duel_record(recording_id),
+            timeline=self.list_timeline(recording_id),
+            youtube_watch_url=upload.watch_url if upload is not None else None,
+        )
+
+    def add_review_marker(self, request: ReviewMarkerRequest) -> DuelEvent:
+        return self.add_timeline_event(
+            request.recording_id,
+            elapsed_ms=request.elapsed_ms,
+            event_type="marker",
+            label=request.label,
+        )
+
+    def export_review_clip(self, request: ReviewClipExportRequest) -> ClipExportResult:
+        self._require_data_management_idle()
+        discovery = discover_ffmpeg(self.load_config().config.ffmpeg_path)
+        if not discovery.found or discovery.executable is None:
+            raise ApplicationOperationError("FFmpegが見つかりません")
+        service = ClipExportService(
+            paths=self.paths,
+            repository=RecordingHistoryRepository.from_runtime_paths(self.paths),
+            ffmpeg_executable=discovery.executable,
+            validator=UploadMediaValidator(
+                ffprobe_executable=find_ffprobe(discovery.executable)
+            ),
+        )
+        return service.export_clip(
+            recording_id=request.recording_id,
+            center_seconds=request.center_seconds,
+            before_seconds=request.before_seconds,
+            after_seconds=request.after_seconds,
+        )
 
     def check_history(self) -> tuple[ConsistencyIssue, ...]:
         return RecordingHistoryRepository.from_runtime_paths(

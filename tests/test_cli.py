@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -86,6 +86,68 @@ class CliTest(unittest.TestCase):
         document = json.loads(output.getvalue())
         self.assertFalse(document["enabled"])
         self.assertIn("Ctrl+Alt+R", document["bindings"])
+
+    def test_review_show_outputs_view_model_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            user_data = Path(tmp_dir) / "user_data"
+            paths = default_runtime_paths(user_data_dir=user_data)
+            source = paths.recordings / "review.mp4"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"video")
+            now = datetime(2026, 8, 22, tzinfo=timezone.utc)
+            history = RecordingHistoryRepository.from_runtime_paths(paths)
+            history.register_starting(
+                recording_id="review-cli",
+                output_path=source,
+                container="mp4",
+                source="manual",
+                created_at=now,
+            )
+            history.finalize(
+                "review-cli",
+                RecordingResult(
+                    RecordingState.COMPLETED,
+                    source,
+                    0,
+                    now,
+                    now + timedelta(seconds=3),
+                    source.stat().st_size,
+                    None,
+                    (),
+                ),
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--user-data-dir",
+                        str(user_data),
+                        "review",
+                        "show",
+                        "review-cli",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        document = json.loads(output.getvalue())
+        self.assertEqual(document["recording"]["recording_id"], "review-cli")
+        self.assertEqual(document["video"]["suffix"], ".mp4")
+
+    def test_review_status_reports_json_without_importing_qt(self) -> None:
+        output = io.StringIO()
+        with (
+            patch(
+                "master_duel_recorder_lite.pyside_review.importlib.util.find_spec",
+                return_value=None,
+            ),
+            redirect_stdout(output),
+        ):
+            exit_code = main(["review", "status", "--json"])
+
+        self.assertEqual(exit_code, 4)
+        document = json.loads(output.getvalue())
+        self.assertFalse(document["available"])
 
     def test_doctor_returns_two_when_preflight_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
