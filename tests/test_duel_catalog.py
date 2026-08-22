@@ -108,6 +108,40 @@ class DuelCatalogRepositoryTest(unittest.TestCase):
         self.assertTrue(reloaded.opponent_only)
         self.assertTrue(reloaded.hidden_from_history_statistics)
 
+    def test_deck_tags_and_deck_only_tags_are_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repository = self.repository(Path(tmp_dir) / "user_data")
+            deck = repository.add_deck("レジェンドアンソロジー")
+            normal_tag = repository.add_tag("イベント")
+            deck_only_tag = repository.add_tag("調整中", deck_only=True)
+
+            saved = repository.set_deck_tags(
+                deck.entry_id, (normal_tag.entry_id, deck_only_tag.entry_id)
+            )
+            record_tags = repository.list_tags(include_deck_only=False)
+            all_tags = repository.list_tags()
+            reloaded = self.repository(Path(tmp_dir) / "user_data")
+            reloaded_tags = reloaded.list_deck_tags(deck.entry_id)
+
+        self.assertEqual(
+            {tag.name for tag in saved}, {"イベント", "調整中"}
+        )
+        self.assertEqual({tag.name for tag in reloaded_tags}, {"イベント", "調整中"})
+        self.assertEqual([tag.name for tag in record_tags], ["イベント"])
+        self.assertEqual({tag.name for tag in all_tags}, {"イベント", "調整中"})
+        self.assertTrue(deck_only_tag.deck_only)
+
+    def test_tag_used_by_deck_is_archived_on_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repository = self.repository(Path(tmp_dir) / "user_data")
+            deck = repository.add_deck("青眼")
+            tag = repository.add_tag("テーマ")
+            repository.set_deck_tags(deck.entry_id, (tag.entry_id,))
+
+            deleted = repository.delete(tag.entry_id)
+
+        self.assertTrue(deleted.is_archived)
+
     def test_used_tag_is_archived_and_keeps_stable_recording_link(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir) / "user_data"

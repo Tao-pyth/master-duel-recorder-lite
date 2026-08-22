@@ -6,7 +6,7 @@
 
 ## データモデル
 
-履歴DBの現在版は10です。版3で対戦記録を、版8でシーズンとデッキ安定IDを、版9でコイントス情報を、版10で録画から独立した対戦IDと対戦日時を追加します。
+履歴DBの現在版は17です。版3で対戦記録を、版8でシーズンとデッキ安定IDを、版9でコイントス情報を、版10で録画から独立した対戦IDと対戦日時を追加します。版17ではデッキ名へタグを付けるための`deck_tag_links`と、タグを戦績入力候補から除外する`deck_only`属性を追加します。
 
 ```text
 duel_records
@@ -46,15 +46,22 @@ duel_catalog_entries
 - name
 - normalized_name
 - description
-- color: tagだけに設定する#RRGGBB
-- archived_at
+- color: #RRGGBB
+- is_archived
+- opponent_only
+- hidden_from_history_statistics
+- deck_only: tagだけが使用する。ONの場合はデッキ名分類用として戦績入力候補から除外する
 - created_at
 - updated_at
 
-duel_record_catalog_links
-- recording_id
-- entry_id
-- kind: own_deck / opponent_deck / tag
+duel_record_tag_links
+- duel_id
+- tag_entry_id
+
+deck_tag_links
+- deck_entry_id
+- tag_entry_id
+- created_at
 
 duel_editor_preferences
 - singleton: 常に1
