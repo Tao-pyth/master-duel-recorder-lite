@@ -3383,7 +3383,7 @@ class RecorderGui:
             self.record_audio_status_var.set("音声: 設定を確認できません")
             return
         labels = {
-            "process": "Master Duelのみ",
+            "process": _audio_input_display("process", config.audio_input),
             "system": f"PC全体 - {config.audio_input}",
             "device": f"入力デバイス - {config.audio_input}",
         }
@@ -6755,7 +6755,9 @@ class RecorderGui:
                 if mode == config.audio_mode
             )
         )
-        self.audio_choice_var.set(config.audio_input or "音声なし")
+        self.audio_choice_var.set(
+            _audio_input_display(config.audio_mode, config.audio_input)
+        )
         self._audio_mode_selected()
         self.refresh_audio_inputs()
         self.refresh_youtube_status()
@@ -6922,20 +6924,23 @@ class RecorderGui:
             label = base if base not in mapping else f"{base} ({index})"
             mapping[label] = item
         self.audio_inputs_by_label = mapping
-        self.audio_input_combo.configure(values=tuple(mapping))
-        selected_label = next(
-            (
-                label
-                for label, item in mapping.items()
-                if item is not None and current in {item.identifier, item.display_name}
-            ),
-            "音声なし" if not current else f"利用不可: {current}",
-        )
+        mode = self.audio_modes_by_label.get(self.audio_mode_var.get(), "none")
+        if mode == "process":
+            selected_label = _audio_input_display(mode, current)
+            mapping.setdefault(selected_label, None)
+        else:
+            selected_label = next(
+                (
+                    label
+                    for label, item in mapping.items()
+                    if item is not None and current in {item.identifier, item.display_name}
+                ),
+                _audio_input_display(mode, current),
+            )
         if selected_label not in mapping:
             mapping[selected_label] = current
-            self.audio_input_combo.configure(values=tuple(mapping))
+        self.audio_input_combo.configure(values=tuple(mapping))
         self.audio_choice_var.set(selected_label)
-        mode = self.audio_modes_by_label.get(self.audio_mode_var.get(), "none")
         if mode == "process":
             self.audio_status_var.set(
                 "Master Duelプロセスと子プロセスの音声だけを取得します"
@@ -6965,10 +6970,12 @@ class RecorderGui:
         device_state = "readonly" if mode in {"system", "device"} else "disabled"
         self.audio_input_combo.configure(state=device_state)
         if mode == "process":
+            self.audio_choice_var.set(_audio_input_display(mode, ""))
             self.audio_status_var.set(
                 "Master Duelプロセスと子プロセスの音声だけを取得します"
             )
         elif mode == "none":
+            self.audio_choice_var.set(_audio_input_display(mode, ""))
             self.audio_status_var.set("音声は録音しません")
 
     def test_selected_audio_input(self) -> None:
@@ -7479,6 +7486,17 @@ def _format_bytes(value: int | None) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} GB"
+
+
+def _audio_input_display(audio_mode: str, audio_input: str | None) -> str:
+    if audio_mode == "process":
+        return "Master Duel単体音声（DirectShow入力は未使用）"
+    if audio_mode == "none":
+        return "音声なし（映像のみ）"
+    normalized = (audio_input or "").strip()
+    if normalized:
+        return normalized
+    return "音声なし"
 
 
 def _catalog_row_values(kind: str, entry: DuelCatalogEntry) -> tuple[object, ...]:

@@ -28,6 +28,7 @@ from .recording_profile import RecordingProfile, RecordingProfileError
 from .recording_session import RecordingResult, RecordingSession, RecordingState
 from .recording_state_store import RecordingStateStore, RecordingStateStoreError
 from .runtime_paths import RuntimePaths
+from .upload_media import UploadMediaValidator, find_ffprobe
 from .visual_detection import (
     DetectionCandidate,
     FrameAnalysis,
@@ -206,8 +207,14 @@ class PreparedRecording:
         if not self._history_started or self.session.result is None:
             raise RecordingTrackingError("録画結果に対応する開始履歴がありません")
         try:
-            self.history.finalize(self.target.recording_id, self.session.result)
-            if self.session.result.succeeded:
+            result = self.session.result
+            audio_warning = self._completed_audio_warning(result)
+            if audio_warning and not getattr(self.session, "audio_warning", None):
+                self.session.add_diagnostic(audio_warning)
+                self.history.mark_audio_warning(self.target.recording_id, audio_warning)
+                result = replace(result, diagnostics=tuple(self.session.diagnostics))
+            self.history.finalize(self.target.recording_id, result)
+            if result.succeeded:
                 records = DuelRecordRepository(self.history.database_path)
                 _, play_order, outcome, _, _ = self.visual_lifecycle.snapshot()
                 if play_order != "unknown" or outcome != "unknown":
@@ -223,6 +230,23 @@ class PreparedRecording:
         except (DuelRecordError, RecordingHistoryError, RecordingStateStoreError) as exc:
             raise RecordingTrackingError(f"録画履歴を最終状態へ更新できません: {exc}") from exc
         self._history_finalized = True
+
+    def _completed_audio_warning(self, result: RecordingResult) -> str | None:
+        if not result.succeeded or not self.profile.has_audio:
+            return None
+        validation = UploadMediaValidator(
+            ffprobe_executable=find_ffprobe(self.executable)
+        ).validate(result.output_path)
+        if "audio" in validation.stream_types:
+            return None
+        if validation.errors:
+            return "音声ストリームを確認できません: " + " / ".join(validation.errors)
+        if self.profile.audio_mode == "process":
+            return (
+                "音声ストリームがありません。Master Duel単体音声の設定、"
+                "ゲーム音量、Windows音量ミキサー、音声ヘルパー診断を確認してください"
+            )
+        return "音声ストリームがありません。選択した音声入力とFFmpeg診断を確認してください"
 
     def _save_state(self, state: str) -> None:
         if self._source is None:

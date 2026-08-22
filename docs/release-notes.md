@@ -9,12 +9,14 @@
 - 設定画面を通常設定、外部連携、データ保護、危険操作、診断へ分ける情報設計を記録した
 - 戦績入力、未完了処理、詳細入力、一括編集、タイムライン、YouTube投稿、診断、クリーンアンインストールの導線をワークフロー単位で整理した
 - V2.0.0のスクリーンショット回帰と操作スモークへ、画面単体だけでなく録画後フロー単位の検証要件を追加した
+- Master Duel単体音声で録画した出力に音声ストリームがない場合、録画を削除せず履歴へ音声警告を残すようにした
+- 音声設定GUIで、Master Duel単体音声ではDirectShow音声入力欄を使わないことを明示し、本当の音声なし設定と区別した
 - DBスキーマ、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
-- Ruff、文書リンクテスト、全569テスト、Python GUIスモーク、CLI/GUI/updater one-file EXEビルド、3 EXEスモーク、V1候補検証に合格した
-- ローカル通常ビルドCLI EXE SHA-256: `125787E1E146E9DD7A6C1825D3F679F89058DE229BED9AA57243E4636A34E318`
-- ローカル通常ビルドGUI EXE SHA-256: `96F29F15CE8EDBB2C8BF67F1201E24DE1411A6ED985CB3FEBF86D69C9C111DD8`
-- ローカル通常ビルドupdater EXE SHA-256: `B6E58B11F78561353F4F95D264B0C761AFBC755AA7F0DD7D2EE6970F8B5EFEBC`
-- 追跡: [V1.6.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/70)、親Issue #523、子Issue #524 - #529
+- Ruff、文書リンクテスト、全572テスト、Python GUIスモーク、CLI/GUI/updater one-file EXEビルド、3 EXEスモーク、V1候補検証に合格した
+- ローカル通常ビルドCLI EXE SHA-256: `45FF1E09A4FB32FE683ED5635A28E249CEDB390BC0E34F0565BD2A5E0C6A9D73`
+- ローカル通常ビルドGUI EXE SHA-256: `E2D1ED58FD8A77E49116CAD109A0FC4B88F994542841E3C8720C5BCD075FB2ED`
+- ローカル通常ビルドupdater EXE SHA-256: `BDE119089FE95110F6FEC00FF860035FB98752CEAB7F6F34B238599B0CBC5F23`
+- 追跡: [V1.6.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/70)、親Issue #523、子Issue #524 - #531
 
 ## V1.5.2: デッキ名の使用回数表示・利用頻度順・UI baseline保存 - 2026-08-22
 

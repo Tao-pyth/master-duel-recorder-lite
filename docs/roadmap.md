@@ -993,11 +993,13 @@
 - 設定画面の通常設定、外部連携、データ保護、危険操作、診断の境界を整理する
 - 戦績入力、タイムライン、YouTube投稿、レビュー、診断のダイアログ導線をワークフロー単位で整理する
 - V2.0.0のスクリーンショット回帰と操作スモークに、録画後ワークフロー単位の検証要件を追加する
+- Master Duel単体音声の録画後診断で、出力ファイルの音声ストリーム有無を履歴警告として確認できるようにする
+- 音声設定GUIで、Master Duel単体音声のDirectShow入力欄が未使用であることを明示する
 - DBスキーマ、設定形式、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 
-追跡: [V1.6.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/70)、親Issue #523、子Issue #524 - #529
+追跡: [V1.6.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/70)、親Issue #523、子Issue #524 - #531
 
-完了条件: 録画後ワークフロー情報設計、V2.0.0 Issueへの反映事項、README、リリースノート、検証記録、バージョン情報、Ruff、全単体テスト、GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、GitHub Releaseが成功すること。
+完了条件: 録画後ワークフロー情報設計、V2.0.0 Issueへの反映事項、単体音声の録画後警告、音声設定GUIの誤読防止、README、リリースノート、検証記録、バージョン情報、Ruff、全単体テスト、GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、GitHub Releaseが成功すること。
 
 ## V2.0.0: Tkinter GUIからPySide6 GUIへの全面移行
 
