@@ -37,7 +37,7 @@ try {
         "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "target_selector",
         "watch_toggle", "clean_uninstall"
     )
-    if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600 -or -not $result.history_refresh_visible -or -not $result.calendar_contract) {
+    if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600 -or -not $result.history_refresh_visible -or -not $result.calendar_contract -or -not $result.pyside6) {
         throw "GUI smoke contract is invalid"
     }
     $expectedRuntimeData = Join-Path $localAppDataPath "MasterDuelRecorderLite"

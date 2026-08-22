@@ -1,5 +1,21 @@
 # リリースノート
 
+## V2.0.0: PySide6 GUI移行 - 2026-08-22
+
+- `master-duel-recorder-lite-gui.exe`の通常入口をTkinterからPySide6へ切り替えた
+- PySide6のメインウィンドウ、左ナビ、共通状態表示を追加した
+- 録画、戦績管理、統計、デッキ名、タグ、シーズン、YouTube、信頼性、設定の主要ナビを追加した
+- 録画開始、録画停止、自動監視切替、履歴更新をPySide6 GUIから既存サービス層へ接続した
+- `prepare`と`improve`は独立ナビへ戻さず、YouTube、戦績管理、統計、設定へ統合する方針を維持した
+- PySide6 GUIスモークJSONとスクリーンショット出力を追加した
+- 旧Tkinter GUIは互換モジュール`master_duel_recorder_lite.gui`として残した
+- DBスキーマ、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、PySide6契約テスト、全575テスト、PySide6 GUIスモーク、CLI/GUI/updater one-file EXEビルド、3 EXEスモーク、V1候補検証に合格した
+- ローカル通常ビルドCLI EXE SHA-256: `5508BC994612BB4A62D849E710EA3925793DE5B38EBCEE6CA9AC6271ADC88F27`
+- ローカル通常ビルドGUI EXE SHA-256: `A6FFA8577BAD116C92A2E79CCB8B182C759F31D4D5BB20D867B83DE50B2AED83`
+- ローカル通常ビルドupdater EXE SHA-256: `C8D4F73DB6F6939EF7E035C0AD74562946FFB2AEF5AE1E3BC06F31F0C52BF270`
+- 追跡: [V2.0.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/69)、親Issue #500、子Issue #501 - #522
+
 ## V1.6.0: 録画後ワークフロー情報設計 - 2026-08-22
 
 - V2.0.0のPySide6全面移行へ入る前に、録画後の整理、振り返り、投稿準備を1つの作業導線として定義した

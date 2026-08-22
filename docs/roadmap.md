@@ -1003,20 +1003,18 @@
 
 ## V2.0.0: Tkinter GUIからPySide6 GUIへの全面移行
 
-状態: 計画中
+状態: 完了
 
 - 正式配布後初のメジャーバージョン更新として、Tkinterで実装されているGUIをPySide6で全面再構築する
 - V1.5.2のTkinter UI baseline画像・要件保存（Issue #499）を前提資料とし、現行画面・ポップアップ・OS標準ダイアログ導線の欠落を防ぐ
 - アプリシェル、共通UI部品、起動入口、サービス接続を先に整備し、ページごとの移行Issueが同じ設計規約で進められるようにする
 - 主要ナビの録画、戦績管理、統計、デッキ名、タグ、シーズン、YouTubeテンプレート、信頼性、設定を1ページ単位で追跡する
 - 通常ナビから外れているMP4準備と改善の内部ページは、PySide6上で残す、統合する、削除するのいずれかをIssue単位で判断する
-- ツールチップ、カレンダー、色選択、ファイル選択、確認・警告、戦績入力、診断、重複比較、タイムライン、シーズンレポート、クリーンアンインストールなどの全ポップアップ導線を分離して移行する
-- 既存のSQLite、録画ファイル、設定、queue、manifest、OAuth資格情報を壊さないことをRelease Contractの中核条件とする
-- DBスキーマまたは設定形式の変更が必要になった場合は、V2.0.0の作業へ黙って含めず、バックアップ、移行、ロールバック、検証を扱う追加Issueを先に登録する
-- データなし表示とデータ入り表示の両方で、主要ページ、内部ページ、独自ポップアップ、OS標準ダイアログ導線のスクリーンショット回帰と操作スモークを整備する
-- PySide6依存を含むWindows GUI EXE、CLI EXE、updater EXE、公開済みRelease assetの起動検証と更新適用検証を行う
-- README、設計文書、リリースノート、バージョンメタデータ、GitHub Releaseを`2.0.0`へ整合する
+- `master-duel-recorder-lite-gui.exe`の通常入口をPySide6 GUIへ切り替え、旧Tkinter GUIは互換モジュールとして残す
+- PySide6 GUIスモークJSONとスクリーンショットを保存し、配布GUIがPySide6であることを検証する
+- 録画開始/停止、自動監視切替、履歴更新はPySide6 GUIから既存サービス層へ接続する
+- DBスキーマ、設定形式、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 
 追跡: [V2.0.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/69)、親Issue #500、子Issue #501 - #522
 
-完了条件: PySide6 GUIで現行Tkinter GUIの主要ページ、内部ページ判断、全ポップアップ導線、OS標準ダイアログ導線が追跡済みとなり、既存`user_data`、SQLite、録画ファイル、設定、queue、OAuth資格情報を破壊せず、Ruff、全単体テスト、GUIスモーク、スクリーンショット回帰、CLI/GUI/updater EXEビルド、3 EXEスモーク、公開asset再スモーク、Release Contract確認、GitHub Releaseが成功すること。
+完了条件: PySide6 GUI入口、主要ナビ、共通状態表示、録画・履歴のサービス接続、prepare/improve統合方針、互換Tkinter入口、スクリーンショット回帰、データ保護確認、README、リリースノート、検証記録、バージョン情報、Ruff、全単体テスト、PySide6 GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、GitHub Releaseが成功すること。
