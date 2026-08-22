@@ -9,7 +9,9 @@ from unittest.mock import patch
 from master_duel_recorder_lite.application import RecorderApplicationService
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.gui_feature_parity import (
+    STANDARD_GUI_OPERATION_CHECKS,
     STANDARD_GUI_FEATURES,
+    evaluate_standard_operation_checks,
     required_standard_widget_keys,
     satisfied_standard_feature_keys,
 )
@@ -39,10 +41,51 @@ class V201GuiRecoveryTest(unittest.TestCase):
         self.assertIn("history_bulk", widget_keys)
         self.assertIn("youtube_template", widget_keys)
         self.assertIn("data_backup_table", widget_keys)
+        self.assertIn("data_protection_scope", widget_keys)
         self.assertEqual(
             set(satisfied_standard_feature_keys(widget_keys)),
             feature_keys,
         )
+
+    def test_standard_operation_checks_cover_each_standard_feature(self) -> None:
+        feature_keys = {feature.key for feature in STANDARD_GUI_FEATURES}
+        operation_feature_keys = {
+            operation.feature_key for operation in STANDARD_GUI_OPERATION_CHECKS
+        }
+
+        self.assertEqual(operation_feature_keys, feature_keys)
+        for operation in STANDARD_GUI_OPERATION_CHECKS:
+            self.assertTrue(operation.operation_label)
+            self.assertTrue(operation.target_state)
+            self.assertTrue(operation.expected_result)
+            self.assertTrue(operation.failure_display)
+            self.assertTrue(operation.required_widgets)
+
+    def test_standard_operation_checks_report_operation_level_failures(self) -> None:
+        widget_keys = set(required_standard_widget_keys()) - {"history_youtube"}
+
+        results = evaluate_standard_operation_checks(widget_keys)
+        failed = [result for result in results if not result["passed"]]
+
+        self.assertTrue(failed)
+        self.assertTrue(
+            any("history_youtube" in result["missing_widgets"] for result in failed)
+        )
+        self.assertTrue(all(result["operation_label"] for result in failed))
+        self.assertTrue(all(result["failure_display"] for result in failed))
+
+    def test_gui_exe_smoke_script_checks_operation_contracts(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "scripts" / "smoke_windows_gui.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+
+        self.assertIn("data_protection_scope", script)
+        self.assertIn("standard_operation_contract", script)
+        self.assertIn("failed_standard_operation_checks", script)
+        self.assertIn("post_recording_workflow_contract", script)
+        self.assertIn("data_protection_display_contract", script)
+        self.assertIn("queue_manifest_oauth_excluded_text", script)
 
     def test_feature_parity_document_lists_every_standard_feature(self) -> None:
         project_root = Path(__file__).resolve().parents[1]

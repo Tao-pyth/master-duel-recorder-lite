@@ -11,6 +11,17 @@ class StandardGuiFeature:
     baseline_reference: str
 
 
+@dataclass(frozen=True)
+class StandardGuiOperationCheck:
+    feature_key: str
+    operation_key: str
+    operation_label: str
+    target_state: str
+    required_widgets: tuple[str, ...]
+    expected_result: str
+    failure_display: str
+
+
 STANDARD_GUI_FEATURES: tuple[StandardGuiFeature, ...] = (
     StandardGuiFeature(
         "recording_control",
@@ -122,7 +133,12 @@ STANDARD_GUI_FEATURES: tuple[StandardGuiFeature, ...] = (
     StandardGuiFeature(
         "data_protection",
         "管理データ、バックアップ、復元、整合性診断、クリーンアンインストール",
-        ("data_protection_status", "data_backup_table", "clean_uninstall"),
+        (
+            "data_protection_status",
+            "data_protection_scope",
+            "data_backup_table",
+            "clean_uninstall",
+        ),
         "docs/assets/tkinter-ui-baseline-1.5.2-popups/13-clean-uninstall.png",
     ),
     StandardGuiFeature(
@@ -147,9 +163,205 @@ STANDARD_GUI_FEATURES: tuple[StandardGuiFeature, ...] = (
 )
 
 
+STANDARD_GUI_OPERATION_CHECKS: tuple[StandardGuiOperationCheck, ...] = (
+    StandardGuiOperationCheck(
+        "recording_control",
+        "record_start_stop",
+        "録画対象を選んで録画開始・停止へ到達できる",
+        "通常録画可能状態",
+        ("target_selector", "record_start", "record_stop", "record_status"),
+        "録画開始、停止、現在状態を同じ操作面で確認できる",
+        "録画対象、開始、停止、状態表示の不足を操作名で表示する",
+    ),
+    StandardGuiOperationCheck(
+        "recording_control",
+        "recording_diagnostics",
+        "録画環境診断と検出詳細へ到達できる",
+        "録画前の環境確認",
+        ("visual_status", "visual_details_toggle", "visual_diagnostics_folder"),
+        "検出状態、詳細、診断フォルダーを確認できる",
+        "診断へ進めない理由を録画環境の不足として表示する",
+    ),
+    StandardGuiOperationCheck(
+        "manual_duel_entry",
+        "manual_duel_add",
+        "録画なし戦績を手動追加できる",
+        "録画ファイルなしで戦績を残す状態",
+        ("manual_duel_add", "history_add"),
+        "戦績管理から手動追加または簡易入力へ進める",
+        "手動追加入口の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "history_management",
+        "post_recording_hub",
+        "戦績管理から未完了処理、再生、編集、削除へ進める",
+        "録画後整理状態",
+        (
+            "history_table",
+            "history_incomplete",
+            "history_play",
+            "history_duel",
+            "history_delete",
+            "history_refresh",
+        ),
+        "行選択後に主操作と危険操作を区別して実行できる",
+        "対象行、未完了処理、再生、編集、削除、更新の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "history_management",
+        "bulk_and_duplicates",
+        "一括編集と重複候補比較へ進める",
+        "複数戦績整理状態",
+        ("history_table", "history_bulk", "history_duplicates"),
+        "複数行の整理と重複候補確認へ進める",
+        "一括編集または重複比較の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "history_filter_columns",
+        "filter_columns_youtube",
+        "フィルター、表示列、YouTube投稿導線へ進める",
+        "履歴一覧の絞り込みと投稿準備状態",
+        ("history_columns", "history_youtube"),
+        "一覧の見え方を調整し、投稿対象行の投稿導線へ進める",
+        "表示列またはYouTube投稿入口の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "statistics",
+        "statistics_review",
+        "条件付き統計と集計表を確認できる",
+        "DB入りruntimeまたは空runtime",
+        (
+            "statistics_filters",
+            "statistics_chart",
+            "statistics_deck_table",
+            "statistics_order_table",
+            "statistics_coin_table",
+            "statistics_season_table",
+        ),
+        "勝敗、先後、コイントス、デッキ、シーズンの集計へ到達できる",
+        "統計フィルターまたは集計表の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "deck_catalog",
+        "deck_catalog_review",
+        "デッキ一覧と用途管理へ進める",
+        "デッキ管理状態",
+        ("deck_catalog_table", "catalog_table"),
+        "デッキ名、色、用途、使用回数を確認できる",
+        "デッキ管理テーブルの不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "tag_catalog",
+        "tag_catalog_review",
+        "タグ一覧を管理できる",
+        "タグ管理状態",
+        ("tag_catalog_table",),
+        "タグ名、説明、色、デッキ専用タグを確認できる",
+        "タグ管理テーブルの不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "season_management",
+        "season_report_review",
+        "シーズン一覧とレポートへ進める",
+        "シーズン管理状態",
+        ("season_table",),
+        "期間、アーカイブ状態、シーズンレポートを確認できる",
+        "シーズン管理テーブルの不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "youtube_template",
+        "youtube_connection_and_template",
+        "YouTube連携状態と投稿テンプレートを確認できる",
+        "OAuth未接続または接続確認状態",
+        (
+            "youtube_template",
+            "youtube_status",
+            "youtube_connect",
+            "youtube_disconnect",
+            "youtube_refresh",
+            "youtube_test_upload",
+        ),
+        "OAuth状態、接続、切断、更新、privateテスト投稿入口を確認できる",
+        "YouTube連携またはテンプレート入口の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "prepare_queue",
+        "prepare_queue_review",
+        "MP4準備と投稿前処理キューを確認できる",
+        "投稿準備状態",
+        ("prepare_table", "prepare_recording"),
+        "投稿前処理対象とキュー状態を確認できる",
+        "MP4準備またはキュー表示の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "reliability",
+        "reliability_review",
+        "事前チェックと改善導線を確認できる",
+        "録画前の信頼性確認状態",
+        ("reliability_status", "improvement_status"),
+        "導入状態、ホットキー、後解析導線を確認できる",
+        "信頼性表示または改善導線の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "settings_recording_audio",
+        "settings_and_ffmpeg",
+        "録画・音声設定とFFmpeg導入へ進める",
+        "設定確認状態",
+        ("settings_form", "ffmpeg_setup"),
+        "保存先、録画品質、音声、FFmpeg導入状態を確認できる",
+        "設定フォームまたはFFmpeg導入入口の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "data_protection",
+        "data_protection_status",
+        "バックアップ、復元、整合性診断、クリーンアンインストールを確認できる",
+        "データ保全確認状態",
+        (
+            "data_protection_status",
+            "data_protection_scope",
+            "data_backup_table",
+            "clean_uninstall",
+        ),
+        "保全状態、バックアップ一覧、危険操作入口を確認できる",
+        "データ保全状態、バックアップ一覧、危険操作確認の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "csv_and_update",
+        "csv_update_review",
+        "戦績CSV入出力と更新確認へ進める",
+        "データ入出力と更新確認状態",
+        ("csv_status", "app_update"),
+        "CSV処理状態とアプリ更新入口を確認できる",
+        "CSV状態または更新入口の不足を表示する",
+    ),
+    StandardGuiOperationCheck(
+        "dialogs",
+        "required_dialogs",
+        "主要ダイアログへ到達できる",
+        "日常操作と失敗確認状態",
+        (
+            "statistics_date_from_picker",
+            "ffmpeg_setup",
+            "history_youtube",
+            "history_duplicates",
+            "history_incomplete",
+            "history_bulk",
+        ),
+        "日付、FFmpeg、投稿、重複、未完了、一括編集の入口を確認できる",
+        "必要ダイアログ入口の不足を表示する",
+    ),
+)
+
+
 def required_standard_widget_keys() -> tuple[str, ...]:
     return tuple(
-        sorted({widget for feature in STANDARD_GUI_FEATURES for widget in feature.required_widgets})
+        sorted(
+            {
+                widget
+                for feature in STANDARD_GUI_FEATURES
+                for widget in feature.required_widgets
+            }
+        )
     )
 
 
@@ -159,3 +371,28 @@ def satisfied_standard_feature_keys(widget_keys: set[str]) -> tuple[str, ...]:
         for feature in STANDARD_GUI_FEATURES
         if all(widget in widget_keys for widget in feature.required_widgets)
     )
+
+
+def evaluate_standard_operation_checks(
+    widget_keys: set[str],
+) -> tuple[dict[str, object], ...]:
+    results: list[dict[str, object]] = []
+    for check in STANDARD_GUI_OPERATION_CHECKS:
+        missing_widgets = tuple(
+            widget for widget in check.required_widgets if widget not in widget_keys
+        )
+        passed = not missing_widgets
+        results.append(
+            {
+                "feature_key": check.feature_key,
+                "operation_key": check.operation_key,
+                "operation_label": check.operation_label,
+                "target_state": check.target_state,
+                "required_widgets": check.required_widgets,
+                "missing_widgets": missing_widgets,
+                "passed": passed,
+                "expected_result": check.expected_result,
+                "failure_display": "" if passed else check.failure_display,
+            }
+        )
+    return tuple(results)

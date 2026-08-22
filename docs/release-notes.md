@@ -1,5 +1,19 @@
 # リリースノート
 
+## V2.0.2: 15標準機能の実操作確認 - 2026-08-23
+
+- GUI smokeに、15標準機能の実操作チェック結果、失敗した操作、標準操作契約を出力する契約を追加した
+- 配布GUI smokeで、widget存在だけでなく録画後ワークフロー、データ保全表示、実操作契約を検査するようにした
+- データ保全表示で、バックアップ/復元が管理DBと設定を対象にし、録画ファイル、queue、manifest、OAuth資格情報を変更しないことを明示した
+- PySide6通常入口化ゲートを、widget存在確認から実操作確認、録画後ワークフロー、データ保全表示まで含む条件へ拡張した
+- V1.4.x open Issueを#548で棚卸しし、V2.0.2のBackward Compatibilityを妨げる直接ブロッカーがないことを確認した
+- DBスキーマ、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、全583テスト、隔離Python GUI smoke、CLI/GUI/updater one-file EXEビルド、3 EXEスモーク、V1候補検証に合格した
+- ローカル通常ビルドCLI EXE SHA-256: `0039925646F9185D5F482ACE198D80D68C69D8C19BDD660C8360FB7AFBFEAF40`
+- ローカル通常ビルドGUI EXE SHA-256: `733577199DD48F95753C15803EDC0BC96E57D25109792CDD813344032E6D00C2`
+- ローカル通常ビルドupdater EXE SHA-256: `9A86D37597EA202ECFB426C346FCFD2332BA6697C3788CF149E88450FD2E87BE`
+- 追跡: [V2.0.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/72)、親Issue #542、子Issue #543 - #548
+
 ## V2.0.1: 通常配布GUI復旧 - 2026-08-22
 
 - `master-duel-recorder-lite-gui.exe`の通常入口を`master_duel_recorder_lite.gui`へ戻し、1.x相当のTkinter操作面を復旧した
