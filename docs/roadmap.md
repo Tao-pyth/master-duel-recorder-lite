@@ -1021,7 +1021,7 @@
 
 ## V2.0.1: 通常配布GUI復旧
 
-状態: 実装中
+状態: 完了
 
 - V2.0.0更新後に既存DB表示が失われたように見える問題を復旧する
 - `master-duel-recorder-lite-gui.exe`の通常入口を1.x相当のTkinter GUIへ戻す
@@ -1031,3 +1031,21 @@
 追跡: [V2.0.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/71)、親Issue #536、子Issue #537 - #540
 
 完了条件: 既存DB入りruntimeの再読込、通常GUIの標準機能ゲート、README、リリースノート、検証記録、バージョン情報、Ruff、全単体テスト、Python GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、GitHub Releaseが成功すること。
+
+## V2.0.2: 15標準機能の実操作確認と録画後導線改善
+
+状態: Act中
+
+- V2.0.1で復旧した1.x相当の通常配布GUIについて、15標準機能をwidget存在ではなくユーザー操作レベルで確認する
+- GUI smokeと回帰テストを拡張し、実体のないwidget名だけでは合格できない検証条件にする
+- 戦績管理を録画後ハブとして、未完了処理、再生、編集、タイムライン、診断、YouTube投稿へ迷わず進める導線にする
+- データ保全、復元、整合性診断の状態表示と失敗時の次アクションを分かりやすくする
+- PySide6通常入口化ゲートを、DB入りruntime、録画後ワークフロー、データ保全、安全な失敗表示まで含む実操作確認へ拡張する
+- PySide6を通常配布入口へ戻すこと、SQLite schema変更、設定形式変更、録画・queue・manifest・OAuth資格情報の削除や初期化は対象外とする
+- V1.4.0 - V1.4.2の古いopen Issueは#548でV2.0.2完了前に棚卸しし、実装済み未close、外部検証待ち、未解決のどれかへ分類する
+
+追跡: [V2.0.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/72)、親Issue #542、子Issue #543 - #548
+
+推奨順: #543 実操作チェック、#544 録画後ワークフロー導線、#545 データ保全表示、#546 PySide6通常入口化ゲート、#548 V1.4.x open Issue棚卸し、#547 検証・文書・リリース整合。
+
+完了条件: 15標準機能の実操作確認、録画後導線、データ保全表示、PySide6同等性ゲート、README、設計文書、リリースノート、検証記録、バージョン情報、Ruff、全単体テスト、GUI smoke、CLI/GUI/updater EXEビルド、3 EXEスモーク、Release Contract確認が一致し、既存`user_data`、SQLite、録画、queue、manifest、OAuth資格情報を保持すること。

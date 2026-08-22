@@ -53,6 +53,7 @@ from .ffmpeg_setup import (
     FfmpegInstallProgress,
 )
 from .gui_feature_parity import (
+    evaluate_standard_operation_checks,
     required_standard_widget_keys,
     satisfied_standard_feature_keys,
 )
@@ -2275,13 +2276,25 @@ class RecorderGui:
             self.create_data_backup,
             style="Primary.TButton",
         ).pack(side="right", padx=(0, 8))
-        self.data_protection_status_var = tk.StringVar(value="保全状態を確認中")
+        self.data_protection_status_var = tk.StringVar(
+            value="保全状態を確認中 / 録画ファイルは変更しません"
+        )
         ttk.Label(
             data_panel,
             textvariable=self.data_protection_status_var,
             style="Muted.TLabel",
             justify="left",
         ).pack(anchor="w", pady=(10, 0))
+        self.data_protection_scope_var = tk.StringVar(
+            value="バックアップと復元は管理DBと設定を対象にします。録画ファイル、queue、manifest、OAuth資格情報は変更しません。"
+        )
+        ttk.Label(
+            data_panel,
+            textvariable=self.data_protection_scope_var,
+            style="Muted.TLabel",
+            justify="left",
+            wraplength=760,
+        ).pack(anchor="w", pady=(6, 0))
         self.data_backup_tree = ttk.Treeview(
             data_panel,
             columns=("created", "reason", "schema", "size", "protected"),
@@ -2301,6 +2314,7 @@ class RecorderGui:
             )
         self.data_backup_tree.pack(fill="x", pady=(10, 0))
         self.widgets["data_protection_status"] = self.data_protection_status_var
+        self.widgets["data_protection_scope"] = self.data_protection_scope_var
         self.widgets["data_backup_table"] = self.data_backup_tree
         ttk.Separator(data_panel, orient="horizontal").pack(fill="x", pady=(22, 18))
         uninstall_header = ttk.Frame(data_panel, style="Surface.TFrame")
@@ -6514,7 +6528,7 @@ class RecorderGui:
         total = sum(item.size_bytes for item in backups)
         self.data_protection_status_var.set(
             f"DB: {severity} / 最終バックアップ: {latest_text} / "
-            f"{len(backups)}世代 {_format_bytes(total)}"
+            f"{len(backups)}世代 {_format_bytes(total)} / 録画ファイルは変更しません"
         )
         self._clear_tree(self.data_backup_tree)
         for backup in backups:
@@ -7663,6 +7677,10 @@ def main(argv: list[str] | None = None) -> int:
         missing_feature_widgets = tuple(
             widget for widget in required_feature_widgets if widget not in widget_keys
         )
+        operation_checks = evaluate_standard_operation_checks(widget_keys)
+        failed_operation_checks = tuple(
+            check for check in operation_checks if not bool(check["passed"])
+        )
         database_path = service.paths.db / HISTORY_DATABASE_NAME
         database_summary: dict[str, object] = {
             "path": str(database_path),
@@ -7684,6 +7702,37 @@ def main(argv: list[str] | None = None) -> int:
                     "incomplete_duel_records": dashboard.incomplete_duel_record_count,
                 }
             )
+        post_recording_workflow_contract = {
+            "history_hub": "history_table" in widget_keys,
+            "incomplete_action": "history_incomplete" in widget_keys,
+            "play_action": "history_play" in widget_keys,
+            "edit_action": "history_duel" in widget_keys,
+            "danger_delete_action": "history_delete" in widget_keys,
+            "duplicate_review": "history_duplicates" in widget_keys,
+            "youtube_action": "history_youtube" in widget_keys,
+            "timeline_entry": hasattr(app, "show_selected_timeline"),
+            "diagnostic_entry": hasattr(app, "show_selected_history_diagnostic"),
+            "review_entry": hasattr(app, "_open_pyside_review"),
+        }
+        data_protection_display_contract = {
+            "status_visible": "data_protection_status" in widget_keys,
+            "scope_visible": "data_protection_scope" in widget_keys,
+            "backup_table_visible": "data_backup_table" in widget_keys,
+            "clean_uninstall_guard": "clean_uninstall" in widget_keys,
+            "recordings_excluded_text": "録画ファイルは変更しません"
+            in app.data_protection_status_var.get(),
+            "queue_manifest_oauth_excluded_text": all(
+                text in app.data_protection_scope_var.get()
+                for text in ("queue", "manifest", "OAuth資格情報")
+            ),
+            "runtime_database_path_present": bool(str(database_path)),
+            "runtime_database_path": str(database_path),
+        }
+        data_protection_display_passed = all(
+            bool(value)
+            for key, value in data_protection_display_contract.items()
+            if key != "runtime_database_path"
+        )
         geometry = {
             "width": root.winfo_width(),
             "height": root.winfo_height(),
@@ -7701,6 +7750,9 @@ def main(argv: list[str] | None = None) -> int:
             "required_standard_widget_keys": required_feature_widgets,
             "missing_standard_widget_keys": missing_feature_widgets,
             "standard_feature_contract": not missing_feature_widgets,
+            "standard_operation_checks": operation_checks,
+            "failed_standard_operation_checks": failed_operation_checks,
+            "standard_operation_contract": not failed_operation_checks,
             "history_refresh_visible": history_refresh_right <= root.winfo_width(),
             "calendar_contract": calendar_contract,
             "youtube_flow_contract": (
@@ -7711,15 +7763,20 @@ def main(argv: list[str] | None = None) -> int:
                 and "youtube_status" in app.widgets
                 and "youtube_template" in app.widgets
             ),
+            "post_recording_workflow_contract": post_recording_workflow_contract,
+            "data_protection_display_contract": data_protection_display_contract,
         }
         if (
             geometry["width"] < 900
             or geometry["height"] < 600
             or len(app.widgets) < 8
             or not geometry["standard_feature_contract"]
+            or not geometry["standard_operation_contract"]
             or not geometry["history_refresh_visible"]
             or not geometry["calendar_contract"]
             or not geometry["youtube_flow_contract"]
+            or not all(post_recording_workflow_contract.values())
+            or not data_protection_display_passed
         ):
             app._destroy()
             return 1
