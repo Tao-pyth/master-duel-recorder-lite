@@ -5,8 +5,8 @@ from pathlib import Path
 
 from .description_template import (
     DescriptionTemplateContext,
-    load_description_template,
-    render_description_template,
+    load_youtube_posting_template,
+    render_youtube_posting_template,
 )
 from .duel_records import duel_choice_label
 from .recording_history import RecordingHistoryEntry
@@ -56,11 +56,11 @@ class YouTubeMaterialService:
             history=history,
             duel_record=duel_record,
         )
-        description = render_description_template(
-            load_description_template(self.paths.config),
+        metadata = render_youtube_posting_template(
+            load_youtube_posting_template(self.paths.config),
             context,
+            fallback_tags=_tags(values),
         )
-        tags = _tags(values)
         checklist = (
             "タイトルが内容と一致している",
             "公開範囲を確認した",
@@ -71,9 +71,9 @@ class YouTubeMaterialService:
         output_directory = self.paths.exports / history.recording_id
         return YouTubePostingMaterials(
             recording_id=history.recording_id,
-            title=generated_title,
-            description=description,
-            tags=tags,
+            title=metadata.title,
+            description=metadata.description,
+            tags=metadata.tags,
             checklist=checklist,
             output_directory=output_directory,
         )

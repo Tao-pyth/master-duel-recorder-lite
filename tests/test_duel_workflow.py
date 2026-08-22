@@ -75,6 +75,55 @@ class DuelWorkflowServiceTest(unittest.TestCase):
         self.assertNotIn("相手専用", {item.name for item in suggestion.decks})
         self.assertTrue(suggestion.reasons)
 
+    def test_suggestion_inherits_previous_duel_type_deck_and_season_from_latest_input(
+        self,
+    ) -> None:
+        previous_season = self.seasons.add(
+            name="前回シーズン",
+            season_type="event",
+            duel_type="event",
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 31),
+        )
+        active_season = self.seasons.add(
+            name="開催中",
+            season_type="ranked",
+            duel_type="ranked",
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 31),
+        )
+        self.records.create_manual(
+            DuelRecordValues(
+                status="confirmed",
+                result="win",
+                play_order="first",
+                own_deck="確認済み",
+                duel_type="ranked",
+                season_id=active_season.season_id,
+            ),
+            occurred_at=datetime(2026, 8, 10, tzinfo=timezone.utc),
+        )
+        self.records.create_manual(
+            DuelRecordValues(
+                status="draft",
+                result="loss",
+                play_order="second",
+                own_deck="前回デッキ",
+                duel_type="event",
+                season_id=previous_season.season_id,
+            ),
+            occurred_at=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        )
+
+        suggestion = self.service.input_suggestion(occurred_on=date(2026, 8, 13))
+
+        self.assertEqual(suggestion.values.result, "win")
+        self.assertEqual(suggestion.values.play_order, "first")
+        self.assertEqual(suggestion.values.own_deck, "前回デッキ")
+        self.assertEqual(suggestion.values.duel_type, "event")
+        self.assertEqual(suggestion.values.season_id, previous_season.season_id)
+        self.assertIn("前回入力した対戦種別", " / ".join(suggestion.reasons))
+
     def test_incomplete_queue_distinguishes_missing_and_draft(self) -> None:
         self._recording("missing")
         self._recording("draft")
