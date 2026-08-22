@@ -17,6 +17,7 @@ from master_duel_recorder_lite.gui import (
     WAITING_ACTIVITY_PREFIX,
     _format_statistics_detail,
     _format_win_rate,
+    _audio_input_display,
     _catalog_row_values,
     _review_launch_command,
     _swatch_border_color,
@@ -337,6 +338,37 @@ class GuiActivityTest(unittest.TestCase):
     def test_deck_color_swatch_border_uses_contrast_color(self) -> None:
         self.assertEqual(_swatch_border_color("#FFFF66"), "#202124")
         self.assertEqual(_swatch_border_color("#123456"), "#ffffff")
+
+    def test_process_audio_input_display_does_not_read_as_audio_none(self) -> None:
+        process = _audio_input_display("process", "")
+        none = _audio_input_display("none", "")
+        device = _audio_input_display("device", "マイク")
+
+        self.assertIn("Master Duel単体音声", process)
+        self.assertIn("DirectShow入力は未使用", process)
+        self.assertNotEqual(process, none)
+        self.assertIn("映像のみ", none)
+        self.assertEqual(device, "マイク")
+
+    def test_process_audio_mode_selection_marks_directshow_input_unused(self) -> None:
+        gui = RecorderGui.__new__(RecorderGui)
+        gui.audio_modes_by_label = {"Master Duelのみ（推奨）": "process"}
+        gui.audio_mode_var = Mock(get=Mock(return_value="Master Duelのみ（推奨）"))
+        gui.setting_vars = {"recorder.audio_mode": Mock()}
+        gui.audio_input_combo = Mock()
+        gui.audio_choice_var = Mock()
+        gui.audio_status_var = Mock()
+
+        gui._audio_mode_selected()
+
+        gui.setting_vars["recorder.audio_mode"].set.assert_called_once_with("process")
+        gui.audio_input_combo.configure.assert_called_once_with(state="disabled")
+        gui.audio_choice_var.set.assert_called_once_with(
+            "Master Duel単体音声（DirectShow入力は未使用）"
+        )
+        gui.audio_status_var.set.assert_called_once_with(
+            "Master Duelプロセスと子プロセスの音声だけを取得します"
+        )
 
 
 if __name__ == "__main__":

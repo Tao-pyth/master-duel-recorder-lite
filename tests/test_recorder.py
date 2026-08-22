@@ -1,6 +1,7 @@
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +20,10 @@ from master_duel_recorder_lite.recorder import (
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
 from master_duel_recorder_lite.recording_state_store import RecordingStateStoreError
+from master_duel_recorder_lite.upload_media import (
+    MediaValidationStatus,
+    UploadMediaValidation,
+)
 from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 from master_duel_recorder_lite.visual_detection import DetectionCandidate
 
@@ -135,6 +140,62 @@ class RecorderPreparationTest(unittest.TestCase):
         self.assertEqual(duel_record.values.status, "draft")
         assert persisted is not None
         self.assertEqual(persisted.value.state, "completed")
+
+    def test_prepared_recording_marks_missing_process_audio_stream_as_warning(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(),
+                source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58),
+                attempts=(),
+            )
+            validation = UploadMediaValidation(
+                MediaValidationStatus.WARNING,
+                root / "recordings" / "recording.mkv",
+                "matroska,webm",
+                5.0,
+                ("video",),
+                ("音声ストリームがありません",),
+                (),
+            )
+            with (
+                patch(
+                    "master_duel_recorder_lite.recorder.discover_ffmpeg",
+                    return_value=discovery,
+                ),
+                patch(
+                    "master_duel_recorder_lite.recorder.UploadMediaValidator.validate",
+                    return_value=validation,
+                ),
+            ):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(
+                        ffmpeg_path=str(executable), capture_mode="desktop"
+                    ),
+                )
+                prepared.profile = replace(prepared.profile, audio_mode="process")
+                prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+                try:
+                    prepared.start(source="manual")
+                    result = prepared.stop()
+                    entry = prepared.history.get(prepared.target.recording_id)
+                finally:
+                    prepared.release()
+
+        self.assertTrue(result.succeeded)
+        assert entry is not None
+        self.assertEqual(entry.audio_input, "Master Duelのみ")
+        self.assertEqual(entry.audio_state, "warning")
+        self.assertIn("音声ストリームがありません", entry.audio_warning or "")
+        self.assertIn("音声ヘルパー診断", entry.diagnostics[-1])
 
     def test_visual_worker_follows_recording_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
