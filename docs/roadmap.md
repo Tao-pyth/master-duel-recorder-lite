@@ -943,7 +943,7 @@
 
 ## V1.5.0: GUI非依存データ契約とPySide6レビュー基盤
 
-状態: 実装中
+状態: 完了
 
 - GUI境界と保存契約を文書化する
 - 録画概要、動画参照、タイムライン、戦績概要、クリップ候補をGUI非依存ViewModel/DTOで表す
@@ -954,3 +954,51 @@
 追跡: [V1.5.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/60)、親Issue #434、子Issue #435 - #441
 
 完了条件: Review ViewModel、PySide6隔離入口、Tkinter併存導線、保存契約テスト、Ruff、全単体テスト、Python GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、Release Contract確認、GitHub Releaseが成功すること。
+
+## V1.5.1: 戦績管理・YouTube投稿・入力体験の調整
+
+状態: 完了
+
+- タグ管理、戦績管理、YouTube投稿、録画診断、録画レビュー、簡易入力の迷いやすい操作を調整する
+- YouTube投稿テンプレートを追加し、投稿済み録画のリンク確認導線を整理する
+- 簡易入力で勝敗、先後、コイントス、相手デッキを素早く入力できるようにする
+- DBスキーマV17と既存録画、戦績、YouTube投稿履歴、OAuth資格情報を維持する
+
+追跡: [V1.5.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/67)、親Issue #479、子Issue #480 - #491
+
+完了条件: Ruff、全単体テスト、Python GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、Release Contract確認、GitHub Releaseが成功すること。
+
+## V1.5.2: デッキ名の使用回数表示・利用頻度順・色表示
+
+状態: 完了
+
+- デッキ名ごとの使用回数を、自分デッキと相手デッキの出現回数合計として派生集計する
+- デッキ名管理画面へ使用回数列を追加し、使用回数降順で表示する
+- 戦績管理、統計、簡易入力、未完了処理、詳細入力、一括編集のデッキ候補順を使用回数順で揃える
+- 戦績管理のデッキ色表示を、小さい枠線付き四角スウォッチへ変更する
+- PySide6刷新前のTkinter UI baseline画像、ポップアップ導線、データ保護要件を保存する
+- DBスキーマと設定形式は変更せず、既存`user_data`、録画、SQLite DB、OAuth資格情報を保持する
+
+追跡: [V1.5.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/68)、親Issue #492、子Issue #493 - #496、#498 - #499
+
+完了条件: デッキ使用回数、候補順、枠線付きスウォッチ、Tkinter UI baseline保存、Ruff、全単体テスト、Python GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、Release Contract確認、GitHub Releaseが成功すること。
+
+## V2.0.0: Tkinter GUIからPySide6 GUIへの全面移行
+
+状態: 計画中
+
+- 正式配布後初のメジャーバージョン更新として、Tkinterで実装されているGUIをPySide6で全面再構築する
+- V1.5.2のTkinter UI baseline画像・要件保存（Issue #499）を前提資料とし、現行画面・ポップアップ・OS標準ダイアログ導線の欠落を防ぐ
+- アプリシェル、共通UI部品、起動入口、サービス接続を先に整備し、ページごとの移行Issueが同じ設計規約で進められるようにする
+- 主要ナビの録画、戦績管理、統計、デッキ名、タグ、シーズン、YouTubeテンプレート、信頼性、設定を1ページ単位で追跡する
+- 通常ナビから外れているMP4準備と改善の内部ページは、PySide6上で残す、統合する、削除するのいずれかをIssue単位で判断する
+- ツールチップ、カレンダー、色選択、ファイル選択、確認・警告、戦績入力、診断、重複比較、タイムライン、シーズンレポート、クリーンアンインストールなどの全ポップアップ導線を分離して移行する
+- 既存のSQLite、録画ファイル、設定、queue、manifest、OAuth資格情報を壊さないことをRelease Contractの中核条件とする
+- DBスキーマまたは設定形式の変更が必要になった場合は、V2.0.0の作業へ黙って含めず、バックアップ、移行、ロールバック、検証を扱う追加Issueを先に登録する
+- データなし表示とデータ入り表示の両方で、主要ページ、内部ページ、独自ポップアップ、OS標準ダイアログ導線のスクリーンショット回帰と操作スモークを整備する
+- PySide6依存を含むWindows GUI EXE、CLI EXE、updater EXE、公開済みRelease assetの起動検証と更新適用検証を行う
+- README、設計文書、リリースノート、バージョンメタデータ、GitHub Releaseを`2.0.0`へ整合する
+
+追跡: [V2.0.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/69)、親Issue #500、子Issue #501 - #522
+
+完了条件: PySide6 GUIで現行Tkinter GUIの主要ページ、内部ページ判断、全ポップアップ導線、OS標準ダイアログ導線が追跡済みとなり、既存`user_data`、SQLite、録画ファイル、設定、queue、OAuth資格情報を破壊せず、Ruff、全単体テスト、GUIスモーク、スクリーンショット回帰、CLI/GUI/updater EXEビルド、3 EXEスモーク、公開asset再スモーク、Release Contract確認、GitHub Releaseが成功すること。

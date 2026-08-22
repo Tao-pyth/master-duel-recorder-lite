@@ -42,6 +42,7 @@ class DuelCatalogEntry:
     deck_only: bool
     created_at: datetime
     updated_at: datetime
+    usage_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -98,14 +99,49 @@ class DuelCatalogRepository:
     def list_decks(
         self, *, include_archived: bool = False, include_hidden: bool = True
     ) -> tuple[DuelCatalogEntry, ...]:
-        items = self.list(kind="deck", include_archived=include_archived)
-        return (
-            items
-            if include_hidden
-            else tuple(
-                item for item in items if not item.hidden_from_history_statistics
-            )
-        )
+        clauses = ["catalog.kind = 'deck'"]
+        if not include_archived:
+            clauses.append("catalog.is_archived = 0")
+        if not include_hidden:
+            clauses.append("catalog.hidden_from_history_statistics = 0")
+        sql = f"""
+            SELECT catalog.*, COALESCE(usage.usage_count, 0) AS usage_count
+            FROM duel_catalog_entries AS catalog
+            LEFT JOIN (
+                SELECT entry_id, SUM(role_count) AS usage_count
+                FROM (
+                    SELECT catalog.entry_id, COUNT(duel.duel_id) AS role_count
+                    FROM duel_catalog_entries AS catalog
+                    LEFT JOIN duel_records AS duel
+                        ON duel.own_deck_id = catalog.entry_id
+                        OR (
+                            duel.own_deck_id IS NULL
+                            AND length(trim(duel.own_deck)) > 0
+                            AND lower(trim(duel.own_deck)) = catalog.normalized_name
+                        )
+                    WHERE catalog.kind = 'deck'
+                    GROUP BY catalog.entry_id
+                    UNION ALL
+                    SELECT catalog.entry_id, COUNT(duel.duel_id) AS role_count
+                    FROM duel_catalog_entries AS catalog
+                    LEFT JOIN duel_records AS duel
+                        ON duel.opponent_deck_id = catalog.entry_id
+                        OR (
+                            duel.opponent_deck_id IS NULL
+                            AND length(trim(duel.opponent_deck)) > 0
+                            AND lower(trim(duel.opponent_deck)) = catalog.normalized_name
+                        )
+                    WHERE catalog.kind = 'deck'
+                    GROUP BY catalog.entry_id
+                )
+                GROUP BY entry_id
+            ) AS usage ON usage.entry_id = catalog.entry_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY usage_count DESC, catalog.normalized_name, catalog.entry_id
+        """
+        with closing(connect_history_database(self.database_path)) as connection:
+            rows = connection.execute(sql).fetchall()
+        return tuple(_entry(row) for row in rows)
 
     def list_tags(
         self, *, include_archived: bool = False, include_deck_only: bool = True
@@ -645,6 +681,7 @@ def _entry(row: sqlite3.Row) -> DuelCatalogEntry:
         deck_only=bool(row["deck_only"]),
         created_at=_datetime(row["created_at"]),
         updated_at=_datetime(row["updated_at"]),
+        usage_count=int(row["usage_count"]) if "usage_count" in row.keys() else 0,
     )
 
 

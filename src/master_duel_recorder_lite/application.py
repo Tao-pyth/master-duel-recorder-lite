@@ -1162,7 +1162,7 @@ class RecorderApplicationService:
         return DuelEditorData(
             record=record,
             values=values,
-            decks=catalog.list(kind="deck"),
+            decks=catalog.list_decks(),
             tags=catalog.list_tags(include_deck_only=False),
             deck_tags=catalog.deck_tags_by_deck(),
             recording=self._duel_editor_recording_status(record, identifier),
