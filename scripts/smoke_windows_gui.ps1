@@ -32,8 +32,8 @@ try {
     }
     $result = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
     $requiredWidgets = @(
-        "activity", "catalog_table", "ffmpeg_setup", "history_delete", "history_diagnostic", "history_duel", "history_play", "history_reveal", "history_table", "history_timeline", "incomplete_duel_count", "prepare_table", "visual_details_toggle", "visual_diagnostics_folder", "visual_status",
-        "data_backup_table", "data_protection_status", "history_duplicates", "history_refresh", "history_relink", "record_start", "record_status", "record_stop", "season_table", "settings_form", "statistics_chart",
+        "activity", "catalog_table", "ffmpeg_setup", "history_delete", "history_duel", "history_play", "history_table", "incomplete_duel_count", "prepare_table", "visual_details_toggle", "visual_diagnostics_folder", "visual_status",
+        "data_backup_table", "data_protection_status", "history_duplicates", "history_refresh", "record_start", "record_status", "record_stop", "season_table", "settings_form", "statistics_chart",
         "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "target_selector",
         "watch_toggle", "clean_uninstall"
     )

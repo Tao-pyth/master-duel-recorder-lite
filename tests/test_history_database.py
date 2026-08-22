@@ -157,6 +157,25 @@ class HistoryDatabaseTest(unittest.TestCase):
         self.assertEqual(version, CURRENT_SCHEMA_VERSION)
         self.assertIsNotNone(recording_table)
 
+    def test_current_schema_contains_deck_tag_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "db" / "history.sqlite3"
+            initialize_history_database(path)
+            with closing(sqlite3.connect(path)) as connection:
+                catalog_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(duel_catalog_entries)"
+                    )
+                }
+                deck_tag_columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(deck_tag_links)")
+                }
+
+        self.assertIn("deck_only", catalog_columns)
+        self.assertTrue({"deck_entry_id", "tag_entry_id"}.issubset(deck_tag_columns))
+
     def test_existing_old_database_is_backed_up_before_migration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "history.sqlite3"
@@ -204,6 +223,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                         14: lambda _connection: None,
                         15: lambda _connection: None,
                         16: lambda _connection: None,
+                        17: lambda _connection: None,
                     },
                 )
 

@@ -108,7 +108,6 @@ ICON_GLYPHS = {
 HISTORY_ROW_ACTIONS = (
     ("play", "再生", "Enter"),
     ("edit", "対戦記録を編集", "Ctrl+E"),
-    ("folder", "保存場所を開く", "Ctrl+O"),
     ("delete", "削除", "Delete"),
 )
 CALENDAR_HEADER_LAYOUT = {
@@ -438,6 +437,10 @@ class RecorderGui:
         self.catalog_color_images: dict[str, tk.PhotoImage] = {}
         self.catalog_update_buttons: dict[str, ttk.Button] = {}
         self.catalog_delete_buttons: dict[str, ttk.Button] = {}
+        self.catalog_deck_tag_var = tk.StringVar()
+        self.catalog_deck_tag_list: tk.Listbox | None = None
+        self.catalog_deck_tag_entries: tuple[DuelCatalogEntry, ...] = ()
+        self.catalog_deck_tags_by_name: dict[str, DuelCatalogEntry] = {}
         self.history_views_by_id: dict[str, object] = {}
         self.history_action_buttons: dict[str, ttk.Button] = {}
         self.history_color_lines: list[tk.Widget] = []
@@ -452,6 +455,7 @@ class RecorderGui:
         }
         self.catalog_opponent_only_var = tk.BooleanVar(value=False)
         self.catalog_hidden_var = tk.BooleanVar(value=False)
+        self.catalog_deck_only_var = tk.BooleanVar(value=False)
         self.history_query = DuelManagementQuery(limit=200)
         self.active_saved_filter_id: str | None = None
         self.active_season_buttons: list[ttk.Button] = []
@@ -1177,7 +1181,6 @@ class RecorderGui:
         commands = {
             "play": self.play_selected_history,
             "edit": self.edit_selected_duel_record,
-            "folder": self.reveal_selected_history,
             "delete": self.delete_selected_history,
         }
         for icon, label, shortcut in HISTORY_ROW_ACTIONS:
@@ -1190,33 +1193,6 @@ class RecorderGui:
             )
             button.pack(side="left", padx=(0, 6))
             self.history_action_buttons[icon] = button
-        ttk.Separator(action_bar, orient="vertical").pack(
-            side="left", fill="y", padx=(2, 8)
-        )
-        self.history_timeline_button = self._icon_button(
-            action_bar,
-            "timeline",
-            "タイムラインを表示",
-            command=self.show_selected_timeline,
-            state="disabled",
-        )
-        self.history_timeline_button.pack(side="left", padx=(0, 6))
-        self.history_diagnostic_button = self._icon_button(
-            action_bar,
-            "diagnostic",
-            "録画診断を表示",
-            command=self.show_selected_history_diagnostic,
-            state="disabled",
-        )
-        self.history_diagnostic_button.pack(side="left", padx=(0, 6))
-        self.history_relink_button = self._icon_button(
-            action_bar,
-            "link",
-            "欠損した録画ファイルを再関連付け",
-            command=self.relink_selected_history,
-            state="disabled",
-        )
-        self.history_relink_button.pack(side="left", padx=(0, 6))
         self.history_duplicates_button = self._icon_button(
             action_bar,
             "duplicates",
@@ -1322,11 +1298,7 @@ class RecorderGui:
         )
         self.widgets["history_table"] = self.history_tree
         self.widgets["history_play"] = self.history_action_buttons["play"]
-        self.widgets["history_reveal"] = self.history_action_buttons["folder"]
-        self.widgets["history_diagnostic"] = self.history_diagnostic_button
         self.widgets["history_duel"] = self.history_action_buttons["edit"]
-        self.widgets["history_timeline"] = self.history_timeline_button
-        self.widgets["history_relink"] = self.history_relink_button
         self.widgets["history_duplicates"] = self.history_duplicates_button
         self.widgets["history_delete"] = self.history_action_buttons["delete"]
         self.widgets["history_add"] = self.history_add_button
@@ -1621,6 +1593,42 @@ class RecorderGui:
                 editor,
                 text="履歴・統計の選択肢で非表示",
                 variable=self.catalog_hidden_var,
+            ).grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
+            ttk.Label(editor, text="タグ", style="Body.TLabel").grid(
+                row=3, column=0, sticky="nw", padx=(0, 8), pady=(10, 0)
+            )
+            deck_tag_panel = ttk.Frame(editor)
+            deck_tag_panel.grid(
+                row=3, column=1, columnspan=3, sticky="nsew", pady=(10, 0)
+            )
+            ttk.Combobox(
+                deck_tag_panel,
+                textvariable=self.catalog_deck_tag_var,
+                values=(),
+                state="readonly",
+            ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+            ttk.Button(
+                deck_tag_panel,
+                text="追加",
+                command=self.add_selected_deck_tag,
+            ).grid(row=0, column=1, padx=(0, 8))
+            ttk.Button(
+                deck_tag_panel,
+                text="選択を外す",
+                command=self.remove_selected_deck_tag,
+            ).grid(row=0, column=2)
+            self.catalog_deck_tag_list = tk.Listbox(
+                deck_tag_panel, height=3, exportselection=False
+            )
+            self.catalog_deck_tag_list.grid(
+                row=1, column=0, columnspan=3, sticky="nsew", pady=(8, 0)
+            )
+            deck_tag_panel.columnconfigure(0, weight=1)
+        else:
+            ttk.Checkbutton(
+                editor,
+                text="デッキ名でのみ使用",
+                variable=self.catalog_deck_only_var,
             ).grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
         self._icon_button(
             editor,
@@ -2631,8 +2639,52 @@ class RecorderGui:
     def refresh_catalog(self, kind: str) -> None:
         if self.smoke_mode:
             return
-        operation = self.service.list_tags if kind == "tag" else self.service.list_decks
-        self._run(operation, lambda entries: self._catalog_loaded(kind, entries))
+        if kind == "deck":
+            self._run(
+                lambda: (self.service.list_decks(), self.service.list_tags()),
+                lambda payload: (
+                    self._deck_tag_candidates_loaded(payload[1]),
+                    self._catalog_loaded(kind, payload[0]),
+                ),
+            )
+            return
+        self._run(self.service.list_tags, lambda entries: self._catalog_loaded(kind, entries))
+
+    def _deck_tag_candidates_loaded(
+        self, entries: tuple[DuelCatalogEntry, ...]
+    ) -> None:
+        self.catalog_deck_tag_entries = entries
+        self.catalog_deck_tags_by_name = {entry.name.casefold(): entry for entry in entries}
+        self.catalog_deck_tag_var.set("")
+        listbox = self.catalog_deck_tag_list
+        if listbox is None:
+            return
+        parent = listbox.master
+        for child in parent.winfo_children():
+            if isinstance(child, ttk.Combobox):
+                child.configure(values=tuple(entry.name for entry in entries))
+
+    def add_selected_deck_tag(self) -> None:
+        listbox = self.catalog_deck_tag_list
+        if listbox is None:
+            return
+        name = self.catalog_deck_tag_var.get().strip()
+        if not name:
+            return
+        current = {
+            str(listbox.get(index)).casefold() for index in range(listbox.size())
+        }
+        if name.casefold() not in current:
+            listbox.insert("end", name)
+        self.catalog_deck_tag_var.set("")
+
+    def remove_selected_deck_tag(self) -> None:
+        listbox = self.catalog_deck_tag_list
+        if listbox is None:
+            return
+        selection = listbox.curselection()
+        if selection:
+            listbox.delete(selection[0])
 
     def open_calendar_picker(self, variable: tk.StringVar) -> None:
         try:
@@ -2746,6 +2798,7 @@ class RecorderGui:
                                 "非表示"
                                 if entry.hidden_from_history_statistics
                                 else "",
+                                "デッキ専用" if entry.deck_only else "",
                             ),
                         )
                     )
@@ -2761,6 +2814,8 @@ class RecorderGui:
         self.catalog_update_buttons[kind].configure(state=state)
         self.catalog_delete_buttons[kind].configure(state=state)
         if not selection:
+            if kind == "deck" and self.catalog_deck_tag_list is not None:
+                self.catalog_deck_tag_list.delete(0, "end")
             return
         entry = self.catalog_entries_by_id.get(str(selection[0]))
         if entry is None:
@@ -2773,6 +2828,22 @@ class RecorderGui:
         if kind == "deck":
             self.catalog_opponent_only_var.set(entry.opponent_only)
             self.catalog_hidden_var.set(entry.hidden_from_history_statistics)
+            self._load_selected_deck_tags(entry.entry_id)
+        else:
+            self.catalog_deck_only_var.set(entry.deck_only)
+
+    def _load_selected_deck_tags(self, deck_entry_id: int) -> None:
+        listbox = self.catalog_deck_tag_list
+        if listbox is None:
+            return
+        listbox.delete(0, "end")
+        try:
+            tags = self.service.list_deck_tags(deck_entry_id)
+        except Exception as exc:
+            self._show_error(exc)
+            return
+        for tag in tags:
+            listbox.insert("end", tag.name)
 
     def choose_catalog_color(self, kind: str) -> None:
         current = self.catalog_color_vars[kind].get() or "#4F6F8F"
@@ -2809,19 +2880,29 @@ class RecorderGui:
         name = self.catalog_name_vars[kind].get()
         description = self.catalog_description_vars[kind].get()
         color = self.catalog_color_vars[kind].get()
-        self._run(
-            lambda: self.service.add_duel_catalog_entry(
+        deck_tag_ids = self._selected_deck_tag_ids() if kind == "deck" else ()
+
+        def operation() -> DuelCatalogEntry:
+            entry = self.service.add_duel_catalog_entry(
                 kind,
                 name,
                 description=description,
                 color=color,
-            ),
+                deck_only=self.catalog_deck_only_var.get() if kind == "tag" else False,
+            )
+            if kind == "deck":
+                self.service.set_deck_tags(entry.entry_id, deck_tag_ids)
+            return entry
+
+        self._run(
+            operation,
             lambda entry: (
                 self._activity(
                     f"{'タグ' if kind == 'tag' else 'デッキ名'}を追加しました: {entry.name}"
                 ),
                 self.catalog_name_vars[kind].set(""),
                 self.catalog_description_vars[kind].set(""),
+                self._clear_deck_tag_selection() if kind == "deck" else None,
                 self.refresh_catalog(kind),
             ),
         )
@@ -2836,6 +2917,7 @@ class RecorderGui:
             return
         name = self.catalog_name_vars[kind].get()
         description = self.catalog_description_vars[kind].get()
+        deck_tag_ids = self._selected_deck_tag_ids() if kind == "deck" else ()
 
         def operation() -> DuelCatalogEntry:
             if kind == "tag":
@@ -2844,8 +2926,9 @@ class RecorderGui:
                     name=name,
                     description=description,
                     color=self.catalog_color_vars[kind].get(),
+                    deck_only=self.catalog_deck_only_var.get(),
                 )
-            return self.service.update_deck(
+            updated = self.service.update_deck(
                 entry.entry_id,
                 name=name,
                 description=description,
@@ -2853,6 +2936,8 @@ class RecorderGui:
                 opponent_only=self.catalog_opponent_only_var.get(),
                 hidden_from_history_statistics=self.catalog_hidden_var.get(),
             )
+            self.service.set_deck_tags(updated.entry_id, deck_tag_ids)
+            return updated
 
         self._run(
             operation,
@@ -2861,6 +2946,23 @@ class RecorderGui:
                 self.refresh_catalog(kind),
             ),
         )
+
+    def _selected_deck_tag_ids(self) -> tuple[int, ...]:
+        listbox = self.catalog_deck_tag_list
+        if listbox is None:
+            return ()
+        selected: list[int] = []
+        for index in range(listbox.size()):
+            name = str(listbox.get(index)).casefold()
+            entry = self.catalog_deck_tags_by_name.get(name)
+            if entry is not None:
+                selected.append(entry.entry_id)
+        return tuple(dict.fromkeys(selected))
+
+    def _clear_deck_tag_selection(self) -> None:
+        if self.catalog_deck_tag_list is not None:
+            self.catalog_deck_tag_list.delete(0, "end")
+        self.catalog_deck_tag_var.set("")
 
     def delete_catalog_entry(self, kind: str) -> None:
         tree = self.catalog_trees[kind]
@@ -3861,10 +3963,7 @@ class RecorderGui:
             or (view.entry is not None and view.entry.state == "completed")
         )
         media_state = "normal" if has_recording else "disabled"
-        self.history_diagnostic_button.configure(state=media_state)
-        self.history_timeline_button.configure(state=media_state)
         self.history_action_buttons["play"].configure(state=media_state)
-        self.history_action_buttons["folder"].configure(state=media_state)
         self.history_action_buttons["edit"].configure(
             state="normal" if editable else "disabled"
         )
@@ -3875,14 +3974,6 @@ class RecorderGui:
             state="normal" if has_recording and len(selection) == 1 else "disabled"
         )
 
-        missing_recording = False
-        if has_recording and view is not None and view.entry is not None:
-            missing_recording = not (
-                self.service.paths.recordings / view.entry.output_path
-            ).is_file()
-        self.history_relink_button.configure(
-            state="normal" if missing_recording else "disabled"
-        )
         self.history_bulk_button.configure(
             state="normal"
             if selection
@@ -3924,7 +4015,9 @@ class RecorderGui:
         view = self.history_views_by_id[str(selection[0])]
         if view.recording_id is None:
             return
-        recording_id = view.recording_id
+        self._reveal_recording(view.recording_id)
+
+    def _reveal_recording(self, recording_id: str) -> None:
         self._run(
             lambda: self.service.reveal_recording(recording_id),
             lambda reference: self._recording_opened("保存場所を開きました", reference),
@@ -3937,6 +4030,14 @@ class RecorderGui:
         view = self.history_views_by_id[str(selection[0])]
         if view.recording_id is None:
             return
+        self._relink_recording(view.recording_id)
+
+    def _relink_recording(
+        self,
+        recording_id: str,
+        *,
+        on_relinked: Callable[[], None] | None = None,
+    ) -> None:
         candidate = filedialog.askopenfilename(
             title="再関連付けする録画ファイルを選択",
             initialdir=self.service.paths.recordings,
@@ -3965,12 +4066,13 @@ class RecorderGui:
                     self._activity(f"録画ファイルを再関連付けしました: {preview.recording_id}"),
                     self.refresh_history(),
                     self.refresh_data_protection(),
+                    on_relinked() if on_relinked is not None else None,
                 ),
             )
 
         self._run(
             lambda: self.service.preview_recording_relink(
-                view.recording_id, Path(candidate)
+                recording_id, Path(candidate)
             ),
             confirm,
         )
@@ -4203,7 +4305,9 @@ class RecorderGui:
         view = self.history_views_by_id[str(selection[0])]
         if view.recording_id is None:
             return
-        recording_id = view.recording_id
+        self._show_recording_diagnostic(view.recording_id)
+
+    def _show_recording_diagnostic(self, recording_id: str) -> None:
         self._run(
             lambda: self.service.get_history(recording_id),
             self._show_history_diagnostic,
@@ -4944,7 +5048,7 @@ class RecorderGui:
         )
         dialog = tk.Toplevel(self.root)
         dialog.title("戦績を追加" if is_new_manual else "対戦記録")
-        dialog.geometry("720x740" if is_manual else "720x700")
+        dialog.geometry("760x820" if is_manual else "760x780")
         dialog.minsize(620, 620)
         dialog.transient(self.root)
         body = ttk.Frame(dialog)
@@ -4976,9 +5080,23 @@ class RecorderGui:
                 "units",
             ),
         )
-        ttk.Label(form, text="対戦内容", style="Heading.TLabel").grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
-        )
+        header = ttk.Frame(form, style="Surface.TFrame")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+        ttk.Label(header, text="対戦内容", style="Heading.TLabel").pack(side="left")
+        recording_label = "録画あり" if data.recording.file_exists else "録画なし"
+        if data.recording.recording_id is not None and not data.recording.file_exists:
+            recording_label = "録画欠損"
+        ttk.Label(
+            header,
+            text=f"  [{'!' if recording_label == '録画欠損' else 'o'}] {recording_label}",
+            style="Muted.TLabel",
+        ).pack(side="left", padx=(18, 0))
+        youtube_label = "YouTube連携済み" if data.recording.youtube_watch_url else "YouTube未連携"
+        ttk.Label(
+            header,
+            text=f"  [{'o' if data.recording.youtube_watch_url else '-'}] {youtube_label}",
+            style="Muted.TLabel",
+        ).pack(side="left", padx=(12, 0))
         fields = (
             ("状態", "status", "confirmed" if is_new_manual else values.status),
             ("勝敗", "result", values.result),
@@ -5143,6 +5261,25 @@ class RecorderGui:
         editable_widgets.append(notes)
         form.columnconfigure(1, weight=1)
         form.rowconfigure(row, weight=1)
+        row += 1
+        ttk.Label(form, text="YouTubeリンク").grid(
+            row=row, column=0, sticky="w", pady=5
+        )
+        youtube_panel = ttk.Frame(form)
+        youtube_panel.grid(row=row, column=1, sticky="ew", pady=5)
+        youtube_url_var = tk.StringVar(value=data.recording.youtube_watch_url or "")
+        youtube_entry = ttk.Entry(
+            youtube_panel, textvariable=youtube_url_var, state="readonly"
+        )
+        youtube_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        youtube_open_button = ttk.Button(
+            youtube_panel,
+            text="開く",
+            command=lambda: webbrowser.open(youtube_url_var.get()),
+            state="normal" if data.recording.youtube_watch_url else "disabled",
+        )
+        youtube_open_button.grid(row=0, column=1)
+        youtube_panel.columnconfigure(0, weight=1)
 
         def save() -> None:
             add_tag()
@@ -5226,23 +5363,58 @@ class RecorderGui:
             self._run(operation, saved)
 
         buttons = ttk.Frame(form)
-        buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        buttons.grid(row=row + 1, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        detail_buttons = ttk.Frame(buttons)
+        detail_buttons.pack(side="left")
+        commit_buttons = ttk.Frame(buttons)
+        commit_buttons.pack(side="right")
+        can_use_recording = data.recording.recording_id is not None
+        can_relink = can_use_recording and not data.recording.file_exists
         if recording_id is not None:
-            ttk.Button(
-                buttons,
-                text="タイムライン",
-                command=lambda: self._show_timeline(recording_id),
-            ).pack(side="left", padx=(0, 8))
+            self._icon_button(
+                detail_buttons,
+                "folder",
+                "保存場所を開く",
+                lambda: self._reveal_recording(recording_id),
+                state="normal" if can_use_recording and data.recording.file_exists else "disabled",
+            ).pack(side="left", padx=(0, 6))
+            self._icon_button(
+                detail_buttons,
+                "timeline",
+                "タイムラインを表示",
+                lambda: self._show_timeline(recording_id),
+                state="normal" if can_use_recording else "disabled",
+            ).pack(side="left", padx=(0, 6))
+            self._icon_button(
+                detail_buttons,
+                "diagnostic",
+                "録画診断を表示",
+                lambda: self._show_recording_diagnostic(recording_id),
+                state="normal" if can_use_recording else "disabled",
+            ).pack(side="left", padx=(0, 6))
+            self._icon_button(
+                detail_buttons,
+                "link",
+                "欠損した録画ファイルを再関連付け",
+                lambda: self._relink_recording(
+                    recording_id,
+                    on_relinked=lambda: (
+                        dialog.destroy(),
+                        self._open_duel_editor(recording_id),
+                    ),
+                ),
+                state="normal" if can_relink else "disabled",
+            ).pack(side="left", padx=(0, 6))
         def cancel() -> None:
             dialog.destroy()
             if on_cancel is not None:
                 on_cancel()
 
-        ttk.Button(buttons, text="キャンセル", command=cancel).pack(
+        ttk.Button(commit_buttons, text="キャンセル", command=cancel).pack(
             side="left", padx=(0, 8)
         )
         save_button = self._icon_button(
-            buttons, "save", "対戦記録を保存", save, style="Primary.TButton"
+            commit_buttons, "save", "対戦記録を保存", save, style="Primary.TButton"
         )
         save_button.pack(side="left")
         if read_only_reason is not None:

@@ -1,5 +1,21 @@
 # リリースノート
 
+## V1.4.6: 戦績編集とデッキタグ管理の改善 - 2026-08-22
+
+- 対戦記録編集画面の下部左側へ「保存場所を開く」「タイムラインを表示」「録画診断を表示」「欠損した録画ファイルを再関連付け」を集約した
+- 編集画面の「対戦内容」見出し横に録画有無とYouTube連携状態を表示し、録画欠損も判別できるようにした
+- 編集画面の下部にYouTubeリンク欄と「開く」ボタンを追加し、投稿済みURLをブラウザで確認できるようにした
+- デッキ名へタグを付けるDBモデル、サービスAPI、デッキ管理GUIを追加した
+- タグ管理に「デッキ名でのみ使用」を追加し、ONのタグは戦績入力時のタグ候補から除外するようにした
+- DBスキーマをV17へ更新し、既存の戦績、録画、YouTubeアップロード履歴、既存タグを保持したまま移行する
+- Ruff、全554テスト、CLI/GUI/updater one-file EXEビルド、3 EXEスモークに合格した
+- ローカル通常ビルドCLI EXE SHA-256: `0F9CED99348EECDA12D34E9ACCF3B8E9CFC846619E31CC3796C6F8E276DAED02`
+- ローカル通常ビルドGUI EXE SHA-256: `06A293A28C556DCE7578321C51485E14F4F072119449348CED23F92CE9B94CE1`
+- ローカル通常ビルドupdater EXE SHA-256: `A676A73DF817996D5422D15A3312C7E247C80AAB30D1F575D3725DF8E037EA6B`
+- ローカルrelease必須OAuth client検証は、手元環境に`MDRL_YOUTUBE_OAUTH_CLIENT_ID/MDRL_YOUTUBE_OAUTH_CLIENT_SECRET`または`assets/youtube-oauth-client.json`がないため未完了。正式ReleaseではGitHub ActionsのSecretsで検証する
+
+追跡: [V1.4.6 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/66)、親Issue #471、子Issue #472 - #476
+
 ## V1.4.5: YouTube OAuth資格情報ストアhotfix - 2026-08-22
 
 - 配布EXEからWindows資格情報ストアのYouTube OAuth資格情報を読み取れず、GUIの`接続確認`や投稿ダイアログで未連携扱いになる問題を修正した

@@ -39,6 +39,7 @@ class DuelCatalogEntry:
     is_archived: bool
     opponent_only: bool
     hidden_from_history_statistics: bool
+    deck_only: bool
     created_at: datetime
     updated_at: datetime
 
@@ -107,9 +108,14 @@ class DuelCatalogRepository:
         )
 
     def list_tags(
-        self, *, include_archived: bool = False
+        self, *, include_archived: bool = False, include_deck_only: bool = True
     ) -> tuple[DuelCatalogEntry, ...]:
-        return self.list(kind="tag", include_archived=include_archived)
+        items = self.list(kind="tag", include_archived=include_archived)
+        return (
+            items
+            if include_deck_only
+            else tuple(item for item in items if not item.deck_only)
+        )
 
     def add(
         self,
@@ -118,6 +124,7 @@ class DuelCatalogRepository:
         *,
         description: str = "",
         color: str | None = None,
+        deck_only: bool = False,
     ) -> DuelCatalogEntry:
         normalized_kind = _kind(kind)
         display_name, normalized_name = _name(normalized_kind, name)
@@ -133,8 +140,8 @@ class DuelCatalogRepository:
                     """
                     INSERT INTO duel_catalog_entries (
                         kind, name, normalized_name, description, color,
-                        is_archived, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                        is_archived, deck_only, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
                     """,
                     (
                         normalized_kind,
@@ -142,6 +149,7 @@ class DuelCatalogRepository:
                         normalized_name,
                         normalized_description,
                         normalized_color,
+                        int(bool(deck_only)) if normalized_kind == "tag" else 0,
                         timestamp,
                         timestamp,
                     ),
@@ -172,8 +180,15 @@ class DuelCatalogRepository:
         *,
         description: str = "",
         color: str = DEFAULT_TAG_COLOR,
+        deck_only: bool = False,
     ) -> DuelCatalogEntry:
-        return self.add("tag", name, description=description, color=color)
+        return self.add(
+            "tag",
+            name,
+            description=description,
+            color=color,
+            deck_only=deck_only,
+        )
 
     def remember(self, kind: str, name: str) -> DuelCatalogEntry | None:
         if not name.strip():
@@ -326,11 +341,83 @@ class DuelCatalogRepository:
         name: str,
         description: str = "",
         color: str = DEFAULT_TAG_COLOR,
+        deck_only: bool = False,
     ) -> DuelCatalogEntry:
         current = self.get(entry_id)
         if current.kind != "tag":
             raise DuelCatalogError("タグ以外の項目をタグとして更新できません")
-        return self.update(entry_id, name=name, description=description, color=color)
+        entry = self.update(entry_id, name=name, description=description, color=color)
+        with (
+            closing(connect_history_database(self.database_path)) as connection,
+            connection,
+        ):
+            connection.execute(
+                "UPDATE duel_catalog_entries SET deck_only = ? WHERE entry_id = ? AND kind = 'tag'",
+                (int(deck_only), entry.entry_id),
+            )
+        return self.get(entry.entry_id)
+
+    def list_deck_tags(self, deck_entry_id: int) -> tuple[DuelCatalogEntry, ...]:
+        deck = self.get(deck_entry_id)
+        if deck.kind != "deck":
+            raise DuelCatalogError("デッキ名以外の項目にはデッキタグを設定できません")
+        with closing(connect_history_database(self.database_path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT tag.*
+                FROM deck_tag_links AS link
+                JOIN duel_catalog_entries AS tag ON tag.entry_id = link.tag_entry_id
+                WHERE link.deck_entry_id = ?
+                ORDER BY tag.normalized_name, tag.entry_id
+                """,
+                (deck.entry_id,),
+            ).fetchall()
+        return tuple(_entry(row) for row in rows)
+
+    def list_deck_tag_ids(self, deck_entry_id: int) -> tuple[int, ...]:
+        return tuple(entry.entry_id for entry in self.list_deck_tags(deck_entry_id))
+
+    def set_deck_tags(
+        self, deck_entry_id: int, tag_entry_ids: tuple[int, ...]
+    ) -> tuple[DuelCatalogEntry, ...]:
+        deck = self.get(deck_entry_id)
+        if deck.kind != "deck":
+            raise DuelCatalogError("デッキ名以外の項目にはデッキタグを設定できません")
+        normalized_tag_ids = tuple(
+            dict.fromkeys(_entry_id(item) for item in tag_entry_ids)
+        )
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with (
+            closing(connect_history_database(self.database_path)) as connection,
+            connection,
+        ):
+            connection.execute("BEGIN IMMEDIATE")
+            if normalized_tag_ids:
+                placeholders = ", ".join("?" for _ in normalized_tag_ids)
+                rows = connection.execute(
+                    "SELECT entry_id, kind FROM duel_catalog_entries "
+                    f"WHERE entry_id IN ({placeholders})",
+                    normalized_tag_ids,
+                ).fetchall()
+                found = {int(row["entry_id"]) for row in rows if row["kind"] == "tag"}
+                missing = set(normalized_tag_ids) - found
+                if missing:
+                    raise DuelCatalogError("デッキタグに指定できない項目が含まれています")
+            connection.execute(
+                "DELETE FROM deck_tag_links WHERE deck_entry_id = ?",
+                (deck.entry_id,),
+            )
+            connection.executemany(
+                """
+                INSERT INTO deck_tag_links(deck_entry_id, tag_entry_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                tuple(
+                    (deck.entry_id, tag_id, timestamp)
+                    for tag_id in normalized_tag_ids
+                ),
+            )
+        return self.list_deck_tags(deck.entry_id)
 
     def delete(self, entry_id: int) -> DuelCatalogEntry:
         identifier = _entry_id(entry_id)
@@ -390,15 +477,38 @@ class DuelCatalogRepository:
     def _reference_count(connection: sqlite3.Connection, row: sqlite3.Row) -> int:
         if row["kind"] == "tag":
             result = connection.execute(
-                "SELECT COUNT(*) FROM duel_record_tag_links WHERE tag_entry_id = ?",
-                (row["entry_id"],),
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM duel_record_tag_links WHERE tag_entry_id = ?)
+                    + (SELECT COUNT(*) FROM deck_tag_links WHERE tag_entry_id = ?)
+                """,
+                (row["entry_id"], row["entry_id"]),
             ).fetchone()
             return int(result[0])
         result = connection.execute(
-            "SELECT COUNT(*) FROM duel_records WHERE own_deck = ? OR opponent_deck = ?",
-            (row["name"], row["name"]),
+            """
+            SELECT
+                (SELECT COUNT(*) FROM duel_records WHERE own_deck = ? OR opponent_deck = ?)
+                + (SELECT COUNT(*) FROM deck_tag_links WHERE deck_entry_id = ?)
+            """,
+            (row["name"], row["name"], row["entry_id"]),
         ).fetchone()
         return int(result[0])
+
+    def deck_tags_by_deck(self) -> dict[int, tuple[DuelCatalogEntry, ...]]:
+        with closing(connect_history_database(self.database_path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT link.deck_entry_id, tag.*
+                FROM deck_tag_links AS link
+                JOIN duel_catalog_entries AS tag ON tag.entry_id = link.tag_entry_id
+                ORDER BY link.deck_entry_id, tag.normalized_name, tag.entry_id
+                """
+            ).fetchall()
+        grouped: dict[int, list[DuelCatalogEntry]] = {}
+        for row in rows:
+            grouped.setdefault(int(row["deck_entry_id"]), []).append(_entry(row))
+        return {deck_id: tuple(tags) for deck_id, tags in grouped.items()}
 
     @staticmethod
     def _rename_references(
@@ -532,6 +642,7 @@ def _entry(row: sqlite3.Row) -> DuelCatalogEntry:
         is_archived=bool(row["is_archived"]),
         opponent_only=bool(row["opponent_only"]),
         hidden_from_history_statistics=bool(row["hidden_from_history_statistics"]),
+        deck_only=bool(row["deck_only"]),
         created_at=_datetime(row["created_at"]),
         updated_at=_datetime(row["updated_at"]),
     )

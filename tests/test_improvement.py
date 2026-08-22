@@ -50,7 +50,7 @@ def _record(
 
 
 class ImprovementTest(unittest.TestCase):
-    def test_repository_creates_templates_and_goals_on_schema_v16(self) -> None:
+    def test_repository_creates_templates_and_goals_on_current_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
             ensure_runtime_dirs(paths)
@@ -71,7 +71,7 @@ class ImprovementTest(unittest.TestCase):
             goals = repository.list_goals()
 
         self.assertGreaterEqual(CURRENT_SCHEMA_VERSION, 16)
-        self.assertEqual(version, 16)
+        self.assertEqual(version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(templates[0].template_id, template.template_id)
         self.assertEqual(goals[0].goal_id, goal.goal_id)
 

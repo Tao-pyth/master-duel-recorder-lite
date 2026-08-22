@@ -68,17 +68,17 @@ class GuiActivityTest(unittest.TestCase):
             ["対戦開始を判定中です (4s)", "自動監視を開始しました"],
         )
 
-    def test_history_row_has_four_distinct_icon_actions_and_keyboard_paths(
+    def test_history_row_has_three_list_actions_and_keyboard_paths(
         self,
     ) -> None:
         self.assertEqual(
             [item[1] for item in HISTORY_ROW_ACTIONS],
-            ["再生", "対戦記録を編集", "保存場所を開く", "削除"],
+            ["再生", "対戦記録を編集", "削除"],
         )
-        self.assertEqual(len({ICON_GLYPHS[item[0]] for item in HISTORY_ROW_ACTIONS}), 4)
+        self.assertEqual(len({ICON_GLYPHS[item[0]] for item in HISTORY_ROW_ACTIONS}), 3)
         self.assertEqual(
             [item[2] for item in HISTORY_ROW_ACTIONS],
-            ["Enter", "Ctrl+E", "Ctrl+O", "Delete"],
+            ["Enter", "Ctrl+E", "Delete"],
         )
         self.assertTrue(
             all(ord(ICON_GLYPHS[item[0]]) >= 0xE000 for item in HISTORY_ROW_ACTIONS)

@@ -10,7 +10,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 17
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -803,6 +803,27 @@ def _migrate_to_v16(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v17(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "ALTER TABLE duel_catalog_entries ADD COLUMN deck_only INTEGER NOT NULL DEFAULT 0 "
+        "CHECK (deck_only IN (0, 1))"
+    )
+    connection.execute(
+        """
+        CREATE TABLE deck_tag_links (
+            deck_entry_id INTEGER NOT NULL REFERENCES duel_catalog_entries(entry_id) ON DELETE CASCADE,
+            tag_entry_id INTEGER NOT NULL REFERENCES duel_catalog_entries(entry_id) ON DELETE RESTRICT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (deck_entry_id, tag_entry_id),
+            CHECK (deck_entry_id <> tag_entry_id)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX deck_tag_links_tag_idx ON deck_tag_links(tag_entry_id, deck_entry_id)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -820,6 +841,7 @@ _MIGRATIONS: dict[int, Migration] = {
     14: _migrate_to_v14,
     15: _migrate_to_v15,
     16: _migrate_to_v16,
+    17: _migrate_to_v17,
 }
 
 
@@ -1102,9 +1124,17 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "is_archived",
         "opponent_only",
         "hidden_from_history_statistics",
+        "deck_only",
     }.issubset(catalog_columns):
         raise HistoryDatabaseError(
             "録画履歴DBに必須のduel_catalog_entriesスキーマがありません"
+        )
+    deck_tag_link_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(deck_tag_links)")
+    }
+    if not {"deck_entry_id", "tag_entry_id"}.issubset(deck_tag_link_columns):
+        raise HistoryDatabaseError(
+            "録画履歴DBに必須のdeck_tag_linksスキーマがありません"
         )
     tag_link_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(duel_record_tag_links)")

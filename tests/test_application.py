@@ -35,6 +35,10 @@ from master_duel_recorder_lite.visual_detection import DetectionCandidate
 from master_duel_recorder_lite.visual_worker import VisualDetectionStatus
 from master_duel_recorder_lite.youtube_client import FakeYouTubeClient
 from master_duel_recorder_lite.youtube_oauth import MemoryCredentialStore, YouTubeCredentials
+from master_duel_recorder_lite.youtube_uploads import (
+    YouTubeUploadRepository,
+    YouTubeUploadState,
+)
 
 
 class RecorderApplicationServiceTest(unittest.TestCase):
@@ -491,6 +495,60 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertEqual(
             {entry.name for entry in new_data.decks},
             {"青眼", "烙印", "閃刀姫", "ラビュリンス"},
+        )
+
+    def test_duel_editor_data_includes_completed_youtube_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "user_data"
+            service = RecorderApplicationService(user_data_dir=root)
+            history = RecordingHistoryRepository.from_runtime_paths(service.paths)
+            recording_path = service.paths.recordings / "duel.mkv"
+            recording_path.parent.mkdir(parents=True, exist_ok=True)
+            recording_path.write_bytes(b"video")
+            history.register_starting(
+                recording_id="youtube-rec",
+                output_path=recording_path,
+                container="mkv",
+                source="manual",
+            )
+            history.mark_recording(
+                "youtube-rec",
+                started_at=datetime(2026, 8, 22, tzinfo=timezone.utc),
+            )
+            history.finalize(
+                "youtube-rec",
+                RecordingResult(
+                    state=RecordingState.COMPLETED,
+                    output_path=recording_path,
+                    returncode=0,
+                    started_at=datetime(2026, 8, 22, tzinfo=timezone.utc),
+                    ended_at=datetime(2026, 8, 22, 0, 1, tzinfo=timezone.utc),
+                    size_bytes=5,
+                    error=None,
+                    diagnostics=(),
+                ),
+            )
+            service.save_duel_record(
+                "youtube-rec", DuelRecordValues(own_deck="青眼"), expected_revision=0
+            )
+            uploads = YouTubeUploadRepository.from_runtime_paths(service.paths)
+            upload = uploads.create(
+                recording_id="youtube-rec",
+                metadata=UploadMetadata("Master Duel"),
+            )
+            uploads.update(
+                upload,
+                state=YouTubeUploadState.COMPLETED,
+                video_id="20XgAs3_vu4",
+                watch_url="https://youtu.be/20XgAs3_vu4",
+            )
+
+            data = service.get_duel_editor_data("youtube-rec")
+
+        self.assertTrue(data.recording.file_exists)
+        self.assertEqual(data.recording.youtube_video_id, "20XgAs3_vu4")
+        self.assertEqual(
+            data.recording.youtube_watch_url, "https://youtu.be/20XgAs3_vu4"
         )
 
     def test_history_delete_is_rejected_while_manual_start_is_reserved(self) -> None:

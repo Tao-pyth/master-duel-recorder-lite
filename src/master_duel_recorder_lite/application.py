@@ -165,11 +165,22 @@ class ApplicationEvent:
 
 
 @dataclass(frozen=True)
+class DuelEditorRecordingStatus:
+    recording_id: str | None
+    output_path: Path | None
+    file_exists: bool
+    youtube_watch_url: str | None
+    youtube_video_id: str | None
+
+
+@dataclass(frozen=True)
 class DuelEditorData:
     record: DuelRecord | None
     values: DuelRecordValues
     decks: tuple[DuelCatalogEntry, ...]
     tags: tuple[DuelCatalogEntry, ...]
+    deck_tags: dict[int, tuple[DuelCatalogEntry, ...]]
+    recording: DuelEditorRecordingStatus
     seasons: tuple[Season, ...]
     suggestion_reasons: tuple[str, ...] = ()
 
@@ -1082,11 +1093,34 @@ class RecorderApplicationService:
             record=record,
             values=values,
             decks=catalog.list(kind="deck"),
-            tags=catalog.list(kind="tag"),
+            tags=catalog.list_tags(include_deck_only=False),
+            deck_tags=catalog.deck_tags_by_deck(),
+            recording=self._duel_editor_recording_status(record, identifier),
             seasons=SeasonRepository.from_runtime_paths(self.paths).list(
                 include_archived=True
             ),
             suggestion_reasons=suggestion.reasons if suggestion is not None else (),
+        )
+
+    def _duel_editor_recording_status(
+        self, record: DuelRecord | None, identifier: str | None
+    ) -> DuelEditorRecordingStatus:
+        recording_id = record.recording_id if record is not None else identifier
+        if not recording_id:
+            return DuelEditorRecordingStatus(None, None, False, None, None)
+        entry = RecordingHistoryRepository.from_runtime_paths(self.paths).get(
+            recording_id
+        )
+        output_path = self.paths.recordings / entry.output_path if entry is not None else None
+        upload = YouTubeUploadRepository.from_runtime_paths(self.paths).completed_for_recording(
+            recording_id
+        )
+        return DuelEditorRecordingStatus(
+            recording_id=recording_id,
+            output_path=output_path,
+            file_exists=output_path.is_file() if output_path is not None else False,
+            youtube_watch_url=upload.watch_url if upload is not None else None,
+            youtube_video_id=upload.video_id if upload is not None else None,
         )
 
     def get_duel_input_suggestion(
@@ -1243,6 +1277,23 @@ class RecorderApplicationService:
     def list_tags(self) -> tuple[DuelCatalogEntry, ...]:
         return DuelCatalogRepository.from_runtime_paths(self.paths).list_tags()
 
+    def list_record_tags(self) -> tuple[DuelCatalogEntry, ...]:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).list_tags(
+            include_deck_only=False
+        )
+
+    def list_deck_tags(self, deck_entry_id: int) -> tuple[DuelCatalogEntry, ...]:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).list_deck_tags(
+            deck_entry_id
+        )
+
+    def set_deck_tags(
+        self, deck_entry_id: int, tag_entry_ids: tuple[int, ...]
+    ) -> tuple[DuelCatalogEntry, ...]:
+        return DuelCatalogRepository.from_runtime_paths(self.paths).set_deck_tags(
+            deck_entry_id, tag_entry_ids
+        )
+
     def list_seasons(self, *, include_archived: bool = False) -> tuple[Season, ...]:
         return SeasonRepository.from_runtime_paths(self.paths).list(
             include_archived=include_archived
@@ -1332,12 +1383,14 @@ class RecorderApplicationService:
         *,
         description: str = "",
         color: str | None = None,
+        deck_only: bool = False,
     ) -> DuelCatalogEntry:
         return DuelCatalogRepository.from_runtime_paths(self.paths).add(
             kind,
             name,
             description=description,
             color=color,
+            deck_only=deck_only,
         )
 
     def add_deck(
@@ -1359,11 +1412,13 @@ class RecorderApplicationService:
         *,
         description: str = "",
         color: str = "#4F6F8F",
+        deck_only: bool = False,
     ) -> DuelCatalogEntry:
         return DuelCatalogRepository.from_runtime_paths(self.paths).add_tag(
             name,
             description=description,
             color=color,
+            deck_only=deck_only,
         )
 
     def rename_duel_catalog_entry(self, entry_id: int, name: str) -> DuelCatalogEntry:
@@ -1397,12 +1452,14 @@ class RecorderApplicationService:
         name: str,
         description: str = "",
         color: str = "#4F6F8F",
+        deck_only: bool = False,
     ) -> DuelCatalogEntry:
         return DuelCatalogRepository.from_runtime_paths(self.paths).update_tag(
             entry_id,
             name=name,
             description=description,
             color=color,
+            deck_only=deck_only,
         )
 
     def delete_duel_catalog_entry(self, entry_id: int) -> DuelCatalogEntry:
