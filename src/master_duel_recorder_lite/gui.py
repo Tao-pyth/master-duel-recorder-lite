@@ -445,6 +445,7 @@ class RecorderGui:
         self.catalog_deck_tags_by_name: dict[str, DuelCatalogEntry] = {}
         self.history_views_by_id: dict[str, object] = {}
         self.history_action_buttons: dict[str, ttk.Button] = {}
+        self.history_clear_filter_button: ttk.Button | None = None
         self.history_color_lines: list[tk.Widget] = []
         self.history_color_cells: list[tk.Widget] = []
         self.seasons_by_id: dict[str, object] = {}
@@ -491,6 +492,9 @@ class RecorderGui:
         self.reliability_wizard_var = tk.StringVar(value="未確認")
         self.reliability_hotkey_var = tk.StringVar(value="未確認")
         self.improvement_status_var = tk.StringVar(value="未確認")
+        self.youtube_template_title_var = tk.StringVar()
+        self.youtube_template_tags_var = tk.StringVar()
+        self.youtube_template_description: tk.Text | None = None
 
         self._configure_window()
         self._configure_styles()
@@ -501,6 +505,7 @@ class RecorderGui:
         self._build_catalog_pages()
         self._build_seasons_page()
         self._build_prepare_page()
+        self._build_youtube_template_page()
         self._build_reliability_page()
         self._build_improvement_page()
         self._build_settings_page()
@@ -771,6 +776,7 @@ class RecorderGui:
             ("decks", "デッキ名"),
             ("tags", "タグ"),
             ("seasons", "シーズン"),
+            ("template", "テンプレート"),
             ("reliability", "信頼性"),
             ("settings", "設定"),
         ):
@@ -1148,11 +1154,6 @@ class RecorderGui:
         toolbar.pack(fill="x", pady=(0, 10))
         header_bar = ttk.Frame(toolbar, style="Surface.TFrame")
         header_bar.pack(fill="x")
-        ttk.Label(header_bar, text="戦績管理", style="Heading.TLabel").pack(side="left")
-        self.history_add_button = self._icon_button(
-            header_bar, "add", "録画を伴わない戦績を追加", self._open_manual_quick_duel_editor
-        )
-        self.history_add_button.pack(side="left", padx=(16, 6))
         self.history_incomplete_button = ttk.Button(
             header_bar,
             text="未完了を処理",
@@ -1165,6 +1166,62 @@ class RecorderGui:
             command=self._open_bulk_duel_editor,
         )
         self.history_bulk_button.pack(side="left", padx=(0, 6))
+        self.history_add_button = ttk.Button(
+            header_bar,
+            text="手動追加",
+            command=self._open_manual_quick_duel_editor,
+        )
+        self.history_add_button.pack(side="left", padx=(0, 12))
+        commands = {
+            "play": self.play_selected_history,
+            "edit": self.edit_selected_duel_record,
+            "delete": self.delete_selected_history,
+        }
+        for icon, label, shortcut in HISTORY_ROW_ACTIONS:
+            button = self._icon_button(
+                header_bar,
+                icon,
+                f"{label} ({shortcut})",
+                commands[icon],
+                state="disabled",
+            )
+            button.pack(side="left", padx=(0, 6))
+            self.history_action_buttons[icon] = button
+        self.history_duplicates_button = self._icon_button(
+            header_bar,
+            "duplicates",
+            "重複戦績候補を比較",
+            command=self.open_duplicate_candidates,
+        )
+        self.history_duplicates_button.pack(side="left", padx=(0, 6))
+        self.history_refresh_button = self._icon_button(
+            header_bar,
+            "refresh",
+            "録画履歴を更新",
+            self.refresh_history,
+        )
+        self.history_refresh_button.pack(side="left", padx=(0, 6))
+        self._icon_button(
+            header_bar,
+            "test",
+            "録画履歴の整合性を確認",
+            self.check_history,
+        ).pack(side="left", padx=(0, 6))
+        self.history_columns_button = self._icon_button(
+            header_bar,
+            "columns",
+            "表示する列を選択",
+            self.open_history_columns_menu,
+        )
+        self.history_columns_button.pack(side="left", padx=(0, 6))
+        self.history_youtube_button = self._icon_button(
+            header_bar,
+            "link",
+            "選択した録画をYouTubeへ投稿",
+            self.open_youtube_upload_dialog,
+            state="disabled",
+        )
+        self.history_youtube_button.pack(side="left", padx=(0, 12))
         self.history_filter_button = self._icon_button(
             header_bar, "filter", "録画履歴を絞り込む", self.open_history_filter
         )
@@ -1175,61 +1232,11 @@ class RecorderGui:
             textvariable=self.history_filter_count_var,
             style="Muted.TLabel",
         ).pack(side="left", padx=(0, 6))
-        self._icon_button(
+        self.history_clear_filter_button = self._icon_button(
             header_bar, "clear_filter", "録画履歴の絞り込みを解除", self.clear_history_filter
-        ).pack(side="left")
-        action_bar = ttk.Frame(toolbar, style="Surface.TFrame")
-        action_bar.pack(fill="x", pady=(8, 0))
-        commands = {
-            "play": self.play_selected_history,
-            "edit": self.edit_selected_duel_record,
-            "delete": self.delete_selected_history,
-        }
-        for icon, label, shortcut in HISTORY_ROW_ACTIONS:
-            button = self._icon_button(
-                action_bar,
-                icon,
-                f"{label} ({shortcut})",
-                commands[icon],
-                state="disabled",
-            )
-            button.pack(side="left", padx=(0, 6))
-            self.history_action_buttons[icon] = button
-        self.history_duplicates_button = self._icon_button(
-            action_bar,
-            "duplicates",
-            "重複戦績候補を比較",
-            command=self.open_duplicate_candidates,
         )
-        self.history_duplicates_button.pack(side="left", padx=(0, 6))
-        self.history_refresh_button = self._icon_button(
-            action_bar,
-            "refresh",
-            "録画履歴を更新",
-            self.refresh_history,
-        )
-        self.history_refresh_button.pack(side="left", padx=(0, 6))
-        self._icon_button(
-            action_bar,
-            "test",
-            "録画履歴の整合性を確認",
-            self.check_history,
-        ).pack(side="left")
-        self.history_columns_button = self._icon_button(
-            action_bar,
-            "columns",
-            "表示する列を選択",
-            self.open_history_columns_menu,
-        )
-        self.history_columns_button.pack(side="left", padx=(6, 0))
-        self.history_youtube_button = self._icon_button(
-            action_bar,
-            "link",
-            "選択した録画をYouTubeへ投稿",
-            self.open_youtube_upload_dialog,
-            state="disabled",
-        )
-        self.history_youtube_button.pack(side="left", padx=(6, 0))
+        self.history_clear_filter_button.pack(side="left")
+        self._update_history_filter_clear_state()
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
         columns = (
@@ -1629,7 +1636,7 @@ class RecorderGui:
         else:
             ttk.Checkbutton(
                 editor,
-                text="デッキ名でのみ使用",
+                text="デッキ名登録でのみ使用",
                 variable=self.catalog_deck_only_var,
             ).grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
         self._icon_button(
@@ -1867,6 +1874,49 @@ class RecorderGui:
         self.prepare_tree.pack(fill="both", expand=True)
         self.widgets["prepare_table"] = self.prepare_tree
         self.widgets["prepare_recording"] = self.prepare_recording_combo
+
+    def _build_youtube_template_page(self) -> None:
+        page = self._new_page("template")
+        form = self._surface(page, padding=(18, 16))
+        form.pack(fill="both", expand=True)
+        ttk.Label(form, text="YouTube投稿テンプレート", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
+        )
+        ttk.Label(form, text="タイトル", style="Body.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(0, 4)
+        )
+        ttk.Entry(form, textvariable=self.youtube_template_title_var).grid(
+            row=2, column=0, columnspan=2, sticky="ew", pady=(0, 12)
+        )
+        ttk.Label(form, text="概要欄", style="Body.TLabel").grid(
+            row=3, column=0, sticky="w", pady=(0, 4)
+        )
+        self.youtube_template_description = tk.Text(
+            form, height=16, wrap="word", font=("Segoe UI", 10)
+        )
+        self.youtube_template_description.grid(
+            row=4, column=0, columnspan=2, sticky="nsew", pady=(0, 12)
+        )
+        ttk.Label(form, text="タグ", style="Body.TLabel").grid(
+            row=5, column=0, sticky="w", pady=(0, 4)
+        )
+        ttk.Entry(form, textvariable=self.youtube_template_tags_var).grid(
+            row=6, column=0, columnspan=2, sticky="ew", pady=(0, 16)
+        )
+        actions = ttk.Frame(form, style="Surface.TFrame")
+        actions.grid(row=7, column=0, columnspan=2, sticky="e")
+        ttk.Button(actions, text="一覧", command=self.show_youtube_template_aliases).pack(
+            side="left", padx=(0, 8)
+        )
+        ttk.Button(
+            actions,
+            text="保存",
+            style="Primary.TButton",
+            command=self.save_youtube_template,
+        ).pack(side="left")
+        form.columnconfigure(0, weight=1)
+        form.rowconfigure(4, weight=1)
+        self.widgets["youtube_template"] = form
 
     def _build_reliability_page(self) -> None:
         page = self._new_page("reliability")
@@ -2425,6 +2475,7 @@ class RecorderGui:
             "decks": "デッキ名",
             "tags": "タグ",
             "seasons": "シーズン",
+            "template": "テンプレート",
             "prepare": "MP4準備",
             "reliability": "信頼性",
             "improve": "改善",
@@ -2459,6 +2510,8 @@ class RecorderGui:
             selected_id = self.pending_preparation_recording_id
             self.pending_preparation_recording_id = None
             self.refresh_preparation_candidates(selected_id)
+        elif key == "template":
+            self.refresh_youtube_template()
         elif key == "reliability":
             self.refresh_reliability()
         elif key == "improve":
@@ -3364,6 +3417,7 @@ class RecorderGui:
     def refresh_history(self) -> None:
         if self.smoke_mode:
             return
+        self._update_history_filter_clear_state()
         self._run(
             lambda: self.service.get_history_dashboard(query=self.history_query),
             self._history_loaded,
@@ -3437,56 +3491,83 @@ class RecorderGui:
         selected = self._selected_history_view()
         if selected is None or selected.recording_id is None:
             return
-        default_title = (
-            f"Master Duel 対戦記録 {selected.occurred_at.astimezone().strftime('%Y-%m-%d')}"
+        self._run(
+            lambda: self.service.get_youtube_upload_dialog_data(selected.recording_id),
+            self._show_youtube_upload_dialog,
         )
+
+    def _show_youtube_upload_dialog(self, data: object) -> None:
         dialog = tk.Toplevel(self.root)
         dialog.title("YouTubeへ投稿")
         dialog.transient(self.root)
         dialog.resizable(False, False)
         frame = self._surface(dialog, padding=(18, 16))
         frame.pack(fill="both", expand=True)
-        title_var = tk.StringVar(value=default_title)
-        privacy_var = tk.StringVar(value="private")
-        tags_var = tk.StringVar(value="Master Duel")
-        status_var = tk.StringVar(value="投稿前に内容を確認してください")
+        title_var = tk.StringVar(value=data.title)
+        privacy_var = tk.StringVar(value=data.privacy)
+        tags_var = tk.StringVar(value=", ".join(data.tags))
+        linked_url = data.youtube_watch_url or ""
+        status_var = tk.StringVar(
+            value="すでに連携されています" if linked_url else "投稿前に内容を確認してください"
+        )
         preparation_var = tk.StringVar(value="投稿用MP4準備状態を確認しています")
         ttk.Label(frame, text="タイトル", style="Body.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=title_var, width=54).grid(
+        title_entry = ttk.Entry(frame, textvariable=title_var, width=54)
+        title_entry.grid(
             row=1, column=0, columnspan=2, sticky="ew", pady=(4, 10)
         )
         ttk.Label(frame, text="概要欄", style="Body.TLabel").grid(row=2, column=0, sticky="w")
         description = tk.Text(frame, width=54, height=6, wrap="word")
+        description.insert("1.0", data.description)
         description.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 10))
         ttk.Label(frame, text="タグ（カンマ区切り）", style="Body.TLabel").grid(row=4, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=tags_var, width=54).grid(
+        tags_entry = ttk.Entry(frame, textvariable=tags_var, width=54)
+        tags_entry.grid(
             row=5, column=0, columnspan=2, sticky="ew", pady=(4, 10)
         )
         ttk.Label(frame, text="公開範囲", style="Body.TLabel").grid(row=6, column=0, sticky="w")
-        ttk.Combobox(
+        privacy_combo = ttk.Combobox(
             frame,
             textvariable=privacy_var,
             values=("private", "unlisted", "public"),
             state="readonly",
             width=18,
-        ).grid(row=7, column=0, sticky="w", pady=(4, 10))
+        )
+        privacy_combo.grid(row=7, column=0, sticky="w", pady=(4, 10))
         ttk.Label(frame, textvariable=preparation_var, style="Muted.TLabel").grid(
             row=8, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
         ttk.Label(frame, textvariable=status_var, style="Muted.TLabel").grid(
             row=9, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
+        ttk.Label(frame, text="Youtubeリンク", style="Body.TLabel").grid(
+            row=10, column=0, sticky="w"
+        )
+        youtube_link_var = tk.StringVar(value=linked_url)
+        ttk.Entry(frame, textvariable=youtube_link_var, width=54, state="readonly").grid(
+            row=11, column=0, columnspan=2, sticky="ew", pady=(4, 12)
+        )
+        if linked_url:
+            for widget in (title_entry, tags_entry, privacy_combo):
+                widget.configure(state="disabled")
+            description.configure(state="disabled")
+            preparation_var.set("投稿済みのため新規投稿は行いません")
 
         def preparation_loaded(status: object) -> None:
-            preparation_var.set(getattr(status, "message", str(status)))
+            if not linked_url:
+                preparation_var.set(getattr(status, "message", str(status)))
 
-        self._run(
-            lambda: self.service.youtube_preparation_status(selected.recording_id),
-            preparation_loaded,
-            lambda exc: preparation_var.set(f"投稿用MP4準備状態を確認できません: {exc}"),
-        )
+        if not linked_url:
+            self._run(
+                lambda: self.service.youtube_preparation_status(data.recording_id),
+                preparation_loaded,
+                lambda exc: preparation_var.set(f"投稿用MP4準備状態を確認できません: {exc}"),
+            )
 
         def submit() -> None:
+            if linked_url:
+                webbrowser.open(linked_url)
+                return
             title = title_var.get().strip()
             if not title:
                 messagebox.showerror("YouTube投稿", "タイトルを入力してください。", parent=dialog)
@@ -3506,7 +3587,7 @@ class RecorderGui:
             upload_button.configure(state="disabled")
             self._run(
                 lambda: self.service.upload_history_to_youtube(
-                    recording_id=selected.recording_id,
+                    recording_id=data.recording_id,
                     title=title,
                     description=text,
                     tags=tag_values,
@@ -3524,10 +3605,12 @@ class RecorderGui:
                 ),
             )
 
-        upload_button = ttk.Button(frame, text="投稿する", command=submit)
-        upload_button.grid(row=10, column=0, sticky="ew", padx=(0, 8))
+        upload_button = ttk.Button(
+            frame, text="リンクを開く" if linked_url else "投稿する", command=submit
+        )
+        upload_button.grid(row=12, column=0, sticky="ew", padx=(0, 8))
         ttk.Button(frame, text="キャンセル", command=dialog.destroy).grid(
-            row=10, column=1, sticky="ew"
+            row=12, column=1, sticky="ew"
         )
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
@@ -3546,6 +3629,45 @@ class RecorderGui:
         self.history_tree.selection_set(selected.row_id)
         self.history_tree.focus(selected.row_id)
         self.open_youtube_upload_dialog()
+
+    def refresh_youtube_template(self) -> None:
+        if self.smoke_mode:
+            return
+
+        def loaded(template: object) -> None:
+            self.youtube_template_title_var.set(template.title)
+            self.youtube_template_tags_var.set(template.tags)
+            assert self.youtube_template_description is not None
+            self.youtube_template_description.delete("1.0", "end")
+            self.youtube_template_description.insert("1.0", template.description)
+
+        self._run(self.service.get_youtube_posting_template, loaded)
+
+    def save_youtube_template(self) -> None:
+        assert self.youtube_template_description is not None
+        title = self.youtube_template_title_var.get()
+        description = self.youtube_template_description.get("1.0", "end-1c")
+        tags = self.youtube_template_tags_var.get()
+
+        def saved(_template: object) -> None:
+            self._activity("YouTube投稿テンプレートを保存しました")
+            messagebox.showinfo(
+                "テンプレート",
+                "YouTube投稿テンプレートを保存しました。",
+                parent=self.root,
+            )
+
+        self._run(
+            lambda: self.service.save_youtube_posting_template(
+                title=title, description=description, tags=tags
+            ),
+            saved,
+        )
+
+    def show_youtube_template_aliases(self) -> None:
+        aliases = self.service.youtube_posting_template_aliases()
+        text = "\n".join(f"{name}: {description}" for name, description in aliases)
+        messagebox.showinfo("使用できる変数", text, parent=self.root)
 
     def refresh_youtube_status(self) -> None:
         if self.smoke_mode:
@@ -3640,7 +3762,27 @@ class RecorderGui:
         self.history_query = DuelManagementQuery(limit=200)
         self.active_saved_filter_id = None
         self.history_filter_count_var.set("")
+        self._update_history_filter_clear_state()
         self.refresh_history()
+
+    @staticmethod
+    def _history_filter_is_active(query: DuelManagementQuery) -> bool:
+        return any(
+            value is not None
+            for value in (
+                query.season_id,
+                query.own_deck_id,
+                query.opponent_deck_id,
+                query.coin_face,
+                query.entry_origin,
+            )
+        ) or bool(query.tag_entry_ids)
+
+    def _update_history_filter_clear_state(self) -> None:
+        if self.history_clear_filter_button is None:
+            return
+        state = "normal" if self._history_filter_is_active(self.history_query) else "disabled"
+        self.history_clear_filter_button.configure(state=state)
 
     @staticmethod
     def _criteria_from_history_query(query: DuelManagementQuery) -> DuelFilterCriteria:
@@ -3761,6 +3903,7 @@ class RecorderGui:
                 saved = next(item for item in saved_filters if item.filter_id == saved_id)
                 label = f"{saved.name} ({count})"
             self.history_filter_count_var.set(label)
+            self._update_history_filter_clear_state()
             dialog.destroy()
             self.refresh_history()
 
@@ -3796,6 +3939,7 @@ class RecorderGui:
             self.active_saved_filter_id = saved.filter_id
             dialog.destroy()
             self.history_filter_count_var.set(saved.name)
+            self._update_history_filter_clear_state()
             self.refresh_history()
 
         def delete_saved() -> None:
@@ -3861,13 +4005,14 @@ class RecorderGui:
                 duel_type = duel_choice_label("duel_type", view.duel_type)
                 opponent_deck = view.opponent_deck or "未設定"
             own_deck = view.own_deck or "未設定"
+            deck_display = f"   {own_deck}" if view.own_deck_color else own_deck
             self.history_tree.insert(
                 "",
                 "end",
                 iid=view.row_id,
                 values=(
                     started.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
-                    own_deck,
+                    deck_display,
                     result,
                     play_order,
                     coin_face,
@@ -3902,13 +4047,27 @@ class RecorderGui:
             color = getattr(view, "own_deck_color", None)
             if not color:
                 continue
-            bounds = self.history_tree.bbox(row_id, "started")
+            bounds = self.history_tree.bbox(row_id, "deck")
             if not bounds:
                 continue
             x, y, width, height = bounds
-            line = tk.Frame(self.history_tree, background=color, borderwidth=0)
-            line.place(x=x + width - 3, y=y + 5, width=3, height=max(1, height - 10))
-            self.history_color_lines.append(line)
+            dot = tk.Label(
+                self.history_tree,
+                text="●",
+                background=self.COLORS["surface"],
+                foreground=color,
+                borderwidth=0,
+                font=("Segoe UI", 10),
+            )
+            dot.place(x=x + 4, y=y + 2, width=16, height=max(1, height - 4))
+            dot.bind(
+                "<Button-1>",
+                lambda _event, selected=row_id: (
+                    self.history_tree.selection_set(selected),
+                    self.history_tree.focus(selected),
+                ),
+            )
+            self.history_color_lines.append(dot)
         self._draw_history_cell_colors()
 
     def _draw_history_cell_colors(self) -> None:
@@ -4321,7 +4480,7 @@ class RecorderGui:
             user_data_dir=self.service.paths.root,
         )
         try:
-            subprocess.Popen(
+            process = subprocess.Popen(
                 command,
                 close_fds=True,
                 creationflags=subprocess_creation_flags(),
@@ -4329,7 +4488,21 @@ class RecorderGui:
         except OSError as exc:
             self._show_error(exc)
             return
-        self._activity(f"アプリ内レビューを起動しました: {recording_id}")
+        self._activity(f"録画レビューを起動中です: {recording_id}")
+
+        def check_launch() -> None:
+            returncode = process.poll()
+            if returncode is None:
+                self._activity(f"録画レビューを起動しました: {recording_id}")
+                return
+            messagebox.showwarning(
+                "録画レビュー",
+                "録画レビューを起動できませんでした。PySide6の導入状態または録画ファイルを確認してください。",
+                parent=self.root,
+            )
+            self._activity(f"録画レビューを起動できませんでした: {recording_id}: {returncode}")
+
+        self.root.after(1200, check_launch)
 
     def edit_selected_duel_record(self) -> None:
         selection = self.history_tree.selection()
@@ -4587,18 +4760,13 @@ class RecorderGui:
         values = data.values
         result_var = tk.StringVar(value=duel_choice_label("result", values.result))
         order_var = tk.StringVar(value=duel_choice_label("play_order", values.play_order))
+        coin_var = tk.StringVar(value=duel_choice_label("coin_face", values.coin_face))
         visible_decks = tuple(
             item
             for item in data.decks
-            if not item.hidden_from_history_statistics and not item.opponent_only
+            if not item.hidden_from_history_statistics
         )
-        deck_var = tk.StringVar(value=values.own_deck)
-        seasons = {"未設定": None, **{item.name: item.season_id for item in data.seasons}}
-        current_season = next(
-            (name for name, season_id in seasons.items() if season_id == values.season_id),
-            "未設定",
-        )
-        season_var = tk.StringVar(value=current_season)
+        opponent_var = tk.StringVar(value=values.opponent_deck)
         occurred_var = tk.StringVar(
             value=(
                 record.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -4616,23 +4784,23 @@ class RecorderGui:
         for label, variable, choices in (
             ("勝敗", result_var, duel_choice_labels("result")),
             ("先後", order_var, duel_choice_labels("play_order")),
+            ("コイントス", coin_var, duel_choice_labels("coin_face")),
         ):
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
             group, _buttons = self._choice_button_group(frame, variable, choices)
             group.grid(row=row, column=1, sticky="ew", pady=7)
             row += 1
-        for label, variable, choices in (
-            ("自分デッキ", deck_var, tuple(item.name for item in visible_decks)),
-            ("シーズン", season_var, tuple(seasons)),
-        ):
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=7)
-            ttk.Combobox(
-                frame,
-                textvariable=variable,
-                values=choices,
-                state="normal" if label == "自分デッキ" else "readonly",
-            ).grid(row=row, column=1, sticky="ew", pady=7)
-            row += 1
+        ttk.Label(frame, text="相手デッキ").grid(row=row, column=0, sticky="w", pady=7)
+        opponent_choices = tuple(
+            dict.fromkeys((*(item.name for item in visible_decks), values.opponent_deck))
+        )
+        ttk.Combobox(
+            frame,
+            textvariable=opponent_var,
+            values=opponent_choices,
+            state="normal",
+        ).grid(row=row, column=1, sticky="ew", pady=7)
+        row += 1
         frame.columnconfigure(1, weight=1)
 
         def save(status: str) -> None:
@@ -4649,8 +4817,8 @@ class RecorderGui:
                     "status": status,
                     "result": duel_choice_value("result", result_var.get()),
                     "play_order": duel_choice_value("play_order", order_var.get()),
-                    "own_deck": deck_var.get(),
-                    "season_id": seasons[season_var.get()],
+                    "coin_face": duel_choice_value("coin_face", coin_var.get()),
+                    "opponent_deck": opponent_var.get(),
                 }
             )
             selected_season = next(
@@ -4791,21 +4959,13 @@ class RecorderGui:
             is_manual = record is not None and record.entry_origin in {"manual", "import"}
             result_var = tk.StringVar(value=duel_choice_label("result", values.result))
             order_var = tk.StringVar(value=duel_choice_label("play_order", values.play_order))
-            deck_var = tk.StringVar(value=values.own_deck)
+            coin_var = tk.StringVar(value=duel_choice_label("coin_face", values.coin_face))
+            opponent_var = tk.StringVar(value=values.opponent_deck)
             visible_decks = tuple(
                 deck
                 for deck in data.decks
-                if not deck.hidden_from_history_statistics and not deck.opponent_only
+                if not deck.hidden_from_history_statistics
             )
-            seasons = {
-                "未設定": None,
-                **{season.name: season.season_id for season in data.seasons},
-            }
-            current_season = next(
-                (name for name, season_id in seasons.items() if season_id == values.season_id),
-                "未設定",
-            )
-            season_var = tk.StringVar(value=current_season)
             occurred_var = tk.StringVar(
                 value=(
                     record.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -4823,23 +4983,23 @@ class RecorderGui:
             for label, variable, choices in (
                 ("勝敗", result_var, duel_choice_labels("result")),
                 ("先後", order_var, duel_choice_labels("play_order")),
+                ("コイントス", coin_var, duel_choice_labels("coin_face")),
             ):
                 ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=7)
                 group, _buttons = self._choice_button_group(form, variable, choices)
                 group.grid(row=row, column=1, sticky="ew", pady=7)
                 row += 1
-            for label, variable, choices, state_name in (
-                ("自分デッキ", deck_var, tuple(deck.name for deck in visible_decks), "normal"),
-                ("シーズン", season_var, tuple(seasons), "readonly"),
-            ):
-                ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=7)
-                ttk.Combobox(
-                    form,
-                    textvariable=variable,
-                    values=choices,
-                    state=state_name,
-                ).grid(row=row, column=1, sticky="ew", pady=7)
-                row += 1
+            ttk.Label(form, text="相手デッキ").grid(row=row, column=0, sticky="w", pady=7)
+            opponent_choices = tuple(
+                dict.fromkeys((*(deck.name for deck in visible_decks), values.opponent_deck))
+            )
+            ttk.Combobox(
+                form,
+                textvariable=opponent_var,
+                values=opponent_choices,
+                state="normal",
+            ).grid(row=row, column=1, sticky="ew", pady=7)
+            row += 1
             form.columnconfigure(1, weight=1)
 
             def save(status: str) -> None:
@@ -4856,8 +5016,8 @@ class RecorderGui:
                         "status": status,
                         "result": duel_choice_value("result", result_var.get()),
                         "play_order": duel_choice_value("play_order", order_var.get()),
-                        "own_deck": deck_var.get(),
-                        "season_id": seasons[season_var.get()],
+                        "coin_face": duel_choice_value("coin_face", coin_var.get()),
+                        "opponent_deck": opponent_var.get(),
                     }
                 )
                 selected_season = next(
@@ -5406,7 +5566,7 @@ class RecorderGui:
             self._icon_button(
                 detail_buttons,
                 "play",
-                "アプリ内レビューを表示",
+                "録画レビューを開く（アプリ内で録画を確認）",
                 lambda: self._open_pyside_review(recording_id),
                 state="normal" if can_use_recording and data.recording.file_exists else "disabled",
             ).pack(side="left", padx=(0, 6))
@@ -5483,9 +5643,18 @@ class RecorderGui:
         text.insert("1.0", details)
         text.configure(state="disabled")
         text.pack(fill="both", expand=True)
-        ttk.Button(frame, text="閉じる", command=dialog.destroy).pack(
-            anchor="e", pady=(10, 0)
-        )
+        tk.Button(
+            frame,
+            text="閉じる",
+            command=dialog.destroy,
+            width=12,
+            background=self.COLORS["surface_container"],
+            foreground=self.COLORS["text"],
+            activebackground=self.COLORS["sidebar_active"],
+            activeforeground=self.COLORS["text"],
+            relief="groove",
+        ).pack(anchor="e", pady=(10, 0))
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.grab_set()
 
     def _recording_opened(self, action: str, reference: RecordingReference) -> None:
@@ -7455,9 +7624,11 @@ def main(argv: list[str] | None = None) -> int:
             "calendar_contract": calendar_contract,
             "youtube_flow_contract": (
                 "prepare" not in app.nav_buttons
+                and "template" in app.nav_buttons
                 and "improve" not in app.nav_buttons
                 and "history_youtube" in app.widgets
                 and "youtube_status" in app.widgets
+                and "youtube_template" in app.widgets
             ),
         }
         if (

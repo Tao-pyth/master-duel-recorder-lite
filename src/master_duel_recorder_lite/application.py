@@ -51,6 +51,12 @@ from .data_reconciliation import (
     DuplicateCandidate,
     RelinkPreview,
 )
+from .description_template import (
+    YouTubePostingTemplate,
+    load_youtube_posting_template,
+    save_youtube_posting_template,
+    youtube_template_aliases,
+)
 from .detection import DetectionPolicy, DuelDetectionStateMachine, DuelObservation
 from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
 from .duel_csv import DuelCsvImportResult, DuelCsvPreview, DuelCsvService
@@ -139,6 +145,7 @@ from .youtube_oauth import (
 )
 from .youtube_service import YouTubeUploadOutcome, YouTubeUploadService
 from .youtube_uploads import YouTubeUploadRepository
+from .youtube_materials import YouTubeMaterialService
 
 
 class ApplicationOperationError(RuntimeError):
@@ -190,6 +197,16 @@ class DuelEditorData:
     recording: DuelEditorRecordingStatus
     seasons: tuple[Season, ...]
     suggestion_reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class YouTubeUploadDialogData:
+    recording_id: str
+    title: str
+    description: str
+    tags: tuple[str, ...]
+    privacy: str
+    youtube_watch_url: str | None
 
 
 @dataclass(frozen=True)
@@ -1083,6 +1100,52 @@ class RecorderApplicationService:
         if outcome.upload.state.value != "completed":
             raise ApplicationOperationError(outcome.message)
         return outcome
+
+    def get_youtube_upload_dialog_data(self, recording_id: str) -> YouTubeUploadDialogData:
+        history = self.get_history(recording_id)
+        record = self.get_duel_record(recording_id)
+        upload = YouTubeUploadRepository.from_runtime_paths(self.paths).completed_for_recording(
+            recording_id
+        )
+        if upload is not None:
+            return YouTubeUploadDialogData(
+                recording_id=recording_id,
+                title=upload.metadata.title,
+                description=upload.metadata.description,
+                tags=upload.metadata.tags,
+                privacy=upload.metadata.privacy.value,
+                youtube_watch_url=upload.watch_url,
+            )
+        materials = YouTubeMaterialService(self.paths).generate(
+            history=history,
+            duel_record=record,
+        )
+        return YouTubeUploadDialogData(
+            recording_id=recording_id,
+            title=materials.title,
+            description=materials.description,
+            tags=materials.tags,
+            privacy="private",
+            youtube_watch_url=None,
+        )
+
+    def get_youtube_posting_template(self) -> YouTubePostingTemplate:
+        return load_youtube_posting_template(self.paths.config)
+
+    def save_youtube_posting_template(
+        self,
+        *,
+        title: str,
+        description: str,
+        tags: str,
+    ) -> YouTubePostingTemplate:
+        return save_youtube_posting_template(
+            self.paths.config,
+            YouTubePostingTemplate(title=title, description=description, tags=tags),
+        )
+
+    def youtube_posting_template_aliases(self) -> tuple[tuple[str, str], ...]:
+        return youtube_template_aliases()
 
     def get_duel_record(self, recording_id: str) -> DuelRecord | None:
         return DuelRecordRepository.from_runtime_paths(self.paths).get(recording_id)

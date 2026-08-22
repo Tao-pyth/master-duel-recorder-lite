@@ -544,12 +544,15 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             )
 
             data = service.get_duel_editor_data("youtube-rec")
+            dialog_data = service.get_youtube_upload_dialog_data("youtube-rec")
 
         self.assertTrue(data.recording.file_exists)
         self.assertEqual(data.recording.youtube_video_id, "20XgAs3_vu4")
         self.assertEqual(
             data.recording.youtube_watch_url, "https://youtu.be/20XgAs3_vu4"
         )
+        self.assertEqual(dialog_data.youtube_watch_url, "https://youtu.be/20XgAs3_vu4")
+        self.assertEqual(dialog_data.title, "Master Duel")
 
     def test_history_delete_is_rejected_while_manual_start_is_reserved(self) -> None:
         service = RecorderApplicationService()

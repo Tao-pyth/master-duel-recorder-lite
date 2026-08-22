@@ -135,13 +135,41 @@ class DuelWorkflowService:
         tag_rank = self._usage_rank("tag")
         decks = tuple(sorted(decks, key=lambda item: self._rank_key(item, deck_rank)))
         tags = tuple(sorted(tags, key=lambda item: self._rank_key(item, tag_rank)))
+        latest_input = records[0] if records else None
         latest = next((item for item in records if item.values.status == "confirmed"), None)
         preferences = catalog.preferences().to_record_values()
         values = latest.values if latest is not None else preferences
+        previous_values = (
+            preferences
+            if preferences != DuelRecordValues()
+            else latest_input.values
+            if latest_input is not None
+            else None
+        )
+        if previous_values is not None:
+            values = DuelRecordValues(
+                **{
+                    **values.__dict__,
+                    "duel_type": previous_values.duel_type,
+                    "own_deck": previous_values.own_deck,
+                }
+            )
+        if latest_input is not None:
+            latest_values = latest_input.values
+            values = DuelRecordValues(
+                **{
+                    **values.__dict__,
+                    "season_id": latest_values.season_id,
+                }
+            )
         values = DuelRecordValues(**{**values.__dict__, "status": "confirmed"})
         reasons: list[str] = []
-        if latest is not None:
-            reasons.append("直近の確認済み戦績から入力候補を引き継ぎました")
+        if latest_input is not None:
+            reasons.append("前回入力した対戦種別・自分デッキ・シーズンを候補にしました")
+            if latest is not None and latest.duel_id != latest_input.duel_id:
+                reasons.append("勝敗・先後などは直近の確認済み戦績から候補にしました")
+            elif latest is not None:
+                reasons.append("直近の確認済み戦績から入力候補を引き継ぎました")
         elif preferences != DuelRecordValues():
             reasons.append("前回入力したデッキ・タグ・対戦種別を候補にしました")
         active = tuple(

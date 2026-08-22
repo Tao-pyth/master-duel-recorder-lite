@@ -10,6 +10,7 @@ V1.5.0では、Tkinter GUIを正式導線として維持したまま、将来の
 | --- | --- | --- |
 | SQLite履歴DB | `user_data/data/db/history.sqlite3` | 既存Repositoryと`RecorderApplicationService`だけが更新する。V1.5.0ではschema migrationを行わない |
 | 非シークレット設定 | `user_data/config/app.toml` | PySide6レビューのための永続設定は追加しない。設定migrationも行わない |
+| YouTube投稿テンプレート | `user_data/config/youtube-posting-template.json` | V1.5.1で追加。タイトル、概要欄、タグの単一テンプレートだけを保存し、秘密情報やOAuth資格情報は含めない |
 | 録画ファイル | `user_data/data/recordings/` | レビュー画面は読み取りと外部プレイヤー起動だけを行う。削除、移動、上書きはしない |
 | exports | `user_data/data/exports/` | クリップ出力は`ClipExportService`経由で新規ファイルとして作成し、元録画のサイズと更新時刻を検証する |
 | queue / manifest | `user_data/data/queue/`, `user_data/data/exports/` | YouTube投稿準備の既存サービスだけが作成・更新する |
@@ -44,6 +45,7 @@ V1.5.0では、Tkinter GUIを正式導線として維持したまま、将来の
 - 現在位置マーカー: `RecorderApplicationService.add_review_marker`
 - クリップ出力: `RecorderApplicationService.export_review_clip`
 - YouTube URL参照: `YouTubeUploadRepository.completed_for_recording`をApplication層経由で利用する
+- YouTube投稿テンプレート: `load_youtube_posting_template`と`save_youtube_posting_template`をApplication層経由で利用し、GUIは設定ファイルを直接編集しない
 
 ## PySide6レビューの方針
 
@@ -54,6 +56,8 @@ Tkinter GUIからは別プロセスで`mdrl review launch RECORDING_ID --fallbac
 ## DB / 設定migrationを行わない理由
 
 V1.5.0で追加するデータはレビュー表示用の派生データであり、既存の録画履歴、対戦記録、タイムライン、YouTube投稿履歴から生成できる。新しい永続列や設定キーがなくても、録画再生、タイムライン選択、現在位置マーカー、クリップ出力導線を検証できるため、DB schema migrationとConfiguration Migrationは不要である。
+
+V1.5.1のYouTube投稿テンプレートは新規の任意設定ファイルとして追加する。既存の`youtube-description-template.txt`は新テンプレート未保存時の概要欄テンプレートとして読み込むため、既存設定を書き換えるConfiguration Migrationは不要である。
 
 ## 互換条件
 
