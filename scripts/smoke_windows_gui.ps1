@@ -32,13 +32,18 @@ try {
     }
     $result = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
     $requiredWidgets = @(
-        "activity", "catalog_table", "ffmpeg_setup", "history_delete", "history_duel", "history_play", "history_table", "incomplete_duel_count", "prepare_table", "visual_details_toggle", "visual_diagnostics_folder", "visual_status",
-        "data_backup_table", "data_protection_status", "history_duplicates", "history_refresh", "record_start", "record_status", "record_stop", "season_table", "settings_form", "statistics_chart",
-        "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "target_selector",
-        "watch_toggle", "clean_uninstall"
+        "activity", "app_update", "catalog_table", "clean_uninstall", "csv_status", "data_backup_table", "data_protection_status", "deck_catalog_table", "ffmpeg_setup",
+        "history_add", "history_bulk", "history_columns", "history_delete", "history_duel", "history_duplicates", "history_incomplete", "history_play", "history_refresh", "history_table", "history_youtube",
+        "improvement_status", "incomplete_duel_count", "manual_duel_add", "prepare_recording", "prepare_table", "record_start", "record_status", "record_stop", "reliability_status",
+        "season_table", "settings_form", "statistics_chart", "statistics_coin_table", "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "statistics_season_table",
+        "tag_catalog_table", "target_selector", "visual_details_toggle", "visual_diagnostics_folder", "visual_status", "watch_toggle",
+        "youtube_connect", "youtube_disconnect", "youtube_refresh", "youtube_status", "youtube_template", "youtube_test_upload"
     )
-    if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600 -or -not $result.history_refresh_visible -or -not $result.calendar_contract -or -not $result.pyside6) {
+    if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600 -or -not $result.history_refresh_visible -or -not $result.calendar_contract -or $result.pyside6 -or -not $result.standard_feature_contract) {
         throw "GUI smoke contract is invalid"
+    }
+    if ($result.gui_entrypoint -ne "master_duel_recorder_lite.gui") {
+        throw "GUI smoke entrypoint is invalid: $($result.gui_entrypoint)"
     }
     $expectedRuntimeData = Join-Path $localAppDataPath "MasterDuelRecorderLite"
     if ([System.IO.Path]::GetFullPath($result.runtime_data) -ne [System.IO.Path]::GetFullPath($expectedRuntimeData)) {

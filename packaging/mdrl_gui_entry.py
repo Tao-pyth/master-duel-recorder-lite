@@ -1,4 +1,4 @@
-from master_duel_recorder_lite.pyside_gui import main
+from master_duel_recorder_lite.gui import main
 
 
 if __name__ == "__main__":

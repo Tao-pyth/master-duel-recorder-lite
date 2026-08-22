@@ -6,6 +6,10 @@ V2.0.0では、通常配布GUI入口をTkinterからPySide6へ切り替える。
 
 旧Tkinter GUIは`master_duel_recorder_lite.gui`として残す。これは互換確認と緊急退避のためであり、`master-duel-recorder-lite-gui.exe`の通常入口は`master_duel_recorder_lite.pyside_gui`とする。
 
+## V2.0.1での修正
+
+V2.0.0のPySide6 GUIは通常配布入口として1.x相当の標準機能を満たしていなかったため、V2.0.1では`master-duel-recorder-lite-gui.exe`の通常入口を`master_duel_recorder_lite.gui`へ戻す。PySide6シェルは`master_duel_recorder_lite.pyside_gui`として検証入口に残し、通常入口へ戻す条件は[PySide6機能同等性ゲート](pyside-feature-parity-2.0.1.md)で管理する。
+
 ## 対象
 
 - PySide6 `QMainWindow`、左ナビ、共通ヘッダー、状態表示

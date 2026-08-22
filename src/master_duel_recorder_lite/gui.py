@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import sqlite3
 import subprocess
 import sys
 import tkinter as tk
@@ -51,6 +52,11 @@ from .ffmpeg_setup import (
     FfmpegInstallResult,
     FfmpegInstallProgress,
 )
+from .gui_feature_parity import (
+    required_standard_widget_keys,
+    satisfied_standard_feature_keys,
+)
+from .history_database import HISTORY_DATABASE_NAME
 from .preflight import CheckStatus, PreflightReport
 from .operation_state import OperationAction
 from .recording_browsing import RecordingReference
@@ -7651,6 +7657,33 @@ def main(argv: list[str] | None = None) -> int:
             and len({button.winfo_width() for button in day_buttons}) == 1
         )
         calendar_dialog.destroy()
+        widget_keys = set(app.widgets)
+        standard_feature_keys = satisfied_standard_feature_keys(widget_keys)
+        required_feature_widgets = required_standard_widget_keys()
+        missing_feature_widgets = tuple(
+            widget for widget in required_feature_widgets if widget not in widget_keys
+        )
+        database_path = service.paths.db / HISTORY_DATABASE_NAME
+        database_summary: dict[str, object] = {
+            "path": str(database_path),
+            "exists": database_path.is_file(),
+            "schema_version": None,
+            "history_rows": None,
+            "incomplete_duel_records": None,
+        }
+        if args.user_data_dir is not None and database_path.is_file():
+            with sqlite3.connect(database_path) as connection:
+                row = connection.execute(
+                    "SELECT version FROM schema_version WHERE singleton = 1"
+                ).fetchone()
+            dashboard = service.get_history_dashboard(query=DuelManagementQuery(limit=200))
+            database_summary.update(
+                {
+                    "schema_version": int(row[0]) if row is not None else None,
+                    "history_rows": len(dashboard.views),
+                    "incomplete_duel_records": dashboard.incomplete_duel_record_count,
+                }
+            )
         geometry = {
             "width": root.winfo_width(),
             "height": root.winfo_height(),
@@ -7659,6 +7692,15 @@ def main(argv: list[str] | None = None) -> int:
             "title": root.title(),
             "version": __version__,
             "runtime_data": str(service.paths.root),
+            "runtime_database": database_summary,
+            "gui_entrypoint": "master_duel_recorder_lite.gui",
+            "pyside6": False,
+            "pyside_review_entry": "master_duel_recorder_lite.pyside_review",
+            "pyside_shell_entry": "master_duel_recorder_lite.pyside_gui",
+            "standard_feature_keys": standard_feature_keys,
+            "required_standard_widget_keys": required_feature_widgets,
+            "missing_standard_widget_keys": missing_feature_widgets,
+            "standard_feature_contract": not missing_feature_widgets,
             "history_refresh_visible": history_refresh_right <= root.winfo_width(),
             "calendar_contract": calendar_contract,
             "youtube_flow_contract": (
@@ -7674,6 +7716,7 @@ def main(argv: list[str] | None = None) -> int:
             geometry["width"] < 900
             or geometry["height"] < 600
             or len(app.widgets) < 8
+            or not geometry["standard_feature_contract"]
             or not geometry["history_refresh_visible"]
             or not geometry["calendar_contract"]
             or not geometry["youtube_flow_contract"]
