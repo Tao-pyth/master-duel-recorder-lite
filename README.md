@@ -8,7 +8,7 @@ master-duel-recorder-liteは、OBSに依存せず、Yu-Gi-Oh! Master Duelの対�
 
 ## 中核機能
 
-V2.0.0では、次の中核機能を提供します。
+V2.0.1では、次の中核機能を提供します。
 
 - FFmpeg、録画入力、保存先を確認する録画環境の初期化
 - 画面と音声を録画し、正常停止して再生可能なファイルを保存する最小録画
@@ -27,22 +27,31 @@ V2.0.0では、次の中核機能を提供します。
 - 全体・条件付き勝率と時期ごとの推移を確認する戦績統計
 - Master Duelだけのゲーム音声を映像対象と独立して取得するプロセス単体音声
 - スプレッドシートの既存戦績を安全に移行・再出力するCSV入出力
-- GUI非依存のレビュー用ViewModelと、PySide6 GUI入口
+- GUI非依存のレビュー用ViewModel、PySide6レビュー入口、1.x相当の通常配布GUI
 
 ## 現在の状態
 
-現在の正式版は `2.0.0`、「PySide6 GUI移行」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理、自動録画の信頼性確認、改善支援、GUIからのYouTube連携とprivate投稿導線、更新取得後のGUI EXE起動検証、専用updaterによる自動更新適用、対戦記録編集画面でのYouTube URL確認、デッキ名へのタグ付け、PySide6隔離レビュー入口、YouTube投稿テンプレート、簡易入力のコイントス・相手デッキ入力、デッキ名の使用回数表示、利用頻度順候補、枠線付きデッキ色スウォッチ、Tkinter UI baseline保存、V2.0.0向け録画後ワークフロー情報設計、Master Duel単体音声の録画後診断と設定GUI表示、通常配布GUIのPySide6入口を整備しました。
+現在の正式版は `2.0.1`、「通常配布GUI復旧」です。V2.0.0で通常入口になったPySide6 GUIは、1.x相当の標準操作面を満たすまで通常入口から外し、`master-duel-recorder-lite-gui.exe`はTkinter GUIを起動します。既存DB、戦績、録画履歴、デッキ、タグ、シーズン、設定、バックアップ操作を更新後も通常GUIから扱えることを優先します。
 
 CSV移行は適用前バックアップと単一DBトランザクションで既存データを保護します。単体音声はWindows build 20348以上が対象で、非対応・ゲーム未起動・ヘルパー障害時には別音源へ無断で切り替えず、警告を残して映像のみ継続します。YouTube OAuth資格情報はOS資格情報ストアだけに保存し、設定、manifest、queue、標準出力、ログへ保存しません。
 
 Master Duel単体音声ではDirectShow音声入力欄を使いません。設定画面では「DirectShow入力は未使用」と表示し、録画完了後に出力ファイルへ音声ストリームがない場合は、録画を削除せず履歴の音声警告として確認できます。
 
+## V2.0.1の通常配布GUI復旧
+
+- `master-duel-recorder-lite-gui.exe`は1.x相当のTkinter GUIを起動します
+- PySide6レビュー入口`master_duel_recorder_lite.pyside_review`とPySide6シェル検証入口`master_duel_recorder_lite.pyside_gui`は残します
+- GUI smokeでは1.x標準機能15項目のwidget充足を確認します
+- 更新後に既存データが見えない場合に備え、GUI smokeは参照中のruntime dataとSQLite DBパスを出力します
+- DB schema、設定形式、録画ファイル、queue、manifest、OAuth資格情報は変更しません
+- PySide6を通常配布入口へ戻す条件は[PySide6機能同等性ゲート](docs/architecture/pyside-feature-parity-2.0.1.md)を参照してください
+
 ## V2.0.0のPySide6 GUI
 
-- `master-duel-recorder-lite-gui.exe`はPySide6 GUIを起動します
+- `master-duel-recorder-lite-gui.exe`はV2.0.0でPySide6 GUIを起動していましたが、V2.0.1で通常入口から外しました
 - 主要ナビは録画、戦績管理、統計、デッキ名、タグ、シーズン、YouTube、信頼性、設定です
 - `prepare`と`improve`は独立ナビへ戻さず、YouTube投稿、戦績管理、統計、設定の導線へ統合します
-- 旧Tkinter GUIは互換モジュール`master_duel_recorder_lite.gui`として残し、通常配布入口からは外します
+- 旧Tkinter GUIは互換モジュール`master_duel_recorder_lite.gui`として残していましたが、V2.0.1では通常配布入口へ戻します
 - V2.0.0ではDB schema、設定形式、録画ファイル、queue、manifest、OAuth資格情報を変更しません
 - 詳細は[PySide6 GUI移行設計](docs/architecture/pyside-gui-2.0.0.md)を参照してください
 

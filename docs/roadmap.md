@@ -897,7 +897,7 @@
 
 ## V1.4.3: アプリ内自動更新updater化
 
-状態: 実装中
+状態: 完了
 
 - release toolingの固定バージョン期待値をプロジェクト版から導出し、Fixリリース時のテスト更新漏れを防ぐ
 - GUIの自己置換用PowerShellを廃止し、GUIへ同梱した専用updater EXEから現在GUI EXEを置換する
@@ -1018,3 +1018,16 @@
 追跡: [V2.0.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/69)、親Issue #500、子Issue #501 - #522
 
 完了条件: PySide6 GUI入口、主要ナビ、共通状態表示、録画・履歴のサービス接続、prepare/improve統合方針、互換Tkinter入口、スクリーンショット回帰、データ保護確認、README、リリースノート、検証記録、バージョン情報、Ruff、全単体テスト、PySide6 GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、GitHub Releaseが成功すること。
+
+## V2.0.1: 通常配布GUI復旧
+
+状態: 実装中
+
+- V2.0.0更新後に既存DB表示が失われたように見える問題を復旧する
+- `master-duel-recorder-lite-gui.exe`の通常入口を1.x相当のTkinter GUIへ戻す
+- PySide6全面移植で必要な1.x標準機能を列挙し、通常入口化の同等性ゲートにする
+- 既存`user_data`、SQLite DB、録画、queue、manifest、OAuth資格情報を変更しない
+
+追跡: [V2.0.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/71)、親Issue #536、子Issue #537 - #540
+
+完了条件: 既存DB入りruntimeの再読込、通常GUIの標準機能ゲート、README、リリースノート、検証記録、バージョン情報、Ruff、全単体テスト、Python GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、GitHub Releaseが成功すること。

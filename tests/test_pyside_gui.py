@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
+from master_duel_recorder_lite import __version__
 from master_duel_recorder_lite.pyside_gui import (
     NAVIGATION_PAGES,
     SMOKE_WIDGETS,
@@ -36,7 +37,7 @@ class PySideGuiContractTest(unittest.TestCase):
 
         contract = smoke_contract(service=service, width=1180, height=760)
 
-        self.assertEqual(contract["version"], "2.0.0")
+        self.assertEqual(contract["version"], __version__)
         self.assertTrue(contract["pyside6"])
         self.assertTrue(contract["youtube_flow_contract"])
         self.assertEqual(contract["runtime_data"], "user_data")

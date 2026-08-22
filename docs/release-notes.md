@@ -1,5 +1,20 @@
 # リリースノート
 
+## V2.0.1: 通常配布GUI復旧 - 2026-08-22
+
+- `master-duel-recorder-lite-gui.exe`の通常入口を`master_duel_recorder_lite.gui`へ戻し、1.x相当のTkinter操作面を復旧した
+- PySide6シェル`master_duel_recorder_lite.pyside_gui`は通常入口から外し、検証入口として残した
+- PySide6レビュー入口`master_duel_recorder_lite.pyside_review`は維持した
+- GUI smokeに、通常入口、PySide6通常入口ではないこと、標準機能ゲート、参照中runtime data、SQLite DBパスを出力する契約を追加した
+- 既存DB入りruntimeを`RecorderApplicationService`で再読込できる回帰テストを追加した
+- PySide6全面移植で担保すべき1.x標準機能15項目を`docs/architecture/pyside-feature-parity-2.0.1.md`へ列挙した
+- DBスキーマ、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、重点テスト、全580テスト、Python GUIスモーク、既存DB再読込スモーク、CLI/GUI/updater one-file EXEビルド、3 EXEスモーク、V1候補検証に合格した
+- ローカル通常ビルドCLI EXE SHA-256: `D60E7D70B4C7E1E100D134EF5F4C897BDBF6E0EC290CEC2AB19E22372B7ABBC5`
+- ローカル通常ビルドGUI EXE SHA-256: `41D5C7725D313EF2BF435872FDB06A9E654E4E47B763B49C6276DF3E35605F4A`
+- ローカル通常ビルドupdater EXE SHA-256: `250843040A8D2696820FAB63A0281DAFE33D99D7A2069653C021C3EDC1120EBF`
+- 追跡: [V2.0.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/71)、親Issue #536、子Issue #537 - #540
+
 ## V2.0.0: PySide6 GUI移行 - 2026-08-22
 
 - `master-duel-recorder-lite-gui.exe`の通常入口をTkinterからPySide6へ切り替えた
