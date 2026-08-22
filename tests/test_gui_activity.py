@@ -17,12 +17,15 @@ from master_duel_recorder_lite.gui import (
     WAITING_ACTIVITY_PREFIX,
     _format_statistics_detail,
     _format_win_rate,
+    _catalog_row_values,
     _review_launch_command,
+    _swatch_border_color,
     calendar_header_contract,
     _parse_filter_date,
     incomplete_duel_count_presentation,
     record_status_presentation,
 )
+from master_duel_recorder_lite.duel_catalog import DuelCatalogEntry
 from master_duel_recorder_lite.duel_statistics import StatisticsMetric
 from master_duel_recorder_lite.recording_session import RecordingState
 from master_duel_recorder_lite.ui_preferences import UiPreferences
@@ -297,6 +300,43 @@ class GuiActivityTest(unittest.TestCase):
         gui.youtube_connect_button.configure.assert_called_once_with(state="disabled")
         gui.youtube_disconnect_button.configure.assert_called_once_with(state="disabled")
         gui.youtube_test_button.configure.assert_called_once_with(state="disabled")
+
+    def test_catalog_row_values_show_usage_count_only_for_decks(self) -> None:
+        timestamp = datetime.now(timezone.utc)
+        deck = DuelCatalogEntry(
+            entry_id=1,
+            kind="deck",
+            name="青眼",
+            description="主力",
+            color="#ffee00",
+            is_archived=False,
+            opponent_only=True,
+            hidden_from_history_statistics=False,
+            deck_only=False,
+            created_at=timestamp,
+            updated_at=timestamp,
+            usage_count=7,
+        )
+        tag = DuelCatalogEntry(
+            entry_id=2,
+            kind="tag",
+            name="大会",
+            description="公式",
+            color="#112233",
+            is_archived=False,
+            opponent_only=False,
+            hidden_from_history_statistics=False,
+            deck_only=True,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+
+        self.assertEqual(_catalog_row_values("deck", deck), ("青眼", "主力", 7, "相手のみ"))
+        self.assertEqual(_catalog_row_values("tag", tag), ("大会", "公式", "デッキ専用"))
+
+    def test_deck_color_swatch_border_uses_contrast_color(self) -> None:
+        self.assertEqual(_swatch_border_color("#FFFF66"), "#202124")
+        self.assertEqual(_swatch_border_color("#123456"), "#ffffff")
 
 
 if __name__ == "__main__":

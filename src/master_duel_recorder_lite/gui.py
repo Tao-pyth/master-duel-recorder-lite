@@ -1668,7 +1668,11 @@ class RecorderGui:
 
         panel = self._surface(page, padding=(0, 0))
         panel.pack(fill="both", expand=True)
-        columns = ("name", "description", "flags")
+        columns = (
+            ("name", "description", "usage_count", "flags")
+            if kind == "deck"
+            else ("name", "description", "flags")
+        )
         tree = ttk.Treeview(
             panel,
             columns=columns,
@@ -1677,9 +1681,13 @@ class RecorderGui:
         )
         tree.heading("name", text="名前")
         tree.heading("description", text="説明")
+        if kind == "deck":
+            tree.heading("usage_count", text="使用回数")
         tree.heading("flags", text="用途")
         tree.column("name", width=220, stretch=False)
-        tree.column("description", width=520, stretch=True)
+        tree.column("description", width=470 if kind == "deck" else 520, stretch=True)
+        if kind == "deck":
+            tree.column("usage_count", width=90, stretch=False, anchor="e")
         tree.column("flags", width=190, stretch=False)
         tree.heading("#0", text="カラー")
         tree.column("#0", width=125, stretch=False, anchor="center")
@@ -2842,23 +2850,7 @@ class RecorderGui:
                 iid=str(entry.entry_id),
                 text=color,
                 image=image or "",
-                values=(
-                    entry.name,
-                    entry.description,
-                    " / ".join(
-                        filter(
-                            None,
-                            (
-                                "相手のみ" if entry.opponent_only else "",
-                                "非表示"
-                                if entry.hidden_from_history_statistics
-                                else "",
-                                "デッキ専用" if entry.deck_only else "",
-                            ),
-                        )
-                    )
-                    or "通常",
-                ),
+                values=_catalog_row_values(kind, entry),
             )
         self._catalog_selection_changed(kind)
 
@@ -4005,7 +3997,7 @@ class RecorderGui:
                 duel_type = duel_choice_label("duel_type", view.duel_type)
                 opponent_deck = view.opponent_deck or "未設定"
             own_deck = view.own_deck or "未設定"
-            deck_display = f"   {own_deck}" if view.own_deck_color else own_deck
+            deck_display = f"    {own_deck}" if view.own_deck_color else own_deck
             self.history_tree.insert(
                 "",
                 "end",
@@ -4051,23 +4043,29 @@ class RecorderGui:
             if not bounds:
                 continue
             x, y, width, height = bounds
-            dot = tk.Label(
+            swatch = tk.Frame(
                 self.history_tree,
-                text="●",
-                background=self.COLORS["surface"],
-                foreground=color,
+                background=_swatch_border_color(color),
                 borderwidth=0,
-                font=("Segoe UI", 10),
             )
-            dot.place(x=x + 4, y=y + 2, width=16, height=max(1, height - 4))
-            dot.bind(
+            swatch.place(x=x + 6, y=y + 6, width=14, height=max(1, height - 12))
+            inner = tk.Frame(swatch, background=color, borderwidth=0)
+            inner.place(x=1, y=1, relwidth=1, relheight=1, width=-2, height=-2)
+            swatch.bind(
                 "<Button-1>",
                 lambda _event, selected=row_id: (
                     self.history_tree.selection_set(selected),
                     self.history_tree.focus(selected),
                 ),
             )
-            self.history_color_lines.append(dot)
+            inner.bind(
+                "<Button-1>",
+                lambda _event, selected=row_id: (
+                    self.history_tree.selection_set(selected),
+                    self.history_tree.focus(selected),
+                ),
+            )
+            self.history_color_lines.append(swatch)
         self._draw_history_cell_colors()
 
     def _draw_history_cell_colors(self) -> None:
@@ -7483,6 +7481,25 @@ def _format_bytes(value: int | None) -> str:
     return f"{size:.1f} GB"
 
 
+def _catalog_row_values(kind: str, entry: DuelCatalogEntry) -> tuple[object, ...]:
+    flags = (
+        " / ".join(
+            filter(
+                None,
+                (
+                    "相手のみ" if entry.opponent_only else "",
+                    "非表示" if entry.hidden_from_history_statistics else "",
+                    "デッキ専用" if entry.deck_only else "",
+                ),
+            )
+        )
+        or "通常"
+    )
+    if kind == "deck":
+        return (entry.name, entry.description, entry.usage_count, flags)
+    return (entry.name, entry.description, flags)
+
+
 def _contrast_text_color(color: str) -> str:
     try:
         red, green, blue = (int(color[index : index + 2], 16) for index in (1, 3, 5))
@@ -7490,6 +7507,10 @@ def _contrast_text_color(color: str) -> str:
         return "#202124"
     luminance = (0.299 * red) + (0.587 * green) + (0.114 * blue)
     return "#202124" if luminance >= 150 else "#ffffff"
+
+
+def _swatch_border_color(color: str) -> str:
+    return _contrast_text_color(color)
 
 
 def build_gui_parser() -> argparse.ArgumentParser:

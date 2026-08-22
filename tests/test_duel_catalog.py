@@ -1,12 +1,16 @@
 import tempfile
 import unittest
+from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 
+from master_duel_recorder_lite.duel_records import DuelRecordRepository
 from master_duel_recorder_lite.duel_catalog import (
     DuelCatalogError,
     DuelCatalogRepository,
 )
 from master_duel_recorder_lite.duel_records import DuelRecordValues
+from master_duel_recorder_lite.history_database import connect_history_database
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths
 
 
@@ -107,6 +111,63 @@ class DuelCatalogRepositoryTest(unittest.TestCase):
         self.assertEqual(updated.color, "#ABC123")
         self.assertTrue(reloaded.opponent_only)
         self.assertTrue(reloaded.hidden_from_history_statistics)
+
+    def test_list_decks_includes_usage_count_and_orders_by_frequency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "user_data"
+            paths = default_runtime_paths(user_data_dir=root)
+            catalog = self.repository(root)
+            records = DuelRecordRepository.from_runtime_paths(paths)
+            catalog.add_deck("未使用")
+            catalog.add_deck("同数A")
+            catalog.add_deck("同数B")
+            catalog.add_deck("最多")
+
+            records.create_manual(
+                DuelRecordValues(own_deck="最多", opponent_deck="同数B"),
+                occurred_at=datetime.now(timezone.utc),
+            )
+            records.create_manual(
+                DuelRecordValues(own_deck="最多", opponent_deck="同数A"),
+                occurred_at=datetime.now(timezone.utc),
+            )
+            records.create_manual(
+                DuelRecordValues(opponent_deck="最多"),
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+            decks = self.repository(root).list_decks()
+
+        self.assertEqual([item.name for item in decks], ["最多", "同数A", "同数B", "未使用"])
+        self.assertEqual(
+            {item.name: item.usage_count for item in decks},
+            {"最多": 3, "同数A": 1, "同数B": 1, "未使用": 0},
+        )
+
+    def test_list_decks_counts_legacy_name_rows_when_deck_id_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "user_data"
+            paths = default_runtime_paths(user_data_dir=root)
+            catalog = self.repository(root)
+            records = DuelRecordRepository.from_runtime_paths(paths)
+            deck = catalog.add_deck("旧データ")
+            record = records.create_manual(
+                DuelRecordValues(own_deck="旧データ"),
+                occurred_at=datetime.now(timezone.utc),
+            )
+            with (
+                closing(connect_history_database(catalog.database_path)) as connection,
+                connection,
+            ):
+                connection.execute(
+                    "UPDATE duel_records SET own_deck_id = NULL WHERE duel_id = ?",
+                    (record.duel_id,),
+                )
+
+            reloaded = self.repository(root).list_decks()
+
+        self.assertEqual(reloaded[0].entry_id, deck.entry_id)
+        self.assertEqual(reloaded[0].usage_count, 1)
 
     def test_deck_tags_and_deck_only_tags_are_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
