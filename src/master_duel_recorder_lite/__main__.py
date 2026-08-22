@@ -9,7 +9,11 @@ import sys
 import time
 
 from . import __version__
-from .application import ApplicationEvent, RecorderApplicationService
+from .application import (
+    ApplicationEvent,
+    ApplicationOperationError,
+    RecorderApplicationService,
+)
 from .auto_check import AutoCheckResult, evaluate_auto_check
 from .capture_targets import CaptureTargetCatalog
 from .clip_export import ClipExportError, ClipExportService
@@ -62,6 +66,12 @@ from .offline_analysis import (
     OfflineAnalysisService,
 )
 from .preflight import CheckStatus, PreflightReport, run_preflight
+from .pyside_review import (
+    PySideReviewError,
+    check_pyside6_review_available,
+    launch_review_window,
+    open_external_player,
+)
 from .recording_history import (
     HISTORY_STATES,
     ConsistencyIssueKind,
@@ -485,6 +495,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     timeline_reject.add_argument("event_id")
     timeline_reject.add_argument("--json", action="store_true")
+    review_parser = subparsers.add_parser(
+        "review",
+        help="録画レビュー画面とレビュー用データを扱います。",
+        description="既存user_dataを維持したまま、レビュー用ViewModelまたはPySide6画面を開きます。",
+    )
+    review_subparsers = review_parser.add_subparsers(
+        dest="review_command", required=True
+    )
+    review_show = review_subparsers.add_parser(
+        "show", help="レビュー用ViewModelを表示します。"
+    )
+    review_show.add_argument("recording_id")
+    review_show.add_argument("--json", action="store_true")
+    review_status = review_subparsers.add_parser(
+        "status", help="PySide6レビュー画面の利用可否を表示します。"
+    )
+    review_status.add_argument("--json", action="store_true")
+    review_launch = review_subparsers.add_parser(
+        "launch", help="PySide6レビュー画面を起動します。"
+    )
+    review_launch.add_argument("recording_id")
+    review_launch.add_argument(
+        "--fallback-external",
+        action="store_true",
+        help="PySide6起動に失敗した場合、Windows既定プレイヤーで開きます。",
+    )
     prepare_parser = subparsers.add_parser(
         "prepare",
         help="アップロード用動画と情報を準備します。",
@@ -749,6 +785,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "timeline":
         return _run_timeline_command(paths=paths, args=args)
+
+    if args.command == "review":
+        return _run_review_command(
+            args=args,
+            project_root=args.project_root,
+            user_data_dir=args.user_data_dir,
+        )
 
     if args.command == "prepare":
         return _run_prepare_command(
@@ -1728,6 +1771,62 @@ def _run_timeline_command(*, paths: RuntimePaths, args: argparse.Namespace) -> i
         )
         return EXIT_ATTENTION
     raise RuntimeError(f"未対応のtimelineコマンドです: {args.timeline_command}")
+
+
+def _run_review_command(
+    *,
+    args: argparse.Namespace,
+    project_root: Path | None,
+    user_data_dir: Path | None,
+) -> int:
+    service = RecorderApplicationService(
+        project_root=project_root,
+        user_data_dir=user_data_dir,
+    )
+    try:
+        if args.review_command == "status":
+            status = check_pyside6_review_available()
+            if args.json:
+                print(
+                    json.dumps(
+                        {"available": status.available, "message": status.message},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(status.message)
+            return EXIT_SUCCESS if status.available else EXIT_ATTENTION
+        if args.review_command == "show":
+            document = service.get_review_view_model(args.recording_id).to_dict()
+            if args.json:
+                print(json.dumps(document, ensure_ascii=False, sort_keys=True))
+            else:
+                print(f"recording: {document['recording']['recording_id']}")
+                print(f"video: {document['video']['path']}")
+                print(f"timeline events: {len(document['timeline'])}")
+                print(f"youtube: {document['duel']['youtube_watch_url'] or '-'}")
+            return EXIT_SUCCESS
+        if args.review_command == "launch":
+            try:
+                return launch_review_window(
+                    service=service,
+                    recording_id=args.recording_id,
+                )
+            except PySideReviewError:
+                if not args.fallback_external:
+                    raise
+                path = open_external_player(service, args.recording_id)
+                print(f"PySide6レビューを起動できないため、外部プレイヤーで開きました: {path}")
+                return EXIT_SUCCESS
+    except (ApplicationOperationError, OSError, ValueError, PySideReviewError) as exc:
+        _print_cli_error(
+            "E_REVIEW",
+            f"レビュー操作を完了できません: {exc}",
+            "recording_id、録画ファイル、PySide6導入状態を確認してください。",
+        )
+        return EXIT_OPERATION
+    raise RuntimeError(f"未対応のreviewコマンドです: {args.review_command}")
 
 
 def _print_timeline_event(event: DuelEvent, *, as_json: bool) -> None:

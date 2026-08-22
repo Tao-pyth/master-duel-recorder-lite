@@ -90,6 +90,7 @@ def build_command(
     windowed: bool = False,
     youtube_oauth_client_asset: Path | None = None,
     extra_binaries: tuple[tuple[Path, str], ...] = (),
+    include_pyside_review: bool = False,
 ) -> tuple[str, ...]:
     command = [
         sys.executable,
@@ -115,6 +116,19 @@ def build_command(
         "--specpath",
         str(project_root / "build" / "spec"),
     ]
+    if include_pyside_review:
+        command.extend(
+            [
+                "--hidden-import",
+                "PySide6.QtCore",
+                "--hidden-import",
+                "PySide6.QtWidgets",
+                "--hidden-import",
+                "PySide6.QtMultimedia",
+                "--hidden-import",
+                "PySide6.QtMultimediaWidgets",
+            ]
+        )
     helper = project_root / NATIVE_HELPER_OUTPUT
     if helper.is_file():
         command.extend(["--add-binary", f"{helper};native"])
@@ -291,6 +305,7 @@ def build_windows_executable(
         project_root,
         version_file,
         youtube_oauth_client_asset=youtube_oauth_client_asset,
+        include_pyside_review=True,
     )
     completed = subprocess.run(command, cwd=project_root, check=False)
     if completed.returncode != 0:
@@ -369,6 +384,7 @@ def build_windows_executables(
         windowed=True,
         youtube_oauth_client_asset=youtube_oauth_client_asset,
         extra_binaries=((updater_executable, "."),),
+        include_pyside_review=True,
     )
     completed = subprocess.run(command, cwd=project_root, check=False)
     if completed.returncode != 0:

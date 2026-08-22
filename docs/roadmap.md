@@ -910,3 +910,47 @@
 追跡: [V1.4.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/63)、親Issue #459、#462、子Issue #460 - #461、#463 - #465
 
 完了条件: アプリ内更新が手動ダウンロードなしで専用updaterから適用でき、失敗時に旧GUIへロールバックでき、release toolingの固定期待値が消え、Ruff、全単体テスト、Python GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、updater置換スモーク、Release Contract確認、GitHub Release、更新確認からのダウンロード検証が成功すること。
+
+## V1.4.4: YouTube OAuth client_secret同梱hotfix
+
+状態: 完了
+
+- 配布EXEへYouTube OAuth `client_id`と`client_secret`を同梱する
+- token交換で`client_secret`を送信し、配布GUIの通常連携を復旧する
+- OAuth token、refresh token、認可コードを配布物、設定、DB、queue、manifest、ログへ保存しない契約を維持する
+
+追跡: [V1.4.4 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/64)、Issue #468
+
+## V1.4.5: YouTube OAuth資格情報ストアhotfix
+
+状態: 完了
+
+- PyInstaller EXEでWindows資格情報ストアの読み取り・削除が失敗する回帰を修正する
+- YouTube接続確認、投稿ダイアログ、CLI EXEスモークで保存済み資格情報を確認する
+- DBスキーマ、設定形式、録画ファイル、prepare queueは変更しない
+
+追跡: [V1.4.5 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/65)、Issue #466
+
+## V1.4.6: 戦績編集とデッキタグ管理の改善
+
+状態: 完了
+
+- 対戦記録編集画面へ録画詳細操作、録画有無、YouTube連携状態、YouTube URL欄を整理する
+- デッキ名にタグを登録できるようにし、デッキ専用タグを戦績入力候補から除外する
+- DBスキーマをV17へ更新し、既存戦績、録画、YouTube投稿履歴、タグを保持する
+
+追跡: [V1.4.6 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/66)、親Issue #471、子Issue #472 - #476
+
+## V1.5.0: GUI非依存データ契約とPySide6レビュー基盤
+
+状態: 実装中
+
+- GUI境界と保存契約を文書化する
+- 録画概要、動画参照、タイムライン、戦績概要、クリップ候補をGUI非依存ViewModel/DTOで表す
+- 保存契約、ViewModel、PySide6未導入fallback、Tkinter別プロセス起動導線をテストする
+- PySide6レビュー画面を隔離導入し、動画再生、タイムライン選択、現在位置マーカー、クリップ出力導線を検証する
+- DBスキーマと設定形式は変更せず、既存`user_data`とOAuth資格情報非保存契約を維持する
+
+追跡: [V1.5.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/60)、親Issue #434、子Issue #435 - #441
+
+完了条件: Review ViewModel、PySide6隔離入口、Tkinter併存導線、保存契約テスト、Ruff、全単体テスト、Python GUIスモーク、CLI/GUI/updater EXEビルド、3 EXEスモーク、Release Contract確認、GitHub Releaseが成功すること。

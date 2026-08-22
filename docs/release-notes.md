@@ -1,5 +1,21 @@
 # リリースノート
 
+## V1.5.0: GUI非依存データ契約とPySide6レビュー基盤 - 2026-08-22
+
+- GUI境界と保存契約を`docs/architecture/gui-data-contract.md`へ追加し、DB、設定、録画、exports、queue、logs、OAuth資格情報の扱いを明文化した
+- 録画概要、動画参照、タイムライン、戦績概要、クリップ候補を表すGUI非依存Review ViewModel/DTOを追加した
+- `RecorderApplicationService`へレビュー用ViewModel生成、現在位置マーカー追加、レビュー用クリップ出力の入口を追加した
+- `mdrl review show/status/launch`を追加し、PySide6がない環境でもViewModel確認と利用可否確認ができるようにした
+- PySide6レビュー画面は`pyside_review.py`に隔離し、Tkinterからは別プロセスで起動してevent loop競合を避けるようにした
+- PySide6起動失敗時は`--fallback-external`でWindows既定プレイヤーへ戻れるようにした
+- PySide6は通常依存ではなく`review` extraへ配置し、配布ビルド用の`build` extraではQt Multimediaを含める
+- DBスキーマと設定形式は変更しない。既存`user_data`、録画、YouTube OAuth資格情報、prepare queue、manifestは保持する
+- Ruff、全561テスト、CLI/GUI/updater one-file EXEビルド、3 EXEスモーク、CLI EXEの`review status`に合格した
+- ローカル通常ビルドCLI EXE SHA-256: `43CE4B831C0E79BE2A18A7F608D7AA114C3B6713893496FA769A5D6D34532AB2`
+- ローカル通常ビルドGUI EXE SHA-256: `C6FF277595AD8AEECFE43A1E42605D1A214EA123CD7EC67FF49A2F7E7454259D`
+- ローカル通常ビルドupdater EXE SHA-256: `18B024216BB8A4CA041404C0F7B851BAFB464607895FD446B1E4C743F5FD9E77`
+- 追跡: [V1.5.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/60)、親Issue #434、子Issue #435 - #441
+
 ## V1.4.6: 戦績編集とデッキタグ管理の改善 - 2026-08-22
 
 - 対戦記録編集画面の下部左側へ「保存場所を開く」「タイムラインを表示」「録画診断を表示」「欠損した録画ファイルを再関連付け」を集約した

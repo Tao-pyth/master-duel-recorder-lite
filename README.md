@@ -8,7 +8,7 @@ master-duel-recorder-liteは、OBSに依存せず、Yu-Gi-Oh! Master Duelの対�
 
 ## 中核機能
 
-V1.4.6では、次の中核機能を提供します。
+V1.5.0では、次の中核機能を提供します。
 
 - FFmpeg、録画入力、保存先を確認する録画環境の初期化
 - 画面と音声を録画し、正常停止して再生可能なファイルを保存する最小録画
@@ -27,12 +27,21 @@ V1.4.6では、次の中核機能を提供します。
 - 全体・条件付き勝率と時期ごとの推移を確認する戦績統計
 - Master Duelだけのゲーム音声を映像対象と独立して取得するプロセス単体音声
 - スプレッドシートの既存戦績を安全に移行・再出力するCSV入出力
+- GUI非依存のレビュー用ViewModelと、PySide6隔離レビュー入口
 
 ## 現在の状態
 
-現在の正式版は `1.4.6`、「戦績編集とデッキタグ管理の改善」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理、自動録画の信頼性確認、改善支援、GUIからのYouTube連携とprivate投稿導線、更新取得後のGUI EXE起動検証、専用updaterによる自動更新適用、対戦記録編集画面でのYouTube URL確認、デッキ名へのタグ付けを整備しました。
+現在の正式版は `1.5.0`、「GUI非依存データ契約とPySide6レビュー基盤」です。V1.0.0の中核機能に加え、手動戦績の削除、FFmpeg・データ保存先の選択、シーズン別統計、表示列とセル色の設定、更新確認、専用アプリアイコン、未完了戦績の連続入力、相手デッキ列、ダブルクリック動作設定、カレンダー表示修正、固定択一項目のボタン選択、YouTube投稿管理、自動録画の信頼性確認、改善支援、GUIからのYouTube連携とprivate投稿導線、更新取得後のGUI EXE起動検証、専用updaterによる自動更新適用、対戦記録編集画面でのYouTube URL確認、デッキ名へのタグ付け、PySide6隔離レビュー入口を整備しました。
 
 CSV移行は適用前バックアップと単一DBトランザクションで既存データを保護します。単体音声はWindows build 20348以上が対象で、非対応・ゲーム未起動・ヘルパー障害時には別音源へ無断で切り替えず、警告を残して映像のみ継続します。YouTube OAuth資格情報はOS資格情報ストアだけに保存し、設定、manifest、queue、標準出力、ログへ保存しません。
+
+## V1.5.0のレビュー基盤
+
+- 対戦記録編集画面から、同じ録画IDのPySide6レビュー画面を別プロセスで起動できます
+- PySide6が利用できない場合は、既存のWindows既定プレイヤー再生へ戻れます
+- `mdrl review show RECORDING_ID --json`で、録画概要、動画参照、タイムライン、戦績概要、YouTube URL、クリップ候補をGUI非依存データとして確認できます
+- `mdrl review status`で、現在の環境でPySide6レビュー画面を起動できるか確認できます
+- レビュー画面のマーカー追加とクリップ出力は既存サービス層を通し、DB schema、設定形式、録画ファイル、OAuth資格情報の保存契約は変更しません
 
 ## V1.4.6の戦績編集とデッキタグ管理
 
@@ -195,6 +204,7 @@ Python 3.11以上が必要です。
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
+python -m pip install -e ".[review]"
 python -m master_duel_recorder_lite
 python -m master_duel_recorder_lite --version
 python -m master_duel_recorder_lite config init
@@ -213,6 +223,9 @@ python -m master_duel_recorder_lite history reveal RECORDING_ID
 python -m master_duel_recorder_lite history check
 python -m master_duel_recorder_lite timeline list RECORDING_ID
 python -m master_duel_recorder_lite timeline add RECORDING_ID --elapsed-ms 3000 --type marker --label "重要局面"
+python -m master_duel_recorder_lite review show RECORDING_ID --json
+python -m master_duel_recorder_lite review status
+python -m master_duel_recorder_lite review launch RECORDING_ID --fallback-external
 python -m master_duel_recorder_lite prepare list
 python -m master_duel_recorder_lite prepare run
 python -m master_duel_recorder_lite reliability check

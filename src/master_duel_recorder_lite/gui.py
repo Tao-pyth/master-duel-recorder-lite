@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import subprocess
 import sys
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
@@ -72,6 +73,7 @@ from .ui_preferences import (
     load_ui_preferences,
     save_ui_preferences,
 )
+from .windows_process import subprocess_creation_flags
 
 
 T = TypeVar("T")
@@ -4313,6 +4315,22 @@ class RecorderGui:
             self._show_history_diagnostic,
         )
 
+    def _open_pyside_review(self, recording_id: str) -> None:
+        command = _review_launch_command(
+            recording_id,
+            user_data_dir=self.service.paths.root,
+        )
+        try:
+            subprocess.Popen(
+                command,
+                close_fds=True,
+                creationflags=subprocess_creation_flags(),
+            )
+        except OSError as exc:
+            self._show_error(exc)
+            return
+        self._activity(f"アプリ内レビューを起動しました: {recording_id}")
+
     def edit_selected_duel_record(self) -> None:
         selection = self.history_tree.selection()
         if selection:
@@ -5384,6 +5402,13 @@ class RecorderGui:
                 "タイムラインを表示",
                 lambda: self._show_timeline(recording_id),
                 state="normal" if can_use_recording else "disabled",
+            ).pack(side="left", padx=(0, 6))
+            self._icon_button(
+                detail_buttons,
+                "play",
+                "アプリ内レビューを表示",
+                lambda: self._open_pyside_review(recording_id),
+                state="normal" if can_use_recording and data.recording.file_exists else "disabled",
             ).pack(side="left", padx=(0, 6))
             self._icon_button(
                 detail_buttons,
@@ -7308,6 +7333,36 @@ def build_gui_parser() -> argparse.ArgumentParser:
         "--cleanup-manifest", type=Path, default=None, help=argparse.SUPPRESS
     )
     return parser
+
+
+def _review_launch_command(
+    recording_id: str,
+    *,
+    user_data_dir: Path,
+) -> tuple[str, ...]:
+    if getattr(sys, "frozen", False):
+        cli_executable = Path(sys.executable).with_name("master-duel-recorder-lite.exe")
+        launcher = str(cli_executable if cli_executable.is_file() else Path(sys.executable))
+        return (
+            launcher,
+            "--user-data-dir",
+            str(user_data_dir),
+            "review",
+            "launch",
+            recording_id,
+            "--fallback-external",
+        )
+    return (
+        sys.executable,
+        "-m",
+        "master_duel_recorder_lite",
+        "--user-data-dir",
+        str(user_data_dir),
+        "review",
+        "launch",
+        recording_id,
+        "--fallback-external",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
