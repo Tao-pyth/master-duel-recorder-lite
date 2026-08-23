@@ -1137,7 +1137,7 @@
 
 ## V2.2.3: 戦績管理ハブ実操作Hotfix
 
-状態: Act中。実装済み、リリース検証とIssue/Milestone/Release closure完了まで完了扱いにしない。
+状態: 完了
 
 - V2.2.2後のユーザー報告に基づき、PySide6戦績管理画面の主要ボタンが実操作へ接続されていない状態を最優先で確認・復旧する
 - 戦績管理一覧では、SQLiteやCLIで保持している `win`、`loss`、`first`、`second`、`heads`、`tails`、`ranked`、`event`、`other` などの内部コードを、利用者向けには日本語表示へ変換する
@@ -1154,3 +1154,5 @@
 推奨順: #573 戦績管理ボタン接続と選択状態制御、#574 戦績管理一覧の日本語表示、#575 戦績管理期間フィルターのカレンダーピック化、#576 戦績管理ツールバーの操作階層とアイコン視認性整理、#577 GUI smokeと検証記録の実操作回帰強化、#572 統括・Release closure。
 
 完了条件: 戦績管理の主要ボタンが無反応にならず、内部コードではなく日本語で一覧を読め、期間をカレンダーピックで指定でき、操作階層と危険操作が分かり、Ruff、全テスト、PySide6 history smoke、EXEビルド、3 EXEスモーク、公開Release asset検証、Issue/Milestone/Release closureが完了すること。
+
+完了記録: PR #578、タグ`v2.2.3`、GitHub Release公開、Issue #572 - #577 close、Milestone #79 close、公開asset検証、ダウンロード後EXEスモークまで完了。

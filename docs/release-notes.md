@@ -15,6 +15,9 @@
 - ローカル通常ビルドCLI EXE SHA-256: `435f6815264bb22159cb56ec3906ae686d42b22a23b4c2bff792181558f8460b`
 - ローカル通常ビルドGUI EXE SHA-256: `19b7aa0ea7be8c7143781db8e2b85a7153e491ac4139d2a428a089b1a8311c2e`
 - ローカル通常ビルドupdater EXE SHA-256: `417029b9783f54a03e20bd1cb0433acb13f2a6d0972230721824856deaf8a452`
+- 公開Release CLI EXE SHA-256: `9f930f06e9addad2fcdbb71e9c45e7da331b3939da14fc653d83fad16afa1e63`
+- 公開Release GUI EXE SHA-256: `a387d7ad108219444f80f0bf35b5cf7e6949160fbeeef71e182c026ffa2ccabb`
+- 公開Release updater EXE SHA-256: `578d85fab369545e4f83f78cdf6b7bc7efc336fca406585114a1e80427c392e8`
 - 追跡: [V2.2.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/79)、親Issue #572、子Issue #573 - #577
 
 ## V2.2.2: 設定画面・アプリ更新Hotfix - 2026-08-23
