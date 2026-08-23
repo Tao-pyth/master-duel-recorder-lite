@@ -101,6 +101,10 @@ class SeasonReportServiceTest(unittest.TestCase):
         self.assertEqual(report.summary.filtered, dashboard.filtered)
         self.assertEqual(len(report.daily_trend), 5)
         self.assertEqual([point.metric.matches for point in report.daily_trend], [1, 0, 2, 0, 0])
+        self.assertEqual(
+            [point.cumulative_win_rate for point in report.daily_trend],
+            [1.0, 1.0, 1 / 3, 1 / 3, 1 / 3],
+        )
         self.assertEqual(len(report.daily_deck_usage), 5)
         self.assertEqual(report.daily_deck_usage[2].decks[0].ratio, 1.0)
         self.assertTrue(report.small_sample)
@@ -141,11 +145,14 @@ class SeasonReportServiceTest(unittest.TestCase):
         )
 
         deck_rows = [item for item in report.deck_orders if item.deck_name == "青眼"]
-        self.assertEqual([item.play_order for item in deck_rows], ["overall", "first", "second", "unknown"])
-        self.assertEqual([item.metric.matches for item in deck_rows], [1, 1, 0, 0])
+        self.assertEqual([item.play_order for item in deck_rows], ["overall", "first", "second"])
+        self.assertEqual([item.metric.matches for item in deck_rows], [1, 1, 0])
         self.assertTrue(all(item.color == "#3366AA" for item in deck_rows))
         unknown_axes = {(item.axis, item.key): item.metric.matches for item in report.axes}
+        self.assertEqual(unknown_axes[("overall", "all")], 1)
         self.assertEqual(unknown_axes[("coin_face", "unknown")], 1)
+        self.assertNotIn(("play_order", "unknown"), unknown_axes)
+        self.assertNotIn(("result", "win"), unknown_axes)
 
     def test_report_sections_use_revision_and_archive_is_explicit(self) -> None:
         saved = self.seasons.update_report(

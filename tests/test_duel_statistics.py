@@ -251,6 +251,14 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual([point.label for point in dashboard.trend], ["2026/01", "2026/02", "2026/03"])
         self.assertEqual([point.metric.matches for point in dashboard.trend], [1, 0, 1])
         self.assertEqual([point.metric.wins for point in dashboard.trend], [1, 0, 0])
+        self.assertEqual(
+            [point.cumulative_metric.matches for point in dashboard.trend if point.cumulative_metric],
+            [1, 1, 2],
+        )
+        self.assertEqual(
+            [point.cumulative_win_rate for point in dashboard.trend],
+            [1.0, 1.0, 0.5],
+        )
 
     def test_hidden_own_deck_is_excluded_but_hidden_opponent_is_not(self) -> None:
         base = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
