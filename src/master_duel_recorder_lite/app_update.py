@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 
 RELEASE_API = "https://api.github.com/repos/Tao-pyth/master-duel-recorder-lite/releases/latest"
+RELEASES_API = "https://api.github.com/repos/Tao-pyth/master-duel-recorder-lite/releases?per_page=20"
 GUI_ASSET_NAME = "master-duel-recorder-lite-gui.exe"
 UPDATER_ASSET_NAME = "master-duel-recorder-lite-updater.exe"
 MAX_UPDATE_BYTES = 256 * 1024 * 1024
@@ -62,13 +63,24 @@ class AppUpdateService:
 
     def check(self, current_version: str) -> UpdateCheckResult:
         current = _version(current_version)
-        document = self._read_json(RELEASE_API, 1024 * 1024)
+        for document in self._read_release_documents():
+            release = self._release_from_document(document, current)
+            if release is not None:
+                return UpdateCheckResult(current_version, release)
+        return UpdateCheckResult(current_version, None)
+
+    def _release_from_document(
+        self, document: dict[str, object], current: tuple[int, int, int]
+    ) -> UpdateRelease | None:
         if bool(document.get("draft")) or bool(document.get("prerelease")):
-            return UpdateCheckResult(current_version, None)
+            return None
         tag = str(document.get("tag_name", ""))
-        latest = _version(tag)
+        try:
+            latest = _version(tag)
+        except AppUpdateError:
+            return None
         if latest <= current:
-            return UpdateCheckResult(current_version, None)
+            return None
         assets = document.get("assets")
         if not isinstance(assets, list):
             raise AppUpdateError("Releaseの成果物一覧を確認できません")
@@ -87,26 +99,32 @@ class AppUpdateService:
             or not isinstance(updater, dict)
             or not isinstance(updater_checksum, dict)
         ):
-            raise AppUpdateError("GUI EXE、updater EXE、またはSHA-256成果物がReleaseにありません")
+            return None
         size = executable.get("size")
         if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= MAX_UPDATE_BYTES:
-            raise AppUpdateError("更新EXEのサイズが安全範囲外です")
+            return None
         updater_size = updater.get("size")
         if (
             isinstance(updater_size, bool)
             or not isinstance(updater_size, int)
             or not 0 < updater_size <= MAX_UPDATE_BYTES
         ):
-            raise AppUpdateError("更新updater EXEのサイズが安全範囲外です")
-        release = UpdateRelease(
+            return None
+        try:
+            executable_url = _https_url(executable.get("browser_download_url"))
+            checksum_url = _https_url(checksum.get("browser_download_url"))
+            _https_url(updater.get("browser_download_url"))
+            _https_url(updater_checksum.get("browser_download_url"))
+        except AppUpdateError:
+            return None
+        return UpdateRelease(
             ".".join(str(value) for value in latest),
             str(document.get("name") or tag),
             str(document.get("html_url") or ""),
-            _https_url(executable.get("browser_download_url")),
-            _https_url(checksum.get("browser_download_url")),
+            executable_url,
+            checksum_url,
             size,
         )
-        return UpdateCheckResult(current_version, release)
 
     def download(self, release: UpdateRelease, destination: Path) -> Path:
         target = destination.expanduser().resolve()
@@ -200,12 +218,27 @@ class AppUpdateService:
                 raise AppUpdateError("更新EXEの起動検証が実行時データを作成しました")
 
     def _read_json(self, url: str, maximum: int) -> dict[str, object]:
+        document = self._read_json_value(url, maximum)
+        if not isinstance(document, dict):
+            raise AppUpdateError("更新情報の形式が不正です")
+        return document
+
+    def _read_release_documents(self) -> tuple[dict[str, object], ...]:
+        document = self._read_json_value(RELEASES_API, 2 * 1024 * 1024)
+        if isinstance(document, list):
+            releases = tuple(item for item in document if isinstance(item, dict))
+            if releases:
+                return releases
+            return ()
+        if isinstance(document, dict):
+            return (document,)
+        raise AppUpdateError("更新情報の形式が不正です")
+
+    def _read_json_value(self, url: str, maximum: int) -> object:
         try:
             document = json.loads(self._read_bytes(url, maximum).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise AppUpdateError("更新情報を解析できません") from exc
-        if not isinstance(document, dict):
-            raise AppUpdateError("更新情報の形式が不正です")
         return document
 
     def _read_bytes(self, url: str, maximum: int) -> bytes:

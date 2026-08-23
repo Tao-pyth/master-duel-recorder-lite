@@ -1,5 +1,18 @@
 # リリースノート
 
+## V2.2.1: アプリ更新Release選択hotfix - 2026-08-23
+
+- アプリ内更新がGitHubの`latest` 1件だけに依存せず、Release一覧から配布可能な最新安定版を選ぶようにした
+- draft/prerelease、現在以下のバージョン、GUI EXE/updater EXE/SHA-256が不足するReleaseを更新候補から除外する
+- 配布可能Releaseが存在しない場合は、例外ではなく「利用可能な更新なし」と扱う
+- `v2.2.0` は配布資産なし通常Releaseとして公開されていたため、応急処置としてpre-releaseへ変更した
+- DB schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、全587テスト、CLI/GUI/updater EXEビルド、3 EXEスモーク、GUI smokeによるアプリ更新タブ・統計チャート・日付ピッカー・主要テーブル契約確認に合格した
+- ローカル通常ビルドCLI EXE SHA-256: `848267dee6e46e9b132048106bbcc16d96f47c6474a4c170154d31d8f0ac2620`
+- ローカル通常ビルドGUI EXE SHA-256: `7a079d1aeef711e8b3560abf84daf43d78c05132d805ab440f411f53a8908e3f`
+- ローカル通常ビルドupdater EXE SHA-256: `4ca81cb5654db18a1411cd134142dbae9d34a1c6065da20ff911693a4c2adbb3`
+- 追跡: [V2.2.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/77)、Issue #568
+
 ## V2.2.0: PySide6 UI読み取り品質改善 - 2026-08-23
 
 - 統計画面の開始日・終了日をカレンダーポップアップ付きの日付入力にした

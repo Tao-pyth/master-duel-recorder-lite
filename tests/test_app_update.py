@@ -61,8 +61,8 @@ class AppUpdateServiceTest(unittest.TestCase):
             self.assertEqual(timeout, 20)
             self.assertEqual(request.headers["Cache-control"], "no-cache")
             url = request.full_url
-            if url.endswith("releases/latest"):
-                return _Response(json.dumps(release).encode())
+            if "releases?per_page=20" in url:
+                return _Response(json.dumps([release]).encode())
             if url.endswith("sha256"):
                 return _Response(f"{digest}  app.exe\n".encode())
             return _Response(executable)
@@ -84,9 +84,159 @@ class AppUpdateServiceTest(unittest.TestCase):
             "assets": [],
         }
         service = AppUpdateService(
-            opener=lambda _request, timeout: _Response(json.dumps(release).encode())
+            opener=lambda _request, timeout: _Response(json.dumps([release]).encode())
         )
         self.assertFalse(service.check("1.0.0").available)
+
+    def test_latest_release_without_assets_is_skipped_for_distributable_release(self) -> None:
+        executable = b"distributed-exe"
+        digest = hashlib.sha256(executable).hexdigest()
+        source_only_release = {
+            "tag_name": "v1.0.2",
+            "name": "V1.0.2",
+            "html_url": "https://example.invalid/source-only",
+            "draft": False,
+            "prerelease": False,
+            "assets": [],
+        }
+        distributable_release = {
+            "tag_name": "v1.0.1",
+            "name": "V1.0.1",
+            "html_url": "https://example.invalid/release",
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {
+                    "name": "master-duel-recorder-lite-gui.exe",
+                    "size": len(executable),
+                    "browser_download_url": "https://example.invalid/app.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-gui.exe.sha256",
+                    "size": 80,
+                    "browser_download_url": "https://example.invalid/app.sha256",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe",
+                    "size": 8,
+                    "browser_download_url": "https://example.invalid/updater.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe.sha256",
+                    "size": 80,
+                    "browser_download_url": "https://example.invalid/updater.sha256",
+                },
+            ],
+        }
+
+        def opener(request, timeout):
+            if "releases?per_page=20" in request.full_url:
+                return _Response(
+                    json.dumps([source_only_release, distributable_release]).encode()
+                )
+            if request.full_url.endswith("sha256"):
+                return _Response(f"{digest}  app.exe\n".encode())
+            return _Response(executable)
+
+        service = AppUpdateService(opener=opener)
+        result = service.check("1.0.0")
+
+        self.assertTrue(result.available)
+        self.assertEqual(result.release.version, "1.0.1")  # type: ignore[union-attr]
+
+    def test_only_newer_source_release_is_not_an_update_error(self) -> None:
+        source_only_release = {
+            "tag_name": "v1.0.1",
+            "name": "V1.0.1",
+            "html_url": "https://example.invalid/source-only",
+            "draft": False,
+            "prerelease": False,
+            "assets": [],
+        }
+
+        service = AppUpdateService(
+            opener=lambda _request, timeout: _Response(
+                json.dumps([source_only_release]).encode()
+            )
+        )
+
+        result = service.check("1.0.0")
+
+        self.assertFalse(result.available)
+
+    def test_malformed_release_entries_do_not_block_valid_release(self) -> None:
+        executable = b"distributed-exe"
+        bad_tag_release = {
+            "tag_name": "release-candidate",
+            "draft": False,
+            "prerelease": False,
+            "assets": [],
+        }
+        bad_url_release = {
+            "tag_name": "v1.0.2",
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {
+                    "name": "master-duel-recorder-lite-gui.exe",
+                    "size": len(executable),
+                    "browser_download_url": "http://example.invalid/app.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-gui.exe.sha256",
+                    "size": 80,
+                    "browser_download_url": "https://example.invalid/app.sha256",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe",
+                    "size": 8,
+                    "browser_download_url": "https://example.invalid/updater.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe.sha256",
+                    "size": 80,
+                    "browser_download_url": "https://example.invalid/updater.sha256",
+                },
+            ],
+        }
+        valid_release = {
+            "tag_name": "v1.0.1",
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {
+                    "name": "master-duel-recorder-lite-gui.exe",
+                    "size": len(executable),
+                    "browser_download_url": "https://example.invalid/app.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-gui.exe.sha256",
+                    "size": 80,
+                    "browser_download_url": "https://example.invalid/app.sha256",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe",
+                    "size": 8,
+                    "browser_download_url": "https://example.invalid/updater.exe",
+                },
+                {
+                    "name": "master-duel-recorder-lite-updater.exe.sha256",
+                    "size": 80,
+                    "browser_download_url": "https://example.invalid/updater.sha256",
+                },
+            ],
+        }
+
+        service = AppUpdateService(
+            opener=lambda _request, timeout: _Response(
+                json.dumps([bad_tag_release, bad_url_release, valid_release]).encode()
+            )
+        )
+
+        result = service.check("1.0.0")
+
+        self.assertTrue(result.available)
+        self.assertEqual(result.release.version, "1.0.1")  # type: ignore[union-attr]
 
     def test_hash_mismatch_is_rejected(self) -> None:
         service = AppUpdateService(

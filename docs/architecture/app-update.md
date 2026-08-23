@@ -6,7 +6,8 @@ V1.0.1では、利用者がGitHub Releaseを毎回手動で探さなくても正
 
 ## 更新契約
 
-- GitHubの`releases/latest`からdraftでもprereleaseでもないReleaseだけを対象にする
+- GitHubのRelease一覧からdraftでもprereleaseでもないReleaseだけを対象にする
+- `releases/latest`の1件だけには依存せず、配布資産が揃っていない新しいReleaseをスキップして、配布可能な最新安定版を選ぶ
 - `X.Y.Z`形式で現在版より新しい場合だけ通知する
 - `master-duel-recorder-lite-gui.exe`、`master-duel-recorder-lite-updater.exe`、それぞれ同名の`.sha256`が揃わないReleaseを拒否する
 - HTTPS以外のURL、256MiBを超えるEXE、Release記載サイズと異なるEXEを拒否する
