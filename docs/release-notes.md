@@ -1,5 +1,16 @@
 # リリースノート
 
+## V2.2.0: PySide6 UI読み取り品質改善 - 2026-08-23
+
+- 統計画面の開始日・終了日をカレンダーポップアップ付きの日付入力にした
+- 統計の勝利数・勝率推移を、勝利数の棒グラフと累積勝率の折れ線グラフとして表示するようにした
+- 戦績管理、デッキ名、タグ、シーズン、統計内訳などの表に、列幅、横スクロール、行高、穏やかな選択色を設定した
+- デッキ/タグのカラー列を、色コード文字ではなく色見本として確認できる表示へ改善した
+- PySide6 smoke contractへ、カレンダー、統計チャート、表可読性、カラー表示のUI改善契約を追加した
+- DB schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、重点テスト、PySide6 GUI smoke、全584テスト、スクリーンショット目視確認に合格した
+- 追跡: [V2.2.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/76)、Issue #566
+
 ## V2.1.1: PySide6 rich UI回帰修正 - 2026-08-23
 
 - PySide6 GUIが初期・簡略UIへ戻っていた回帰を修正し、`docs/assets/tkinter-ui-baseline-1.5.2-rich` の画面構成に近い情報量へ復旧した
