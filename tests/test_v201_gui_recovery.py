@@ -15,6 +15,11 @@ from master_duel_recorder_lite.gui_feature_parity import (
     required_standard_widget_keys,
     satisfied_standard_feature_keys,
 )
+from master_duel_recorder_lite.pyside_gui import (
+    RICH_BASELINE_ASSETS,
+    RICH_UI_SECTION_WIDGETS,
+    smoke_contract,
+)
 from master_duel_recorder_lite.runtime_paths import default_runtime_root
 
 
@@ -45,6 +50,24 @@ class V201GuiRecoveryTest(unittest.TestCase):
         self.assertEqual(
             set(satisfied_standard_feature_keys(widget_keys)),
             feature_keys,
+        )
+
+    def test_pyside_smoke_contract_keeps_rich_baseline_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "data")
+
+            contract = smoke_contract(service=service, width=1180, height=760)
+
+        self.assertEqual(len(RICH_BASELINE_ASSETS), 11)
+        self.assertIn("record_target_section", contract["widgets"])
+        self.assertIn("record_environment_diagnostics", contract["widgets"])
+        self.assertIn("record_activity_panel", contract["widgets"])
+        self.assertIn("settings_tabs", contract["widgets"])
+        self.assertEqual(contract["internal_pages"], ["prepare", "improve"])
+        self.assertTrue(contract["rich_ui_baseline_contract"])
+        self.assertEqual(
+            set(contract["rich_ui_section_widgets"]),
+            set(RICH_UI_SECTION_WIDGETS),
         )
 
     def test_standard_operation_checks_cover_each_standard_feature(self) -> None:

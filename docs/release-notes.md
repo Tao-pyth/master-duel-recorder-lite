@@ -1,5 +1,15 @@
 # リリースノート
 
+## V2.1.1: PySide6 rich UI回帰修正 - 2026-08-23
+
+- PySide6 GUIが初期・簡略UIへ戻っていた回帰を修正し、`docs/assets/tkinter-ui-baseline-1.5.2-rich` の画面構成に近い情報量へ復旧した
+- 録画画面に録画対象、録画状態、録画なし戦績追加、環境診断、アクティビティを同居させ、画像1のような簡略画面を完成扱いしない契約を追加した
+- 戦績管理、統計、デッキ名、タグ、シーズン、テンプレート、信頼性、設定、内部MP4準備/改善ページの主要導線と表示密度を復旧した
+- PySide6 smoke contractへrich baseline画像11件、rich UI section、内部ページの確認項目を追加した
+- DB schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、全587テスト、PySide6 GUI smoke、スクリーンショット目視確認に合格した
+- 追跡: [V2.1.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/75)、Issue #564
+
 ## V2.1.0: PySide6標準機能移植 - 2026-08-23
 
 - `master-duel-recorder-lite-gui.exe`の通常入口をPySide6 GUIへ戻した
