@@ -6,6 +6,7 @@ from master_duel_recorder_lite import __version__
 from master_duel_recorder_lite.pyside_gui import (
     NAVIGATION_PAGES,
     SMOKE_WIDGETS,
+    UI_USABILITY_WIDGETS,
     build_gui_parser,
     smoke_contract,
 )
@@ -42,11 +43,19 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertEqual(contract["gui_entrypoint"], "master_duel_recorder_lite.pyside_gui")
         self.assertTrue(contract["standard_feature_contract"])
         self.assertTrue(contract["standard_operation_contract"])
+        self.assertTrue(contract["ui_usability_contract"])
+        self.assertTrue(contract["calendar_picker_contract"]["popup_calendar"])
+        self.assertEqual(
+            contract["statistics_chart_contract"]["visual_type"],
+            "bar_and_line",
+        )
+        self.assertTrue(contract["table_readability_contract"]["horizontal_scroll"])
+        self.assertTrue(contract["color_swatch_contract"]["history_deck_decoration"])
         self.assertEqual(contract["missing_standard_widgets"], [])
         self.assertEqual(contract["failed_standard_operation_checks"], [])
         self.assertTrue(contract["youtube_flow_contract"])
         self.assertEqual(contract["runtime_data"], "user_data")
-        for widget in SMOKE_WIDGETS:
+        for widget in (*SMOKE_WIDGETS, *UI_USABILITY_WIDGETS):
             self.assertIn(widget, contract["widgets"])
 
     def test_parser_keeps_existing_gui_smoke_arguments(self) -> None:

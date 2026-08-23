@@ -79,10 +79,21 @@ RICH_UI_SECTION_WIDGETS: tuple[str, ...] = (
     "improve_internal_page",
 )
 
+UI_USABILITY_WIDGETS: tuple[str, ...] = (
+    "history_table",
+    "statistics_chart",
+    "statistics_date_from_picker",
+    "statistics_date_to_picker",
+    "deck_catalog_table",
+    "tag_catalog_table",
+    "season_table",
+)
+
 SMOKE_WIDGETS: tuple[str, ...] = tuple(
     sorted(
         set(required_standard_widget_keys())
         | set(RICH_UI_SECTION_WIDGETS)
+        | set(UI_USABILITY_WIDGETS)
         | {
             "incomplete_duel_count",
         }
@@ -166,6 +177,12 @@ def build_gui_parser() -> argparse.ArgumentParser:
     parser.add_argument("--smoke-output", type=Path, default=None)
     parser.add_argument("--smoke-screenshot", type=Path, default=None)
     parser.add_argument(
+        "--smoke-page",
+        choices=[page for page, _label in (*NAVIGATION_PAGES, *INTERNAL_PAGES)],
+        default="statistics",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--cleanup-manifest", type=Path, default=None, help=argparse.SUPPRESS
     )
     return parser
@@ -198,6 +215,31 @@ def smoke_contract(
         "runtime_data": str(service.paths.root),
         "history_refresh_visible": True,
         "calendar_contract": True,
+        "ui_usability_widgets": list(UI_USABILITY_WIDGETS),
+        "ui_usability_contract": all(widget in widget_keys for widget in UI_USABILITY_WIDGETS),
+        "calendar_picker_contract": {
+            "date_widgets": [
+                "statistics_date_from_picker",
+                "statistics_date_to_picker",
+            ],
+            "display_format": "yyyy-MM-dd",
+            "popup_calendar": True,
+        },
+        "statistics_chart_contract": {
+            "widget": "statistics_chart",
+            "visual_type": "bar_and_line",
+            "bar_metric": "period_wins",
+            "line_metric": "cumulative_win_rate",
+        },
+        "table_readability_contract": {
+            "selection": "soft-row-selection",
+            "horizontal_scroll": True,
+            "explicit_column_widths": True,
+        },
+        "color_swatch_contract": {
+            "catalog_tables": ["deck_catalog_table", "tag_catalog_table"],
+            "history_deck_decoration": True,
+        },
         "rich_ui_baseline_assets": list(RICH_BASELINE_ASSETS),
         "rich_ui_section_widgets": list(RICH_UI_SECTION_WIDGETS),
         "rich_ui_baseline_contract": all(
@@ -245,8 +287,10 @@ def _run(args: argparse.Namespace) -> int:
     if not availability.available:
         raise PySideGuiError(availability.message)
     try:
-        from PySide6.QtCore import Qt
+        from PySide6.QtCore import QDate, QPointF, Qt
+        from PySide6.QtGui import QColor, QPainter, QPen
         from PySide6.QtWidgets import (
+            QAbstractItemView,
             QApplication,
             QCheckBox,
             QComboBox,
@@ -275,6 +319,106 @@ def _run(args: argparse.Namespace) -> int:
         )
     except Exception as exc:  # pragma: no cover - depends on local Qt installation
         raise PySideGuiError(f"PySide6 GUIの読み込みに失敗しました: {exc}") from exc
+
+    class StatisticsTrendChart(QWidget):
+        def __init__(self) -> None:
+            super().__init__()
+            self.points: tuple[object, ...] = ()
+            self.setMinimumHeight(230)
+            self.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
+
+        def set_points(self, points: tuple[object, ...]) -> None:
+            self.points = points
+            self.update()
+
+        def paintEvent(self, _event: object) -> None:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = self.rect().adjusted(14, 12, -14, -14)
+            painter.fillRect(rect, QColor("#ffffff"))
+            painter.setPen(QPen(QColor("#c8d0d8"), 1))
+            painter.drawRect(rect)
+
+            plot = rect.adjusted(44, 18, -22, -34)
+            painter.setPen(QColor("#4b5563"))
+            painter.drawText(rect.left() + 10, rect.top() + 18, "勝利数")
+            painter.drawText(rect.right() - 72, rect.top() + 18, "累積勝率")
+            painter.setPen(QPen(QColor("#d6dde3"), 1))
+            painter.drawLine(plot.bottomLeft(), plot.bottomRight())
+            painter.drawLine(plot.bottomLeft(), plot.topLeft())
+
+            if not self.points:
+                painter.setPen(QColor("#6b7280"))
+                painter.drawText(
+                    plot,
+                    int(Qt.AlignmentFlag.AlignCenter),
+                    "表示できる確定済み対戦がありません",
+                )
+                return
+
+            wins = [self._wins(point) for point in self.points]
+            rates = [self._rate(point) for point in self.points]
+            max_wins = max(max(wins), 1)
+            count = len(self.points)
+            step = plot.width() / max(count, 1)
+            bar_width = max(10.0, min(34.0, step * 0.46))
+            line_points: list[QPointF] = []
+
+            for index, point in enumerate(self.points):
+                center_x = plot.left() + step * index + step / 2
+                win_height = (wins[index] / max_wins) * max(plot.height(), 1)
+                bar_rect_left = center_x - bar_width / 2
+                painter.fillRect(
+                    int(bar_rect_left),
+                    int(plot.bottom() - win_height),
+                    int(bar_width),
+                    int(win_height),
+                    QColor("#4f8f82"),
+                )
+                rate = rates[index]
+                if rate is not None:
+                    y = plot.bottom() - rate * plot.height()
+                    line_points.append(QPointF(center_x, y))
+                if count <= 12 or index in {0, count - 1}:
+                    painter.setPen(QColor("#4b5563"))
+                    painter.drawText(
+                        int(center_x - step / 2),
+                        plot.bottom() + 18,
+                        int(step),
+                        18,
+                        int(Qt.AlignmentFlag.AlignCenter),
+                        str(getattr(point, "label", "")),
+                    )
+
+            if len(line_points) >= 2:
+                painter.setPen(QPen(QColor("#2759a5"), 2))
+                for current, next_point in zip(line_points, line_points[1:]):
+                    painter.drawLine(current, next_point)
+            for point in line_points:
+                painter.setPen(QPen(QColor("#2759a5"), 2))
+                painter.setBrush(QColor("#ffffff"))
+                painter.drawEllipse(point, 3.6, 3.6)
+
+            painter.setPen(QColor("#111827"))
+            painter.drawText(
+                rect.left() + 12,
+                rect.bottom() - 8,
+                "棒: 期間ごとの勝利数 / 線: 累積勝率",
+            )
+
+        @staticmethod
+        def _wins(point: object) -> int:
+            metric = getattr(point, "metric")
+            return int(getattr(metric, "wins", 0))
+
+        @staticmethod
+        def _rate(point: object) -> float | None:
+            rate = getattr(point, "cumulative_win_rate", None)
+            if rate is None:
+                return None
+            return max(0.0, min(1.0, float(rate)))
 
     class MainWindow(QMainWindow):
         def __init__(
@@ -430,6 +574,70 @@ def _run(args: argparse.Namespace) -> int:
             button.setProperty("variant", variant)
             return button
 
+        def _date_picker(self, key: str) -> QDateEdit:
+            picker = self._register(key, QDateEdit())
+            assert isinstance(picker, QDateEdit)
+            picker.setCalendarPopup(True)
+            picker.setDisplayFormat("yyyy-MM-dd")
+            picker.setDate(QDate.currentDate())
+            picker.setMinimumWidth(128)
+            calendar = picker.calendarWidget()
+            if calendar is not None:
+                calendar.setGridVisible(True)
+            return picker
+
+        def _configure_table(
+            self,
+            table: QTableWidget,
+            *,
+            column_widths: tuple[int | None, ...] | None = None,
+            stretch_last: bool = True,
+            minimum_height: int | None = None,
+        ) -> None:
+            table.setAlternatingRowColors(True)
+            table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            table.setWordWrap(False)
+            table.setShowGrid(True)
+            table.verticalHeader().setVisible(False)
+            table.verticalHeader().setDefaultSectionSize(34)
+            header = table.horizontalHeader()
+            header.setStretchLastSection(stretch_last)
+            if column_widths is None:
+                header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+                return
+            for index, width in enumerate(column_widths):
+                if width is None:
+                    header.setSectionResizeMode(index, QHeaderView.ResizeMode.Stretch)
+                else:
+                    header.setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+                    table.setColumnWidth(index, width)
+            if minimum_height is not None:
+                table.setMinimumHeight(minimum_height)
+
+        @staticmethod
+        def _decorate_item_with_color(
+            item: QTableWidgetItem | None, color: str | None
+        ) -> None:
+            if item is None or not color:
+                return
+            qcolor = QColor(color)
+            if not qcolor.isValid():
+                return
+            item.setData(Qt.ItemDataRole.DecorationRole, qcolor)
+            item.setToolTip(f"カラー: {qcolor.name().upper()}")
+            item.setText(f"  {item.text()}")
+
+        @staticmethod
+        def _contrast_text_color(color: QColor) -> QColor:
+            brightness = (
+                color.red() * 299 + color.green() * 587 + color.blue() * 114
+            ) / 1000
+            return QColor("#111827" if brightness > 150 else "#ffffff")
+
         def _record_page(self, layout: QVBoxLayout) -> None:
             target_section, target_layout = self._section(
                 "record_target_section",
@@ -502,6 +710,7 @@ def _run(args: argparse.Namespace) -> int:
             diag_table = QTableWidget(3, 2)
             diag_table.setHorizontalHeaderLabels(("状態", "項目と結果"))
             diag_table.setMaximumHeight(112)
+            self._configure_table(diag_table, column_widths=(70, None))
             self._set_table_rows(
                 diag_table,
                 (
@@ -576,6 +785,11 @@ def _run(args: argparse.Namespace) -> int:
                     "登録元",
                 )
             )
+            self._configure_table(
+                table,
+                column_widths=(148, 220, 72, 72, 72, 100, 82, 92, 180, 86),
+                minimum_height=310,
+            )
             self._set_table_rows(
                 table,
                 (
@@ -605,6 +819,8 @@ def _run(args: argparse.Namespace) -> int:
                     ),
                 ),
             )
+            self._decorate_item_with_color(table.item(0, 1), "#2F6B5F")
+            self._decorate_item_with_color(table.item(1, 1), "#8E4F7A")
             layout.addWidget(self._register("history_table", table), stretch=1)
 
         def _statistics_page(self, layout: QVBoxLayout) -> None:
@@ -631,9 +847,9 @@ def _run(args: argparse.Namespace) -> int:
             filters = QGroupBox("条件")
             grid = QGridLayout(filters)
             grid.addWidget(QLabel("開始日"), 0, 0)
-            grid.addWidget(self._register("statistics_date_from_picker", QDateEdit()), 0, 1)
+            grid.addWidget(self._date_picker("statistics_date_from_picker"), 0, 1)
             grid.addWidget(QLabel("終了日"), 0, 2)
-            grid.addWidget(self._register("statistics_date_to_picker", QDateEdit()), 0, 3)
+            grid.addWidget(self._date_picker("statistics_date_to_picker"), 0, 3)
             filter_box = self._register("statistics_filters", QComboBox())
             assert isinstance(filter_box, QComboBox)
             filter_box.addItems(("すべて", "勝利のみ", "敗北のみ"))
@@ -652,9 +868,7 @@ def _run(args: argparse.Namespace) -> int:
             trend_controls.addWidget(granularity)
             trend_controls.addStretch(1)
             trend_layout.addLayout(trend_controls)
-            chart = QLabel("日別勝利数と累積勝率を表示します")
-            chart.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            chart.setMinimumHeight(230)
+            chart = StatisticsTrendChart()
             trend_layout.addWidget(self._register("statistics_chart", chart))
             tabs.addTab(trend, "勝利数・勝率推移")
             tabs.addTab(
@@ -708,17 +922,29 @@ def _run(args: argparse.Namespace) -> int:
             )
             rows = (
                 (
-                    ("■", "天威相剣", "ランク戦メイン", 12, "通常"),
-                    ("■", "御巫", "後攻確認用", 3, "通常"),
+                    ("#2F6B5F", "天威相剣", "ランク戦メイン", 12, "通常"),
+                    ("#8E4F7A", "御巫", "後攻確認用", 3, "通常"),
                 )
                 if is_deck
                 else (
-                    ("■", "ランク戦", "ランクマッチ用の共通タグ", "通常"),
-                    ("■", "大型連勝", "デッキ検証で使用", "デッキ専用"),
+                    ("#4F6F8F", "ランク戦", "ランクマッチ用の共通タグ", "通常"),
+                    ("#B08942", "大型連勝", "デッキ検証で使用", "デッキ専用"),
                 )
             )
             widget_key = "deck_catalog_table" if is_deck else "tag_catalog_table"
             table = self._table(widget_key, headers, rows)
+            if is_deck:
+                self._configure_table(
+                    table,
+                    column_widths=(74, 180, None, 86, 120),
+                    minimum_height=250,
+                )
+            else:
+                self._configure_table(
+                    table,
+                    column_widths=(74, 180, None, 120),
+                    minimum_height=250,
+                )
             layout.addWidget(table, stretch=1)
             if is_deck:
                 layout.addWidget(
@@ -738,9 +964,9 @@ def _run(args: argparse.Namespace) -> int:
             type_box.addItems(("ランク戦", "イベント", "その他"))
             grid.addWidget(type_box, 0, 3)
             grid.addWidget(QLabel("開始日"), 1, 0)
-            grid.addWidget(QDateEdit(), 1, 1)
+            grid.addWidget(self._date_picker("season_start_date_picker"), 1, 1)
             grid.addWidget(QLabel("終了日"), 1, 2)
-            grid.addWidget(QDateEdit(), 1, 3)
+            grid.addWidget(self._date_picker("season_end_date_picker"), 1, 3)
             grid.addWidget(QLabel("説明"), 2, 0)
             grid.addWidget(QLineEdit(), 2, 1, 1, 3)
             editor_layout.addLayout(grid)
@@ -758,6 +984,7 @@ def _run(args: argparse.Namespace) -> int:
                         ("WCS予選", "イベント", "2026-08-01 - 2026-08-20", "有効"),
                         ("ランク戦 8月", "ランク戦", "2026-08-01 - 2026-08-31", "有効"),
                     ),
+                    column_widths=(220, 96, 210, 96),
                 ),
                 stretch=1,
             )
@@ -821,6 +1048,7 @@ def _run(args: argparse.Namespace) -> int:
                     "prepare_table",
                     ("録画ID", "状態", "タイトル", "公開範囲", "更新日時"),
                     (("sample-rec", "waiting", "投稿準備サンプル", "private", "2026-08-23"),),
+                    column_widths=(140, 92, None, 92, 148),
                 )
             )
 
@@ -927,6 +1155,7 @@ def _run(args: argparse.Namespace) -> int:
                     "data_backup_table",
                     ("作成日時", "契機", "DB版", "サイズ"),
                     (("2026-08-23 18:00", "手動", "1", "128KB"),),
+                    column_widths=(150, None, 80, 100),
                 ),
                 stretch=1,
             )
@@ -978,6 +1207,7 @@ def _run(args: argparse.Namespace) -> int:
                     "prepare_internal_table",
                     ("録画ID", "タイトル", "状態"),
                     (("sample-rec", "投稿準備サンプル", "waiting"),),
+                    column_widths=(150, None, 110),
                 )
             )
             layout.addWidget(panel, stretch=1)
@@ -1001,6 +1231,7 @@ def _run(args: argparse.Namespace) -> int:
                     key,
                     headers,
                     ((headers[0], 2, 1, "50.0%"),),
+                    column_widths=(None, 82, 82, 96),
                 )
             )
             return panel
@@ -1010,11 +1241,12 @@ def _run(args: argparse.Namespace) -> int:
             key: str,
             headers: tuple[str, ...],
             rows: tuple[tuple[object, ...], ...] = (),
+            *,
+            column_widths: tuple[int | None, ...] | None = None,
         ) -> QTableWidget:
             table = QTableWidget(0, len(headers))
             table.setHorizontalHeaderLabels(headers)
-            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-            table.setAlternatingRowColors(True)
+            self._configure_table(table, column_widths=column_widths)
             table.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
@@ -1063,8 +1295,10 @@ def _run(args: argparse.Namespace) -> int:
             table = self.widgets["history_table"]
             assert isinstance(table, QTableWidget)
             rows = []
+            deck_colors = []
             for view in dashboard.views:
                 entry = view.entry
+                deck_colors.append(view.own_deck_color)
                 rows.append(
                     (
                         view.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M"),
@@ -1080,6 +1314,8 @@ def _run(args: argparse.Namespace) -> int:
                     )
                 )
             self._set_table_rows(table, rows)
+            for row_index, color in enumerate(deck_colors):
+                self._decorate_item_with_color(table.item(row_index, 1), color)
             incomplete = self.widgets["incomplete_duel_count"]
             assert isinstance(incomplete, QLabel)
             incomplete.setText(
@@ -1095,7 +1331,7 @@ def _run(args: argparse.Namespace) -> int:
                 deck_table,
                 tuple(
                     (
-                        deck.color or "■",
+                        deck.color or "#2F6B5F",
                         deck.name,
                         deck.description,
                         deck.usage_count,
@@ -1108,7 +1344,7 @@ def _run(args: argparse.Namespace) -> int:
                 tag_table,
                 tuple(
                     (
-                        tag.color or "■",
+                        tag.color or "#4F6F8F",
                         tag.name,
                         tag.description,
                         "デッキ専用" if tag.deck_only else "通常",
@@ -1192,9 +1428,10 @@ def _run(args: argparse.Namespace) -> int:
         def _refresh_statistics(self) -> None:
             dashboard = self.service.get_statistics_dashboard(granularity="day")
             chart = self.widgets["statistics_chart"]
-            assert isinstance(chart, QLabel)
+            assert isinstance(chart, StatisticsTrendChart)
             overall = dashboard.overall
-            chart.setText(
+            chart.set_points(dashboard.trend)
+            chart.setToolTip(
                 "日別勝利数と累積勝率: "
                 + f"{overall.wins}勝 / {overall.matches}戦"
             )
@@ -1231,7 +1468,17 @@ def _run(args: argparse.Namespace) -> int:
             table.setRowCount(len(rows))
             for row_index, row_values in enumerate(rows):
                 for column, value in enumerate(row_values):
-                    table.setItem(row_index, column, QTableWidgetItem(str(value)))
+                    item = QTableWidgetItem(str(value))
+                    header_item = table.horizontalHeaderItem(column)
+                    header_text = header_item.text() if header_item is not None else ""
+                    if header_text == "カラー":
+                        color = QColor(str(value))
+                        if color.isValid():
+                            item.setText(color.name().upper())
+                            item.setBackground(color)
+                            item.setForeground(MainWindow._contrast_text_color(color))
+                            item.setToolTip(f"カラー: {color.name().upper()}")
+                    table.setItem(row_index, column, item)
             table.resizeRowsToContents()
 
         def _run_action(self, label: str, operation: Any) -> None:
@@ -1277,6 +1524,16 @@ def _run(args: argparse.Namespace) -> int:
             )
         if args.smoke_screenshot is not None:
             args.smoke_screenshot.parent.mkdir(parents=True, exist_ok=True)
+            window.show_page(args.smoke_page)
+            if args.smoke_page == "history":
+                table = window.widgets.get("history_table")
+                if isinstance(table, QTableWidget) and table.rowCount() > 0:
+                    table.selectRow(0)
+            elif args.smoke_page == "decks":
+                table = window.widgets.get("deck_catalog_table")
+                if isinstance(table, QTableWidget) and table.rowCount() > 0:
+                    table.selectRow(0)
+            app.processEvents()
             window.grab().save(str(args.smoke_screenshot))
         window.close()
         app.processEvents()
@@ -1373,7 +1630,12 @@ def _style_sheet() -> str:
         background: #ffffff;
         border: 1px solid #c8d0d8;
         alternate-background-color: #f7faf9;
+        selection-background-color: #d7ece8;
+        selection-color: #10201c;
+        gridline-color: #e3e8ed;
     }
+    QTableWidget::item { padding: 4px 7px; }
+    QTableWidget::item:selected { background: #d7ece8; color: #10201c; }
     QHeaderView::section {
         background: #eef2f0;
         border: 1px solid #c8d0d8;

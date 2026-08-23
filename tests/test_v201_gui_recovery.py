@@ -18,6 +18,7 @@ from master_duel_recorder_lite.gui_feature_parity import (
 from master_duel_recorder_lite.pyside_gui import (
     RICH_BASELINE_ASSETS,
     RICH_UI_SECTION_WIDGETS,
+    UI_USABILITY_WIDGETS,
     smoke_contract,
 )
 from master_duel_recorder_lite.runtime_paths import default_runtime_root
@@ -65,10 +66,20 @@ class V201GuiRecoveryTest(unittest.TestCase):
         self.assertIn("settings_tabs", contract["widgets"])
         self.assertEqual(contract["internal_pages"], ["prepare", "improve"])
         self.assertTrue(contract["rich_ui_baseline_contract"])
+        self.assertTrue(contract["ui_usability_contract"])
+        self.assertEqual(
+            contract["statistics_chart_contract"]["line_metric"],
+            "cumulative_win_rate",
+        )
+        self.assertEqual(
+            contract["calendar_picker_contract"]["display_format"],
+            "yyyy-MM-dd",
+        )
         self.assertEqual(
             set(contract["rich_ui_section_widgets"]),
             set(RICH_UI_SECTION_WIDGETS),
         )
+        self.assertLessEqual(set(UI_USABILITY_WIDGETS), set(contract["widgets"]))
 
     def test_standard_operation_checks_cover_each_standard_feature(self) -> None:
         feature_keys = {feature.key for feature in STANDARD_GUI_FEATURES}
