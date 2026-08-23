@@ -124,6 +124,14 @@ class ReleaseToolingTest(unittest.TestCase):
         self.assertNotIn("--windowed", command)
         self.assertIn(str(root / "packaging" / "mdrl_updater_entry.py"), command)
 
+    def test_windows_release_workflow_publishes_sha256sums(self) -> None:
+        workflow = (PROJECT_ROOT / ".github" / "workflows" / "windows-release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("SHA256SUMS-v$env:MDRL_VERSION.txt", workflow)
+        self.assertIn("dist/SHA256SUMS-v*.txt", workflow)
+
     def test_release_oauth_client_asset_can_be_generated_from_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

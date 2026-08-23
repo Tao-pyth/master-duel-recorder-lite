@@ -239,6 +239,28 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertIsNone(views[0].recording_id)
         self.assertEqual(views[0].own_deck, "青眼")
 
+    def test_history_dashboard_filters_by_occurred_date_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            service.create_manual_duel_record(
+                DuelRecordValues(status="confirmed", result="win", own_deck="青眼"),
+                occurred_at=datetime(2026, 8, 22, 12, tzinfo=timezone.utc),
+            )
+            service.create_manual_duel_record(
+                DuelRecordValues(status="confirmed", result="loss", own_deck="御巫"),
+                occurred_at=datetime(2026, 8, 23, 12, tzinfo=timezone.utc),
+            )
+
+            views = service.list_history_views(
+                query=DuelManagementQuery(
+                    occurred_from=datetime(2026, 8, 23, tzinfo=timezone.utc).date(),
+                    occurred_to=datetime(2026, 8, 23, tzinfo=timezone.utc).date(),
+                )
+            )
+
+        self.assertEqual(len(views), 1)
+        self.assertEqual(views[0].own_deck, "御巫")
+
     def test_youtube_status_and_upload_are_available_from_application_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = MemoryCredentialStore()
