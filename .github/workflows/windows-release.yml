@@ -65,15 +65,23 @@ jobs:
       - name: Create SHA-256 files
         shell: pwsh
         run: |
+          $sumLines = @()
           foreach ($name in @("master-duel-recorder-lite.exe", "master-duel-recorder-lite-gui.exe", "master-duel-recorder-lite-updater.exe")) {
             $path = "dist/$name"
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+            $line = "$hash  $name"
             [System.IO.File]::WriteAllText(
               "$path.sha256",
-              "$hash  $name`n",
+              "$line`n",
               [System.Text.Encoding]::ASCII
             )
+            $sumLines += $line
           }
+          [System.IO.File]::WriteAllText(
+            "dist/SHA256SUMS-v$env:MDRL_VERSION.txt",
+            (($sumLines -join "`n") + "`n"),
+            [System.Text.Encoding]::ASCII
+          )
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -92,6 +100,7 @@ jobs:
             dist/master-duel-recorder-lite-gui.exe.sha256
             dist/master-duel-recorder-lite-updater.exe
             dist/master-duel-recorder-lite-updater.exe.sha256
+            dist/SHA256SUMS-v*.txt
           if-no-files-found: error
           retention-days: 30
       - name: Publish GitHub Release
@@ -111,6 +120,7 @@ jobs:
             "dist/master-duel-recorder-lite-gui.exe.sha256" `
             "dist/master-duel-recorder-lite-updater.exe" `
             "dist/master-duel-recorder-lite-updater.exe.sha256" `
+            "dist/SHA256SUMS-v$env:MDRL_VERSION.txt" `
             --verify-tag `
             --title "master-duel-recorder-lite ${{ github.ref_name }}" `
             --notes-file $notes

@@ -212,6 +212,8 @@ class YouTubeUploadDialogData:
 @dataclass(frozen=True)
 class DuelManagementQuery:
     limit: int = 200
+    occurred_from: date | None = None
+    occurred_to: date | None = None
     season_id: int | None = None
     own_deck_id: int | None = None
     opponent_deck_id: int | None = None
@@ -224,6 +226,12 @@ class DuelManagementQuery:
             raise ValueError("limitは整数である必要があります")
         if not 1 <= self.limit <= 1000:
             raise ValueError("limitは1から1000である必要があります")
+        if (
+            self.occurred_from is not None
+            and self.occurred_to is not None
+            and self.occurred_from > self.occurred_to
+        ):
+            raise ValueError("開始日は終了日以前である必要があります")
         if self.entry_origin not in {None, "recording", "manual", "import"}:
             raise ValueError(f"未対応の登録元です: {self.entry_origin}")
 
@@ -851,6 +859,11 @@ class RecorderApplicationService:
 
         def matches(view: RecordingHistoryView) -> bool:
             record = view.duel_record
+            occurred_date = view.occurred_at.astimezone().date()
+            if selected.occurred_from is not None and occurred_date < selected.occurred_from:
+                return False
+            if selected.occurred_to is not None and occurred_date > selected.occurred_to:
+                return False
             if (
                 selected.entry_origin is not None
                 and view.entry_origin != selected.entry_origin

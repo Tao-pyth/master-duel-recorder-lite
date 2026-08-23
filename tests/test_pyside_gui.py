@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -9,6 +10,7 @@ from master_duel_recorder_lite.pyside_gui import (
     SMOKE_WIDGETS,
     UI_USABILITY_WIDGETS,
     build_gui_parser,
+    history_table_display_row,
     smoke_contract,
 )
 
@@ -46,6 +48,26 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertTrue(contract["standard_operation_contract"])
         self.assertTrue(contract["ui_usability_contract"])
         self.assertTrue(contract["calendar_picker_contract"]["popup_calendar"])
+        self.assertIn(
+            "history_date_from_picker",
+            contract["calendar_picker_contract"]["date_widgets"],
+        )
+        self.assertIn(
+            "history_date_to_picker",
+            contract["calendar_picker_contract"]["date_widgets"],
+        )
+        self.assertEqual(
+            contract["history_hub_operation_contract"]["selection_required_buttons"],
+            ["history_play", "history_duel", "history_delete", "history_youtube"],
+        )
+        self.assertEqual(
+            contract["history_hub_operation_contract"]["danger_button"],
+            "history_delete",
+        )
+        self.assertIn(
+            "win",
+            contract["history_hub_operation_contract"]["internal_values_not_displayed"],
+        )
         self.assertEqual(
             contract["statistics_chart_contract"]["visual_type"],
             "bar_and_line",
@@ -84,6 +106,27 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertTrue(args.smoke_test)
         self.assertEqual(args.smoke_output, Path("build/smoke.json"))
         self.assertEqual(args.smoke_screenshot, Path("build/smoke.png"))
+
+    def test_history_table_display_row_uses_japanese_labels(self) -> None:
+        view = SimpleNamespace(
+            occurred_at=datetime(2026, 8, 23, 12, 0),
+            own_deck="白き森調和",
+            result="win",
+            play_order="first",
+            coin_face="heads",
+            duel_type="ranked",
+            opponent_deck="神碑",
+            entry_origin="recording",
+        )
+
+        row = history_table_display_row(view)
+
+        self.assertEqual(row[2:6], ("勝ち", "先攻", "表", "ランク戦"))
+        self.assertEqual(row[9], "録画")
+        self.assertNotIn("win", row)
+        self.assertNotIn("first", row)
+        self.assertNotIn("heads", row)
+        self.assertNotIn("ranked", row)
 
 
 if __name__ == "__main__":

@@ -1134,3 +1134,23 @@
 追跡: [V2.2.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/78)、Issue #570、[Release Contract](release-contracts/2.2.2.md)。
 
 完了条件: V1.x相当の設定カテゴリと操作入口がPySide6設定画面で確認でき、アプリ更新タブが候補あり/なし/失敗を誤表示せず、Ruff、全テスト、UI screenshot smoke、EXEビルド、3 EXEスモーク、公開Release asset検証、Issue/Milestone/Release closureが完了すること。
+
+## V2.2.3: 戦績管理ハブ実操作Hotfix
+
+状態: Act中。実装済み、リリース検証とIssue/Milestone/Release closure完了まで完了扱いにしない。
+
+- V2.2.2後のユーザー報告に基づき、PySide6戦績管理画面の主要ボタンが実操作へ接続されていない状態を最優先で確認・復旧する
+- 戦績管理一覧では、SQLiteやCLIで保持している `win`、`loss`、`first`、`second`、`heads`、`tails`、`ranked`、`event`、`other` などの内部コードを、利用者向けには日本語表示へ変換する
+- 戦績管理フィルターの期間指定は、統計画面と同じくカレンダーポップアップ付きの日付入力として扱えるようにする
+- 戦績管理の上部操作は、主要操作、補助操作、危険操作を分け、アイコンだけで意味が曖昧な操作にはツールチップまたは必要最小限のラベルを持たせる
+- 削除など危険操作は、行選択、録画・監視停止状態、確認ダイアログ、キャンセル時無変更、録画ファイル保護の契約を満たす場合だけ有効化する
+- GUI smokeと回帰テストは、widget存在だけでなく、ボタン接続、日本語表示、日付ピッカー、行選択時の有効/無効を確認対象にする
+- SQLite schema、設定形式、録画ファイル、queue、manifest、OAuth資格情報は変更しない
+
+暫定実施順: 戦績管理ボタン接続と状態制御、日本語表示、期間フィルターのカレンダーピック、アイコン/操作階層整理、GUI smoke/テスト/検証記録。
+
+追跡: [V2.2.3 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/79)、親Issue [#572](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/572)、子Issue [#573](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/573) - [#577](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/577)、[Release Contract](release-contracts/2.2.3.md)。
+
+推奨順: #573 戦績管理ボタン接続と選択状態制御、#574 戦績管理一覧の日本語表示、#575 戦績管理期間フィルターのカレンダーピック化、#576 戦績管理ツールバーの操作階層とアイコン視認性整理、#577 GUI smokeと検証記録の実操作回帰強化、#572 統括・Release closure。
+
+完了条件: 戦績管理の主要ボタンが無反応にならず、内部コードではなく日本語で一覧を読め、期間をカレンダーピックで指定でき、操作階層と危険操作が分かり、Ruff、全テスト、PySide6 history smoke、EXEビルド、3 EXEスモーク、公開Release asset検証、Issue/Milestone/Release closureが完了すること。
