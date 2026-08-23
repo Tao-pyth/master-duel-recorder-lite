@@ -35,7 +35,7 @@ try {
         "activity", "app_update", "catalog_table", "clean_uninstall", "csv_status", "data_backup_table", "data_protection_scope", "data_protection_status", "deck_catalog_table", "ffmpeg_setup",
         "history_add", "history_bulk", "history_columns", "history_delete", "history_duel", "history_duplicates", "history_incomplete", "history_play", "history_refresh", "history_table", "history_youtube",
         "improvement_status", "incomplete_duel_count", "manual_duel_add", "prepare_recording", "prepare_table", "record_start", "record_status", "record_stop", "reliability_status",
-        "season_table", "settings_form", "statistics_chart", "statistics_coin_table", "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "statistics_season_table",
+        "season_table", "settings_audio_input", "settings_audio_mode", "settings_audio_test", "settings_csv_export", "settings_data_backup", "settings_display_colors", "settings_ffmpeg_path", "settings_form", "settings_managed_export", "settings_runtime_path", "settings_save", "settings_youtube_status", "statistics_chart", "statistics_coin_table", "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "statistics_season_table",
         "tag_catalog_table", "target_selector", "visual_details_toggle", "visual_diagnostics_folder", "visual_status", "watch_toggle",
         "youtube_connect", "youtube_disconnect", "youtube_refresh", "youtube_status", "youtube_template", "youtube_test_upload"
     )
@@ -56,6 +56,12 @@ try {
     }
     if ($result.failed_standard_operation_checks.Count -ne 0) {
         throw "GUI smoke has failed operation checks"
+    }
+    if (-not $result.settings_parity_contract) {
+        throw "GUI smoke settings parity contract is invalid"
+    }
+    if (-not $result.app_update_state_contract.download_enabled_only_after_candidate -or -not $result.app_update_state_contract.latest_without_candidate_disables_download) {
+        throw "GUI smoke app update state contract is invalid"
     }
     foreach ($key in @("history_hub", "incomplete_action", "play_action", "edit_action", "danger_delete_action", "duplicate_review", "youtube_action", "timeline_entry", "diagnostic_entry", "review_entry")) {
         if (-not $result.post_recording_workflow_contract.$key) {

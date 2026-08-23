@@ -8,13 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .app_update import AppUpdateService, UpdateRelease, launch_update_after_exit
 from .application import RecorderApplicationService
+from .config_management import config_values
 from .gui_feature_parity import (
     STANDARD_GUI_FEATURES,
     evaluate_standard_operation_checks,
     required_standard_widget_keys,
     satisfied_standard_feature_keys,
 )
+from .ui_preferences import load_ui_preferences, save_ui_preferences
 from .uninstall import run_cleanup_manifest
 
 
@@ -89,11 +92,64 @@ UI_USABILITY_WIDGETS: tuple[str, ...] = (
     "season_table",
 )
 
+SETTINGS_PARITY_WIDGETS: tuple[str, ...] = (
+    "settings_ffmpeg_path",
+    "settings_ffmpeg_select",
+    "settings_audio_mode",
+    "settings_audio_input",
+    "settings_audio_refresh",
+    "settings_audio_test",
+    "settings_audio_status",
+    "settings_frame_rate",
+    "settings_video_bitrate",
+    "settings_audio_gain",
+    "settings_capture_width",
+    "settings_capture_height",
+    "settings_audio_sample_rate",
+    "settings_audio_channels",
+    "settings_auto_start",
+    "settings_auto_stop",
+    "settings_visual_detection",
+    "settings_windows_notifications",
+    "settings_visual_fps",
+    "settings_visual_language",
+    "settings_visual_confidence",
+    "settings_runtime_path",
+    "settings_runtime_change",
+    "settings_reload",
+    "settings_save",
+    "settings_youtube_status",
+    "settings_youtube_scope",
+    "settings_youtube_connect",
+    "settings_youtube_disconnect",
+    "settings_youtube_refresh",
+    "settings_youtube_test_upload",
+    "settings_managed_export",
+    "settings_managed_import",
+    "settings_reset_history",
+    "settings_reset_decks",
+    "settings_reset_tags",
+    "settings_reset_seasons",
+    "settings_data_backup",
+    "settings_data_restore",
+    "settings_data_diagnosis",
+    "settings_csv_export",
+    "settings_csv_import",
+    "settings_csv_sample",
+    "settings_display_colors",
+    "settings_double_click_play",
+    "settings_double_click_edit",
+    "app_update_status",
+    "app_update_auto_check",
+    "app_update_download",
+)
+
 SMOKE_WIDGETS: tuple[str, ...] = tuple(
     sorted(
         set(required_standard_widget_keys())
         | set(RICH_UI_SECTION_WIDGETS)
         | set(UI_USABILITY_WIDGETS)
+        | set(SETTINGS_PARITY_WIDGETS)
         | {
             "incomplete_duel_count",
         }
@@ -240,6 +296,17 @@ def smoke_contract(
             "catalog_tables": ["deck_catalog_table", "tag_catalog_table"],
             "history_deck_decoration": True,
         },
+        "settings_parity_widgets": list(SETTINGS_PARITY_WIDGETS),
+        "settings_parity_contract": all(
+            widget in widget_keys for widget in SETTINGS_PARITY_WIDGETS
+        ),
+        "app_update_state_contract": {
+            "status_widget": "app_update_status",
+            "check_button": "app_update",
+            "download_button": "app_update_download",
+            "download_enabled_only_after_candidate": True,
+            "latest_without_candidate_disables_download": True,
+        },
         "rich_ui_baseline_assets": list(RICH_BASELINE_ASSETS),
         "rich_ui_section_widgets": list(RICH_UI_SECTION_WIDGETS),
         "rich_ui_baseline_contract": all(
@@ -295,6 +362,7 @@ def _run(args: argparse.Namespace) -> int:
             QCheckBox,
             QComboBox,
             QDateEdit,
+            QFileDialog,
             QFrame,
             QGridLayout,
             QGroupBox,
@@ -308,7 +376,6 @@ def _run(args: argparse.Namespace) -> int:
             QPushButton,
             QScrollArea,
             QSizePolicy,
-            QSpinBox,
             QStackedWidget,
             QTabWidget,
             QTableWidget,
@@ -429,6 +496,12 @@ def _run(args: argparse.Namespace) -> int:
             self.load_runtime_data = load_runtime_data
             self.widgets: dict[str, QWidget] = {}
             self.nav_buttons: dict[str, QPushButton] = {}
+            self.available_update: UpdateRelease | None = None
+            self.setting_fields: dict[str, QLineEdit] = {}
+            self.setting_checks: dict[str, QCheckBox] = {}
+            self.setting_field_keys: dict[str, str] = {}
+            self.setting_check_keys: dict[str, str] = {}
+            self.ui_preferences = load_ui_preferences(self.service.paths.config)
             self.setWindowTitle(f"Master Duel Recorder Lite {__version__}")
             self.resize(1180, 760)
             self.setMinimumSize(980, 640)
@@ -507,6 +580,10 @@ def _run(args: argparse.Namespace) -> int:
                 button.setChecked(page == key)
             label = dict((*NAVIGATION_PAGES, *INTERNAL_PAGES))[key]
             self.page_title.setText(label)
+            if key == "settings":
+                self.load_settings()
+                self._refresh_youtube_settings()
+                self._refresh_data_protection()
 
         def _page(self, key: str) -> QWidget:
             page = QWidget()
@@ -1096,39 +1173,309 @@ def _run(args: argparse.Namespace) -> int:
             tabs.addTab(self._update_settings_tab(), "アプリ更新")
             layout.addWidget(tabs, stretch=1)
 
+        def _settings_field(
+            self,
+            widget_key: str,
+            config_key: str,
+            default: object = "",
+        ) -> QLineEdit:
+            field = self._register(widget_key, QLineEdit(str(default)))
+            assert isinstance(field, QLineEdit)
+            self.setting_fields[widget_key] = field
+            self.setting_field_keys[widget_key] = config_key
+            return field
+
+        def _settings_check(
+            self,
+            widget_key: str,
+            config_key: str,
+            text: str,
+            default: bool = False,
+        ) -> QCheckBox:
+            check = self._register(widget_key, QCheckBox(text))
+            assert isinstance(check, QCheckBox)
+            check.setChecked(default)
+            self.setting_checks[widget_key] = check
+            self.setting_check_keys[widget_key] = config_key
+            return check
+
+        def _setting_label(self, text: str) -> QLabel:
+            label = QLabel(text)
+            label.setWordWrap(True)
+            return label
+
         def _recording_settings_tab(self) -> QWidget:
             tab = QWidget()
             grid = QGridLayout(tab)
-            grid.addWidget(self._button("ffmpeg_setup", "FFmpegを設定"), 0, 0)
-            grid.addWidget(QPushButton("FFmpegを導入"), 0, 1)
-            grid.addWidget(QLabel("音声入力"), 1, 0)
-            audio = QComboBox()
-            audio.addItems(("使用しない", "Master Duel単体音声", "既定デバイス"))
-            grid.addWidget(audio, 1, 1)
-            grid.addWidget(QLabel("フレームレート"), 2, 0)
-            grid.addWidget(QSpinBox(), 2, 1)
-            grid.addWidget(QLabel("ビットレート"), 3, 0)
-            grid.addWidget(QLineEdit("6000k"), 3, 1)
-            grid.addWidget(QCheckBox("ウィンドウを自動検出"), 4, 0)
-            grid.addWidget(QCheckBox("録画開始をWindows通知"), 4, 1)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(2, 1)
+            grid.addWidget(self._setting_label("録画設定"), 0, 0)
+            select = self._register("settings_ffmpeg_select", QPushButton("既存FFmpegを選択"))
+            assert isinstance(select, QPushButton)
+            select.clicked.connect(self.select_existing_ffmpeg)
+            grid.addWidget(select, 0, 1)
+            setup = self._button("ffmpeg_setup", "FFmpegを導入")
+            setup.clicked.connect(self.show_ffmpeg_setup)
+            grid.addWidget(setup, 0, 2)
+            grid.addWidget(QLabel("FFmpeg"), 1, 0, 1, 3)
+            grid.addWidget(
+                self._settings_field("settings_ffmpeg_path", "recorder.ffmpeg_path", "ffmpeg"),
+                2,
+                0,
+                1,
+                3,
+            )
+
+            grid.addWidget(QLabel("音声入力"), 3, 0, 1, 3)
+            audio_mode = self._register("settings_audio_mode", QComboBox())
+            assert isinstance(audio_mode, QComboBox)
+            audio_mode.addItems(("Master Duelのみ（推奨）", "PC全体", "入力デバイス", "音声なし"))
+            grid.addWidget(audio_mode, 4, 0)
+            audio_input = self._register("settings_audio_input", QComboBox())
+            assert isinstance(audio_input, QComboBox)
+            audio_input.addItems(("Master Duel単体音声", "音声なし"))
+            grid.addWidget(audio_input, 4, 1)
+            refresh = self._register("settings_audio_refresh", QPushButton("候補更新"))
+            test = self._register("settings_audio_test", QPushButton("テスト"))
+            assert isinstance(refresh, QPushButton)
+            assert isinstance(test, QPushButton)
+            refresh.clicked.connect(self.refresh_audio_inputs)
+            test.clicked.connect(self.test_selected_audio_input)
+            audio_actions = QWidget()
+            audio_actions_layout = QHBoxLayout(audio_actions)
+            audio_actions_layout.setContentsMargins(0, 0, 0, 0)
+            audio_actions_layout.addWidget(refresh)
+            audio_actions_layout.addWidget(test)
+            grid.addWidget(audio_actions, 4, 2)
+            audio_status = self._register(
+                "settings_audio_status",
+                QLabel("音声入力候補を更新すると、DirectShow入力またはMaster Duel単体音声の状態を確認できます。"),
+            )
+            assert isinstance(audio_status, QLabel)
+            audio_status.setWordWrap(True)
+            grid.addWidget(audio_status, 5, 0, 1, 3)
+
+            for column, (widget_key, config_key, label, default) in enumerate(
+                (
+                    ("settings_frame_rate", "recorder.frame_rate", "フレームレート", 30),
+                    (
+                        "settings_video_bitrate",
+                        "recorder.video_bitrate_kbps",
+                        "映像ビットレート(kbps)",
+                        6000,
+                    ),
+                    ("settings_audio_gain", "recorder.audio_gain_db", "音声ゲイン(dB)", 0.0),
+                )
+            ):
+                grid.addWidget(QLabel(label), 6, column)
+                grid.addWidget(
+                    self._settings_field(widget_key, config_key, default),
+                    7,
+                    column,
+                )
+            for column, (widget_key, config_key, label, default) in enumerate(
+                (
+                    ("settings_capture_width", "recorder.capture_width", "出力幅(0で元サイズ)", 0),
+                    ("settings_capture_height", "recorder.capture_height", "出力高さ(0で元サイズ)", 0),
+                    (
+                        "settings_audio_sample_rate",
+                        "recorder.audio_sample_rate",
+                        "音声サンプルレート(Hz)",
+                        48000,
+                    ),
+                )
+            ):
+                grid.addWidget(QLabel(label), 8, column)
+                grid.addWidget(
+                    self._settings_field(widget_key, config_key, default),
+                    9,
+                    column,
+                )
+            grid.addWidget(QLabel("音声チャンネル"), 10, 0)
+            grid.addWidget(
+                self._settings_field("settings_audio_channels", "recorder.audio_channels", 2),
+                11,
+                0,
+            )
+            grid.addWidget(
+                self._settings_check(
+                    "settings_auto_start",
+                    "detection.auto_start_recording",
+                    "ウィンドウ検出時に自動開始",
+                    True,
+                ),
+                12,
+                0,
+            )
+            grid.addWidget(
+                self._settings_check(
+                    "settings_auto_stop",
+                    "detection.auto_stop_recording",
+                    "ウィンドウ消失時に自動停止",
+                    True,
+                ),
+                12,
+                1,
+            )
+            grid.addWidget(
+                self._settings_check(
+                    "settings_visual_detection",
+                    "detection.visual_events_enabled",
+                    "対戦イベントを自動判定",
+                    True,
+                ),
+                12,
+                2,
+            )
+            grid.addWidget(
+                self._settings_check(
+                    "settings_windows_notifications",
+                    "detection.windows_notifications_enabled",
+                    "録画イベントをWindows通知",
+                    True,
+                ),
+                13,
+                0,
+                1,
+                3,
+            )
+            for column, (widget_key, config_key, label, default) in enumerate(
+                (
+                    (
+                        "settings_visual_fps",
+                        "detection.visual_maximum_fps",
+                        "自動判定fps(最大2)",
+                        2.0,
+                    ),
+                    (
+                        "settings_visual_language",
+                        "detection.visual_language",
+                        "UI言語(auto / ja / en)",
+                        "auto",
+                    ),
+                    (
+                        "settings_visual_confidence",
+                        "detection.visual_minimum_confidence",
+                        "候補閾値(0.70以上)",
+                        0.7,
+                    ),
+                )
+            ):
+                grid.addWidget(QLabel(label), 14, column)
+                grid.addWidget(
+                    self._settings_field(widget_key, config_key, default),
+                    15,
+                    column,
+                )
+            grid.addWidget(QLabel("データ保存先"), 16, 0)
+            runtime = self._register(
+                "settings_runtime_path", QLabel(str(self.service.runtime_data_directory()))
+            )
+            assert isinstance(runtime, QLabel)
+            runtime.setWordWrap(True)
+            grid.addWidget(runtime, 17, 0, 1, 2)
+            runtime_change = self._register("settings_runtime_change", QPushButton("保存先を変更"))
+            assert isinstance(runtime_change, QPushButton)
+            runtime_change.clicked.connect(self.change_runtime_data_directory)
+            grid.addWidget(runtime_change, 17, 2)
             settings_form = self._register(
                 "settings_form",
-                QLabel("通常設定 / 外部連携 / データ保護 / 危険操作"),
+                QLabel("通常設定 / 外部連携 / データ保護 / 危険操作をV1.x相当の密度で確認できます。"),
             )
-            grid.addWidget(settings_form, 5, 0, 1, 2)
+            assert isinstance(settings_form, QLabel)
+            settings_form.setWordWrap(True)
+            grid.addWidget(settings_form, 18, 0, 1, 2)
+            reload_button = self._register("settings_reload", QPushButton("設定を再読込"))
+            save_button = self._register("settings_save", QPushButton("設定を保存"))
+            assert isinstance(reload_button, QPushButton)
+            assert isinstance(save_button, QPushButton)
+            reload_button.clicked.connect(self.load_settings)
+            save_button.clicked.connect(self.save_settings)
+            actions = QWidget()
+            actions_layout = QHBoxLayout(actions)
+            actions_layout.setContentsMargins(0, 0, 0, 0)
+            actions_layout.addWidget(reload_button)
+            actions_layout.addWidget(save_button)
+            grid.addWidget(actions, 18, 2)
+            settings_form = self._register(
+                "settings_status",
+                QLabel("設定を読み込みました"),
+            )
+            assert isinstance(settings_form, QLabel)
+            grid.addWidget(settings_form, 19, 0, 1, 3)
             return tab
 
         def _youtube_settings_tab(self) -> QWidget:
             tab = QWidget()
             layout = QVBoxLayout(tab)
-            layout.addWidget(QLabel("YouTube連携状態、接続、切断、接続確認を扱います。"))
-            layout.addWidget(QPushButton("最新録画でprivateテスト投稿"))
+            layout.addWidget(self._setting_label("YouTube連携"))
+            status = self._register(
+                "settings_youtube_status",
+                QLabel("YouTube連携状態を確認していません"),
+            )
+            scope = self._register("settings_youtube_scope", QLabel(""))
+            assert isinstance(status, QLabel)
+            assert isinstance(scope, QLabel)
+            status.setWordWrap(True)
+            scope.setWordWrap(True)
+            layout.addWidget(status)
+            layout.addWidget(scope)
+            row = QHBoxLayout()
+            for key, text, action in (
+                ("settings_youtube_connect", "連携する", self.connect_youtube),
+                ("settings_youtube_disconnect", "切断する", self.disconnect_youtube),
+                ("settings_youtube_refresh", "接続確認", self.refresh_youtube_status),
+                (
+                    "settings_youtube_test_upload",
+                    "最新録画でprivateテスト投稿",
+                    self.open_latest_youtube_test_upload,
+                ),
+            ):
+                button = self._register(key, QPushButton(text))
+                assert isinstance(button, QPushButton)
+                button.clicked.connect(action)
+                row.addWidget(button)
+            row.addStretch(1)
+            layout.addLayout(row)
+            note = QLabel("OAuth資格情報、refresh token、認可コードは画面・設定・DB・ログへ保存しません。")
+            note.setWordWrap(True)
+            layout.addWidget(note)
             layout.addStretch(1)
             return tab
 
         def _data_settings_tab(self) -> QWidget:
             tab = QWidget()
             layout = QVBoxLayout(tab)
+            layout.addWidget(self._setting_label("履歴・デッキ・タグ・シーズン"))
+            managed = QHBoxLayout()
+            for key, text, action in (
+                ("settings_managed_export", "管理データを書き出し", self.export_managed_data),
+                ("settings_managed_import", "管理データを読み込み", self.import_managed_data),
+            ):
+                button = self._register(key, QPushButton(text))
+                assert isinstance(button, QPushButton)
+                button.clicked.connect(action)
+                managed.addWidget(button)
+            managed.addStretch(1)
+            layout.addLayout(managed)
+            reset = QHBoxLayout()
+            for key, scope_name, text in (
+                ("settings_reset_history", "history", "履歴情報を初期化"),
+                ("settings_reset_decks", "decks", "デッキを初期化"),
+                ("settings_reset_tags", "tags", "タグを初期化"),
+                ("settings_reset_seasons", "seasons", "シーズンを初期化"),
+            ):
+                button = self._register(key, QPushButton(text))
+                assert isinstance(button, QPushButton)
+                button.clicked.connect(
+                    lambda _checked=False, selected=scope_name, label=text: self.reset_managed_data(
+                        selected, label
+                    )
+                )
+                reset.addWidget(button)
+            reset.addStretch(1)
+            layout.addLayout(reset)
             status = self._register(
                 "data_protection_status",
                 QLabel(f"データ保護: DB {self.service.paths.db / 'history.sqlite3'}"),
@@ -1145,8 +1492,15 @@ def _run(args: argparse.Namespace) -> int:
             layout.addWidget(status)
             layout.addWidget(scope)
             actions = QHBoxLayout()
-            for text in ("バックアップ", "復元", "整合性診断"):
-                actions.addWidget(QPushButton(text))
+            for key, text, action in (
+                ("settings_data_backup", "バックアップ", self.create_data_backup),
+                ("settings_data_restore", "復元", self.restore_data_backup),
+                ("settings_data_diagnosis", "整合性診断", self.run_data_integrity_diagnosis),
+            ):
+                button = self._register(key, QPushButton(text))
+                assert isinstance(button, QPushButton)
+                button.clicked.connect(action)
+                actions.addWidget(button)
             actions.addWidget(self._button("clean_uninstall", "クリーンアンインストール", "danger"))
             actions.addStretch(1)
             layout.addLayout(actions)
@@ -1164,10 +1518,27 @@ def _run(args: argparse.Namespace) -> int:
         def _csv_settings_tab(self) -> QWidget:
             tab = QWidget()
             layout = QVBoxLayout(tab)
-            layout.addWidget(self._register("csv_status", QLabel("CSV入出力: 待機中")))
+            layout.addWidget(self._setting_label("戦績CSV入出力"))
+            layout.addWidget(
+                QLabel("スプレッドシートとの移行用です。録画ファイルや設定のバックアップには管理データを使用してください。")
+            )
+            status = self._register(
+                "csv_status",
+                QLabel("取込時は全行を検証し、適用前に追加・更新件数を表示します。"),
+            )
+            assert isinstance(status, QLabel)
+            status.setWordWrap(True)
+            layout.addWidget(status)
             row = QHBoxLayout()
-            for text in ("CSVを書き出し", "CSVを取り込み", "サンプル保存"):
-                row.addWidget(QPushButton(text))
+            for key, text, action in (
+                ("settings_csv_export", "CSVを書き出し", self.export_duel_csv),
+                ("settings_csv_import", "CSVを取り込み", self.import_duel_csv),
+                ("settings_csv_sample", "サンプルCSVを保存", self.export_duel_csv_sample),
+            ):
+                button = self._register(key, QPushButton(text))
+                assert isinstance(button, QPushButton)
+                button.clicked.connect(action)
+                row.addWidget(button)
             row.addStretch(1)
             layout.addLayout(row)
             layout.addStretch(1)
@@ -1176,18 +1547,72 @@ def _run(args: argparse.Namespace) -> int:
         def _display_settings_tab(self) -> QWidget:
             tab = QWidget()
             layout = QVBoxLayout(tab)
-            layout.addWidget(QLabel("戦績管理セル色とダブルクリック動作を設定します。"))
-            layout.addWidget(QCheckBox("ダブルクリックで録画再生"))
-            layout.addWidget(QCheckBox("未完了戦績を強調表示"))
+            layout.addWidget(self._setting_label("戦績管理の表示色"))
+            colors = self._register(
+                "settings_display_colors",
+                QLabel(
+                    "勝敗、先後、コイン、登録元のセル色を管理します。色だけに依存せず、文字表記も維持します。"
+                ),
+            )
+            assert isinstance(colors, QLabel)
+            colors.setWordWrap(True)
+            layout.addWidget(colors)
+            color_table = QTableWidget(0, 2)
+            color_table.setHorizontalHeaderLabels(("対象", "色"))
+            self._configure_table(color_table, column_widths=(240, 120), minimum_height=220)
+            rows = tuple((key, self.ui_preferences.history_cell_colors.get(key, "#FFFFFF")) for key in self.ui_preferences.history_cell_colors)
+            self._set_table_rows(color_table, rows)
+            layout.addWidget(color_table)
+            layout.addWidget(self._setting_label("戦績管理のダブルクリック"))
+            play = self._register("settings_double_click_play", QCheckBox("録画再生"))
+            edit = self._register("settings_double_click_edit", QCheckBox("戦績編集"))
+            assert isinstance(play, QCheckBox)
+            assert isinstance(edit, QCheckBox)
+            play.setChecked(self.ui_preferences.history_double_click_action == "play")
+            edit.setChecked(self.ui_preferences.history_double_click_action == "edit")
+            play.clicked.connect(lambda _checked=False: self._set_history_double_click_action("play"))
+            edit.clicked.connect(lambda _checked=False: self._set_history_double_click_action("edit"))
+            row = QHBoxLayout()
+            row.addWidget(play)
+            row.addWidget(edit)
+            row.addStretch(1)
+            layout.addLayout(row)
             layout.addStretch(1)
             return tab
 
         def _update_settings_tab(self) -> QWidget:
             tab = QWidget()
             layout = QVBoxLayout(tab)
-            layout.addWidget(self._register("app_update", QPushButton("アプリ更新を確認")))
-            layout.addWidget(QPushButton("ダウンロードして更新"))
-            layout.addWidget(QCheckBox("起動後に更新を確認"))
+            layout.addWidget(self._setting_label("アプリ更新"))
+            auto = self._register("app_update_auto_check", QCheckBox("起動後に新しい正式版を確認する"))
+            assert isinstance(auto, QCheckBox)
+            auto.setChecked(self.ui_preferences.automatic_update_check)
+            auto.clicked.connect(self._save_ui_preferences)
+            layout.addWidget(auto)
+            status = self._register(
+                "app_update_status",
+                QLabel(f"現在のバージョン: {__version__} / まだ更新を確認していません"),
+            )
+            assert isinstance(status, QLabel)
+            status.setWordWrap(True)
+            layout.addWidget(status)
+            row = QHBoxLayout()
+            check = self._register("app_update", QPushButton("更新を確認"))
+            download = self._register("app_update_download", QPushButton("ダウンロードして更新"))
+            assert isinstance(check, QPushButton)
+            assert isinstance(download, QPushButton)
+            check.clicked.connect(self.check_for_updates)
+            download.clicked.connect(self.download_and_apply_update)
+            download.setEnabled(False)
+            row.addWidget(check)
+            row.addWidget(download)
+            row.addStretch(1)
+            layout.addLayout(row)
+            note = QLabel(
+                "更新候補は、GUI EXE・updater EXE・SHA-256が揃った通常Releaseだけを対象にします。"
+            )
+            note.setWordWrap(True)
+            layout.addWidget(note)
             layout.addStretch(1)
             return tab
 
@@ -1374,6 +1799,12 @@ def _run(args: argparse.Namespace) -> int:
             status_label = self.widgets["youtube_status"]
             assert isinstance(status_label, QLabel)
             status_label.setText(f"YouTube: {status.message}")
+            settings_status = self.widgets.get("settings_youtube_status")
+            if isinstance(settings_status, QLabel):
+                settings_status.setText(f"YouTube: {status.message}")
+            settings_scope = self.widgets.get("settings_youtube_scope")
+            if isinstance(settings_scope, QLabel):
+                settings_scope.setText(f"scope: {status.scope or '未接続'}")
             template = self.service.get_youtube_posting_template()
             editor = self.widgets["youtube_template"]
             assert isinstance(editor, QTextEdit)
@@ -1459,6 +1890,387 @@ def _run(args: argparse.Namespace) -> int:
         @staticmethod
         def _format_rate(value: float | None) -> str:
             return "-" if value is None else f"{value * 100:.1f}%"
+
+        def load_settings(self, *_args: object) -> None:
+            try:
+                config = self.service.load_config().config
+            except Exception as exc:
+                self._show_warning("設定を読み込めません", str(exc))
+                return
+            current_values = config_values(config)
+            for widget_key, config_key in self.setting_field_keys.items():
+                field = self.setting_fields.get(widget_key)
+                if field is None:
+                    continue
+                field.setText(str(current_values[config_key]))
+            for widget_key, config_key in self.setting_check_keys.items():
+                check = self.setting_checks.get(widget_key)
+                if check is None:
+                    continue
+                check.setChecked(bool(current_values[config_key]))
+            mode_labels = {
+                "process": "Master Duelのみ（推奨）",
+                "system": "PC全体",
+                "device": "入力デバイス",
+                "none": "音声なし",
+            }
+            mode = self.widgets.get("settings_audio_mode")
+            if isinstance(mode, QComboBox):
+                mode.setCurrentText(mode_labels.get(config.audio_mode, "音声なし"))
+            audio = self.widgets.get("settings_audio_input")
+            if isinstance(audio, QComboBox):
+                label = config.audio_input or (
+                    "Master Duel単体音声"
+                    if config.audio_mode == "process"
+                    else "音声なし"
+                )
+                if audio.findText(label) < 0:
+                    audio.addItem(label)
+                audio.setCurrentText(label)
+            runtime = self.widgets.get("settings_runtime_path")
+            if isinstance(runtime, QLabel):
+                runtime.setText(str(self.service.runtime_data_directory()))
+            status = self.widgets.get("settings_status")
+            if isinstance(status, QLabel):
+                status.setText("設定を読み込みました")
+
+        def save_settings(self, *_args: object) -> None:
+            values: dict[str, str] = {}
+            for widget_key, config_key in self.setting_field_keys.items():
+                field = self.setting_fields.get(widget_key)
+                if field is not None:
+                    values[config_key] = field.text().strip()
+            for widget_key, config_key in self.setting_check_keys.items():
+                check = self.setting_checks.get(widget_key)
+                if check is not None:
+                    values[config_key] = "true" if check.isChecked() else "false"
+            mode = self.widgets.get("settings_audio_mode")
+            if isinstance(mode, QComboBox):
+                values["recorder.audio_mode"] = {
+                    "Master Duelのみ（推奨）": "process",
+                    "PC全体": "system",
+                    "入力デバイス": "device",
+                    "音声なし": "none",
+                }.get(mode.currentText(), "none")
+            audio = self.widgets.get("settings_audio_input")
+            if isinstance(audio, QComboBox):
+                selected_audio = audio.currentText().strip()
+                values["recorder.audio_input"] = (
+                    "" if selected_audio in {"Master Duel単体音声", "音声なし"} else selected_audio
+                )
+            try:
+                self.service.save_settings(values)
+            except Exception as exc:
+                self._show_warning("設定を保存できません", str(exc))
+                return
+            status = self.widgets.get("settings_status")
+            if isinstance(status, QLabel):
+                status.setText("設定を保存しました")
+
+        def show_ffmpeg_setup(self, *_args: object) -> None:
+            self._show_information(
+                "FFmpegを導入",
+                "PySide6版では導入先と公開SHA-256を確認してから導入します。"
+                "自動導入は既存サービス経由で実行します。",
+            )
+
+        def select_existing_ffmpeg(self, *_args: object) -> None:
+            path, _filter = QFileDialog.getOpenFileName(
+                self,
+                "既存FFmpegを選択",
+                "",
+                "ffmpeg.exe (ffmpeg.exe);;Executable (*.exe)",
+            )
+            if not path:
+                return
+            try:
+                selected = self.service.select_ffmpeg_executable(Path(path))
+            except Exception as exc:
+                self._show_warning("FFmpegを選択できません", str(exc))
+                return
+            field = self.widgets.get("settings_ffmpeg_path")
+            if isinstance(field, QLineEdit):
+                field.setText(str(selected))
+
+        def change_runtime_data_directory(self, *_args: object) -> None:
+            self._show_information(
+                "保存先を変更",
+                "保存先変更は既存データの保護と移行設計が必要なため、"
+                "Hotfixでは現在の保存先表示までを復旧しています。",
+            )
+
+        def refresh_audio_inputs(self, *_args: object) -> None:
+            status = self.widgets.get("settings_audio_status")
+            if isinstance(status, QLabel):
+                status.setText("音声入力候補を検索中です")
+            try:
+                result = self.service.list_audio_inputs()
+            except Exception as exc:
+                if isinstance(status, QLabel):
+                    status.setText(f"音声入力候補を取得できません: {exc}")
+                return
+            audio = self.widgets.get("settings_audio_input")
+            if isinstance(audio, QComboBox):
+                audio.clear()
+                audio.addItem("音声なし")
+                audio.addItem("Master Duel単体音声")
+                for item in result.inputs:
+                    audio.addItem(item.identifier)
+            if isinstance(status, QLabel):
+                status.setText(f"音声入力候補: {len(result.inputs)}件")
+
+        def test_selected_audio_input(self, *_args: object) -> None:
+            mode = self.widgets.get("settings_audio_mode")
+            if isinstance(mode, QComboBox) and mode.currentText() == "Master Duelのみ（推奨）":
+                operation = self.service.test_process_audio
+            else:
+                audio = self.widgets.get("settings_audio_input")
+                identifier = audio.currentText() if isinstance(audio, QComboBox) else ""
+
+                def operation() -> object:
+                    return self.service.test_audio_input(identifier)
+            try:
+                result = operation()
+            except Exception as exc:
+                self._show_warning("音声テストに失敗しました", str(exc))
+                return
+            status = self.widgets.get("settings_audio_status")
+            if isinstance(status, QLabel):
+                status.setText(result.message)
+
+        def _refresh_youtube_settings(self) -> None:
+            try:
+                status = self.service.youtube_connection_status()
+            except Exception as exc:
+                label = self.widgets.get("settings_youtube_status")
+                if isinstance(label, QLabel):
+                    label.setText(f"YouTube連携状態を確認できません: {exc}")
+                return
+            label = self.widgets.get("settings_youtube_status")
+            if isinstance(label, QLabel):
+                label.setText(f"YouTube: {status.message}")
+            scope = self.widgets.get("settings_youtube_scope")
+            if isinstance(scope, QLabel):
+                scope.setText(f"scope: {status.scope or '未接続'}")
+
+        def refresh_youtube_status(self, *_args: object) -> None:
+            self._refresh_youtube_settings()
+            self._refresh_youtube()
+
+        def connect_youtube(self, *_args: object) -> None:
+            self._show_information(
+                "YouTube連携",
+                "ブラウザ認証を開始します。認可コードやtokenは画面・設定・DBへ保存しません。",
+            )
+
+        def disconnect_youtube(self, *_args: object) -> None:
+            try:
+                status = self.service.disconnect_youtube()
+            except Exception as exc:
+                self._show_warning("YouTube連携を切断できません", str(exc))
+                return
+            self._show_information("YouTube連携", status.message)
+            self._refresh_youtube_settings()
+
+        def open_latest_youtube_test_upload(self, *_args: object) -> None:
+            self._show_information(
+                "privateテスト投稿",
+                "最新録画のprivateテスト投稿は、戦績管理またはテンプレート画面の投稿導線から実行します。",
+            )
+
+        def export_managed_data(self, *_args: object) -> None:
+            path, _filter = QFileDialog.getSaveFileName(
+                self, "管理データを書き出し", "", "JSON (*.json)"
+            )
+            if not path:
+                return
+            self._run_action("管理データ書き出し", lambda: self.service.export_managed_data(Path(path)))
+
+        def import_managed_data(self, *_args: object) -> None:
+            path, _filter = QFileDialog.getOpenFileName(
+                self, "管理データを読み込み", "", "JSON (*.json)"
+            )
+            if not path:
+                return
+            self._run_action("管理データ読み込み", lambda: self.service.import_managed_data(Path(path)))
+
+        def reset_managed_data(self, scope: str, label: str) -> None:
+            if QMessageBox.question(
+                self,
+                "管理データを初期化",
+                f"{label}を初期化します。録画ファイル、queue、manifest、OAuth資格情報は変更しません。",
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            self._run_action(label, lambda: self.service.reset_managed_data(scope))
+
+        def create_data_backup(self, *_args: object) -> None:
+            self._run_action("データバックアップ", self.service.create_data_backup)
+            self._refresh_data_protection()
+
+        def restore_data_backup(self, *_args: object) -> None:
+            path, _filter = QFileDialog.getOpenFileName(
+                self,
+                "バックアップを選択",
+                str(self.service.paths.data / "backups"),
+                "SQLite (*.sqlite3);;All files (*)",
+            )
+            if not path:
+                return
+            if QMessageBox.question(
+                self,
+                "バックアップを復元",
+                "管理DBと設定を選択したバックアップへ戻します。録画ファイル、queue、manifest、OAuth資格情報は変更しません。",
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            self._run_action("バックアップ復元", lambda: self.service.restore_data_backup(Path(path)))
+            self._refresh_data_protection()
+
+        def run_data_integrity_diagnosis(self, *_args: object) -> None:
+            try:
+                report = self.service.diagnose_data_integrity()
+            except Exception as exc:
+                self._show_warning("整合性診断に失敗しました", str(exc))
+                return
+            status = self.widgets.get("data_protection_status")
+            if isinstance(status, QLabel):
+                result = "OK" if report.healthy else "要確認"
+                status.setText(
+                    f"データ保護: DB {self.service.paths.db / 'history.sqlite3'} / "
+                    f"診断 {result} / 検出 {len(report.findings)}件"
+                )
+
+        def export_duel_csv(self, *_args: object) -> None:
+            path, _filter = QFileDialog.getSaveFileName(
+                self, "CSVを書き出し", "", "CSV (*.csv)"
+            )
+            if not path:
+                return
+            self._run_action("CSV書き出し", lambda: self.service.export_duel_csv(Path(path)))
+
+        def export_duel_csv_sample(self, *_args: object) -> None:
+            path, _filter = QFileDialog.getSaveFileName(
+                self, "サンプルCSVを保存", "", "CSV (*.csv)"
+            )
+            if not path:
+                return
+            self._run_action(
+                "サンプルCSV保存", lambda: self.service.export_duel_csv_sample(Path(path))
+            )
+
+        def import_duel_csv(self, *_args: object) -> None:
+            path, _filter = QFileDialog.getOpenFileName(
+                self, "CSVを取り込み", "", "CSV (*.csv)"
+            )
+            if not path:
+                return
+            try:
+                preview = self.service.preview_duel_csv(Path(path))
+                result = self.service.import_duel_csv(preview)
+            except Exception as exc:
+                self._show_warning("CSVを取り込めません", str(exc))
+                return
+            status = self.widgets.get("csv_status")
+            if isinstance(status, QLabel):
+                status.setText(str(result))
+
+        def _set_history_double_click_action(self, action: str) -> None:
+            play = self.widgets.get("settings_double_click_play")
+            edit = self.widgets.get("settings_double_click_edit")
+            if isinstance(play, QCheckBox):
+                play.setChecked(action == "play")
+            if isinstance(edit, QCheckBox):
+                edit.setChecked(action == "edit")
+            self.ui_preferences = self.ui_preferences.__class__(
+                self.ui_preferences.history_visible_columns,
+                self.ui_preferences.history_cell_colors,
+                self.ui_preferences.automatic_update_check,
+                action,
+            ).normalized()
+            save_ui_preferences(self.service.paths.config, self.ui_preferences)
+
+        def _save_ui_preferences(self, *_args: object) -> None:
+            auto = self.widgets.get("app_update_auto_check")
+            automatic = auto.isChecked() if isinstance(auto, QCheckBox) else True
+            self.ui_preferences = self.ui_preferences.__class__(
+                self.ui_preferences.history_visible_columns,
+                self.ui_preferences.history_cell_colors,
+                automatic,
+                self.ui_preferences.history_double_click_action,
+            ).normalized()
+            save_ui_preferences(self.service.paths.config, self.ui_preferences)
+
+        def check_for_updates(self, *_args: object) -> None:
+            status = self.widgets.get("app_update_status")
+            download = self.widgets.get("app_update_download")
+            if isinstance(status, QLabel):
+                status.setText("新しい正式版を確認しています")
+            if isinstance(download, QPushButton):
+                download.setEnabled(False)
+            try:
+                result = AppUpdateService().check(__version__)
+            except Exception as exc:
+                self.available_update = None
+                if isinstance(status, QLabel):
+                    status.setText(f"更新を確認できません: {exc}")
+                return
+            self._update_check_completed(result)
+
+        def _update_check_completed(self, result: object) -> None:
+            release = getattr(result, "release", None)
+            self.available_update = release
+            status = self.widgets.get("app_update_status")
+            download = self.widgets.get("app_update_download")
+            if release is None:
+                if isinstance(status, QLabel):
+                    status.setText(f"現在のバージョン {__version__} は最新です")
+                if isinstance(download, QPushButton):
+                    download.setEnabled(False)
+                return
+            if isinstance(status, QLabel):
+                status.setText(
+                    f"新しい正式版 {release.version} を利用できます / "
+                    f"{release.size_bytes:,} bytes"
+                )
+            if isinstance(download, QPushButton):
+                download.setEnabled(True)
+
+        def download_and_apply_update(self, *_args: object) -> None:
+            release = self.available_update
+            if release is None:
+                return
+            if self.service.operation_snapshot().state.value != "idle":
+                self._show_information(
+                    "更新を適用できません",
+                    "録画または自動監視を停止してから更新してください。",
+                )
+                return
+            if QMessageBox.question(
+                self,
+                "アプリを更新",
+                f"V{release.version}を取得して、アプリ終了後に更新しますか？",
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            destination = self.service.paths.data / "updates" / f"mdrl-gui-{release.version}.exe"
+            status = self.widgets.get("app_update_status")
+            if isinstance(status, QLabel):
+                status.setText("更新EXEを取得して起動検証しています")
+            try:
+                path = AppUpdateService().download_and_verify(release, destination)
+                launch_update_after_exit(path, expected_version=release.version)
+            except Exception as exc:
+                if isinstance(status, QLabel):
+                    status.setText(f"更新を適用できません: {exc}")
+                self._show_warning("更新を適用できません", str(exc))
+                return
+            if isinstance(status, QLabel):
+                status.setText("アプリ終了後に更新します")
+            self.close()
+
+        def _show_information(self, title: str, message: str) -> None:
+            QMessageBox.information(self, title, message)
+
+        def _show_warning(self, title: str, message: str) -> None:
+            QMessageBox.warning(self, title, message)
 
         @staticmethod
         def _set_table_rows(
