@@ -1119,3 +1119,18 @@
 追跡: [V2.2.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/77)、Issue #568、[Release Contract](release-contracts/2.2.1.md)。
 
 完了条件: 資産なしReleaseをスキップして配布可能な最新安定版を選べ、Ruff、重点テスト、EXEビルド、3 EXEスモーク、公開Release asset検証、Issue/Milestone/Release closureが完了すること。
+
+## V2.2.2: 設定画面・アプリ更新Hotfix
+
+状態: 完了
+
+- V1.x時期の設定画面構成を確認し、PySide6設定画面へ録画設定、YouTube連携、管理データ、CSV入出力、表示、アプリ更新の入口を復旧する
+- 設定読み書きを既存の設定管理テーブルへ接続し、録画設定と検出設定のキー取り違えを防ぐ
+- アプリ更新タブで、現在バージョン、確認中、最新、更新候補あり、確認失敗を区別する
+- 更新候補がある場合だけダウンロードして更新ボタンを有効化し、候補なしでは押せない状態にする
+- GUI smokeとWindows GUI EXE smokeへ設定画面復旧契約と更新タブ状態契約を追加する
+- SQLite schema、設定形式、録画ファイル、queue、manifest、OAuth資格情報は変更しない
+
+追跡: [V2.2.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/78)、Issue #570、[Release Contract](release-contracts/2.2.2.md)。
+
+完了条件: V1.x相当の設定カテゴリと操作入口がPySide6設定画面で確認でき、アプリ更新タブが候補あり/なし/失敗を誤表示せず、Ruff、全テスト、UI screenshot smoke、EXEビルド、3 EXEスモーク、公開Release asset検証、Issue/Milestone/Release closureが完了すること。

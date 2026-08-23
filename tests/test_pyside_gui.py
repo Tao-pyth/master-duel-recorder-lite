@@ -5,6 +5,7 @@ import unittest
 from master_duel_recorder_lite import __version__
 from master_duel_recorder_lite.pyside_gui import (
     NAVIGATION_PAGES,
+    SETTINGS_PARITY_WIDGETS,
     SMOKE_WIDGETS,
     UI_USABILITY_WIDGETS,
     build_gui_parser,
@@ -51,6 +52,17 @@ class PySideGuiContractTest(unittest.TestCase):
         )
         self.assertTrue(contract["table_readability_contract"]["horizontal_scroll"])
         self.assertTrue(contract["color_swatch_contract"]["history_deck_decoration"])
+        self.assertTrue(contract["settings_parity_contract"])
+        self.assertEqual(
+            contract["settings_parity_widgets"],
+            list(SETTINGS_PARITY_WIDGETS),
+        )
+        self.assertTrue(
+            contract["app_update_state_contract"]["download_enabled_only_after_candidate"]
+        )
+        self.assertTrue(
+            contract["app_update_state_contract"]["latest_without_candidate_disables_download"]
+        )
         self.assertEqual(contract["missing_standard_widgets"], [])
         self.assertEqual(contract["failed_standard_operation_checks"], [])
         self.assertTrue(contract["youtube_flow_contract"])

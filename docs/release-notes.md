@@ -1,5 +1,19 @@
 # リリースノート
 
+## V2.2.2: 設定画面・アプリ更新Hotfix - 2026-08-23
+
+- V1.x時期の設定画面構成を確認し、PySide6設定画面へ録画設定、YouTube連携、管理データ、CSV入出力、表示、アプリ更新の入口を復旧した
+- 設定読み書きを既存の設定管理テーブルへ接続し、検出設定と録画設定のキー取り違えで保存・再読込が壊れる問題を防いだ
+- アプリ更新タブで現在バージョン、確認中、最新、更新候補あり、確認失敗を区別し、更新候補がある場合だけダウンロードボタンを有効にした
+- GUI smoke contractへ設定画面復旧契約と更新タブ状態契約を追加し、Windows GUI EXE smokeでも同じ契約を検査するようにした
+- バックアップ復元は実行前確認を追加し、録画ファイル、queue、manifest、OAuth資格情報を変更しないことを明示した
+- DB schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、全テスト、PySide6 GUI smoke、UIスクリーンショット確認、CLI/GUI/updater EXEビルド、3 EXEスモーク、公開Release asset検証に合格した
+- ローカル通常ビルドCLI EXE SHA-256: `9aea671e9f6d88142f7c1729e50ffc034436f7638c1802ba773d0e1293dc1795`
+- ローカル通常ビルドGUI EXE SHA-256: `f85fb431449a98f4ce5944d53384f4083bed3c43f0fc5251f15dcfba2600bf11`
+- ローカル通常ビルドupdater EXE SHA-256: `d78f838b5df66f44c926d60876edb5af8414408b9e066261efef120a188c1d0f`
+- 追跡: [V2.2.2 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/78)、Issue #570
+
 ## V2.2.1: アプリ更新Release選択hotfix - 2026-08-23
 
 - アプリ内更新がGitHubの`latest` 1件だけに依存せず、Release一覧から配布可能な最新安定版を選ぶようにした
