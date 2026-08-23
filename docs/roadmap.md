@@ -1104,3 +1104,18 @@
 追跡: [V2.2.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/76)、Issue #566、[Release Contract](release-contracts/2.2.0.md)。
 
 完了条件: 統計画面の日付入力がカレンダーポップアップ付きで、統計推移が棒と線のグラフとして表示され、表の列幅・横スクロール・選択色・カラー表示が読み取りやすく、Ruff、重点テスト、PySide6 GUI smoke、スクリーンショット確認、検証記録が一致すること。
+
+## V2.2.1: アプリ更新Release選択hotfix
+
+状態: 完了
+
+- 配布資産なし通常Releaseでアプリ内更新が壊れる問題を修正する
+- 更新確認をGitHubの`latest` 1件依存から、Release一覧の配布可能安定版選択へ変更する
+- GUI EXE、updater EXE、各SHA-256が揃ったReleaseだけを更新候補にする
+- 配布可能Releaseが存在しない場合は、例外ではなく「利用可能な更新なし」と扱う
+- V2.2.1通常ReleaseにはCLI/GUI/updater EXE、各SHA-256、SHA256SUMSを揃える
+- SQLite schema、設定形式、録画ファイル、queue、manifest、OAuth資格情報は変更しない
+
+追跡: [V2.2.1 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/77)、Issue #568、[Release Contract](release-contracts/2.2.1.md)。
+
+完了条件: 資産なしReleaseをスキップして配布可能な最新安定版を選べ、Ruff、重点テスト、EXEビルド、3 EXEスモーク、公開Release asset検証、Issue/Milestone/Release closureが完了すること。
