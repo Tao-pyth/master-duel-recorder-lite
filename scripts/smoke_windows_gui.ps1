@@ -39,10 +39,10 @@ try {
         "tag_catalog_table", "target_selector", "visual_details_toggle", "visual_diagnostics_folder", "visual_status", "watch_toggle",
         "youtube_connect", "youtube_disconnect", "youtube_refresh", "youtube_status", "youtube_template", "youtube_test_upload"
     )
-    if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600 -or -not $result.history_refresh_visible -or -not $result.calendar_contract -or $result.pyside6 -or -not $result.standard_feature_contract -or -not $result.standard_operation_contract) {
+    if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600 -or -not $result.history_refresh_visible -or -not $result.calendar_contract -or -not $result.pyside6 -or -not $result.standard_feature_contract -or -not $result.standard_operation_contract) {
         throw "GUI smoke contract is invalid"
     }
-    if ($result.gui_entrypoint -ne "master_duel_recorder_lite.gui") {
+    if ($result.gui_entrypoint -ne "master_duel_recorder_lite.pyside_gui") {
         throw "GUI smoke entrypoint is invalid: $($result.gui_entrypoint)"
     }
     $expectedRuntimeData = Join-Path $localAppDataPath "MasterDuelRecorderLite"

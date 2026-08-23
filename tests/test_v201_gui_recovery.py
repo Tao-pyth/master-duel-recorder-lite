@@ -19,14 +19,14 @@ from master_duel_recorder_lite.runtime_paths import default_runtime_root
 
 
 class V201GuiRecoveryTest(unittest.TestCase):
-    def test_packaged_gui_entrypoint_returns_to_tkinter_gui(self) -> None:
+    def test_packaged_gui_entrypoint_uses_pyside_after_standard_gate(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         source = (project_root / "packaging" / "mdrl_gui_entry.py").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("master_duel_recorder_lite.gui", source)
-        self.assertNotIn("master_duel_recorder_lite.pyside_gui import main", source)
+        self.assertIn("master_duel_recorder_lite.pyside_gui", source)
+        self.assertNotIn("master_duel_recorder_lite.gui import main", source)
 
     def test_standard_feature_contract_lists_1x_gui_surface(self) -> None:
         feature_keys = {feature.key for feature in STANDARD_GUI_FEATURES}

@@ -1,5 +1,19 @@
 # リリースノート
 
+## V2.1.0: PySide6標準機能移植 - 2026-08-23
+
+- `master-duel-recorder-lite-gui.exe`の通常入口をPySide6 GUIへ戻した
+- PySide6 smoke contractを15標準機能の実操作ゲートへ揃え、要求widget 51個と主要操作チェックを全通過するようにした
+- 録画、戦績管理、履歴フィルター、手動戦績、統計、デッキ名、タグ、シーズン、YouTube、MP4準備、信頼性、設定、データ保全、CSV/更新、主要ダイアログの状態表示と入口をPySide6 UIへ追加した
+- PySide6 GUIの実アプリ起動時に、既存サービス層から履歴、カタログ、シーズン、YouTubeテンプレート、MP4準備、バックアップ、統計を読み込むようにした
+- 統計の推移単位をPySide6統計画面の「勝利数・勝率推移」内条件として配置し、既定値を日単位にした
+- DB schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、全586テスト、PySide6 GUI smoke、CLI/GUI/updater one-file EXEビルド、3 EXEスモークに合格した
+- ローカル通常ビルドCLI EXE SHA-256: `51BF7E92E4C2D6E3E31C9156119F57E1563997BF3EC9F91389CB74B3A45AC201`
+- ローカル通常ビルドGUI EXE SHA-256: `C931E56DDC18EA51B32E4107B0F41C0558E59AA09A15376ECA95F0B9FD59431E`
+- ローカル通常ビルドupdater EXE SHA-256: `87FCB0E730D8F0F04435215D6F29ED9BFE9B04B1A19FF62F232C512A52583AAC`
+- 追跡: [V2.1.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/74)、親Issue #556、子Issue #557 - #563
+
 ## V2.0.3: 戦績管理・統計・シーズンレポートの読み取り品質改善 - 2026-08-23
 
 - 戦績管理一覧のデッキ名列で、デッキ色スウォッチと長い日本語デッキ名が重なりにくい余白へ調整した

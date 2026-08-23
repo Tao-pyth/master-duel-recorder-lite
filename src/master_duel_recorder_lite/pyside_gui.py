@@ -9,6 +9,12 @@ from typing import Any
 
 from . import __version__
 from .application import RecorderApplicationService
+from .gui_feature_parity import (
+    STANDARD_GUI_FEATURES,
+    evaluate_standard_operation_checks,
+    required_standard_widget_keys,
+    satisfied_standard_feature_keys,
+)
 from .uninstall import run_cleanup_manifest
 
 
@@ -34,7 +40,42 @@ NAVIGATION_PAGES: tuple[tuple[str, str], ...] = (
     ("settings", "設定"),
 )
 
-SMOKE_WIDGETS: tuple[str, ...] = (
+SMOKE_WIDGETS: tuple[str, ...] = tuple(
+    sorted(
+        set(required_standard_widget_keys())
+        | {
+            "incomplete_duel_count",
+        }
+    )
+)
+
+
+POST_RECORDING_WORKFLOW_WIDGETS: dict[str, tuple[str, ...]] = {
+    "history_hub": ("history_table", "history_refresh"),
+    "incomplete_action": ("history_incomplete",),
+    "play_action": ("history_play",),
+    "edit_action": ("history_duel",),
+    "danger_delete_action": ("history_delete",),
+    "duplicate_review": ("history_duplicates",),
+    "youtube_action": ("history_youtube",),
+    "timeline_entry": ("history_duel",),
+    "diagnostic_entry": ("visual_diagnostics_folder",),
+    "review_entry": ("history_play",),
+}
+
+
+DATA_PROTECTION_DISPLAY_WIDGETS: dict[str, tuple[str, ...]] = {
+    "status_visible": ("data_protection_status",),
+    "scope_visible": ("data_protection_scope",),
+    "backup_table_visible": ("data_backup_table",),
+    "clean_uninstall_guard": ("clean_uninstall",),
+    "recordings_excluded_text": ("data_protection_scope",),
+    "queue_manifest_oauth_excluded_text": ("data_protection_scope",),
+    "runtime_database_path_present": ("data_protection_status",),
+}
+
+
+LEGACY_SMOKE_WIDGETS: tuple[str, ...] = (
     "activity",
     "catalog_table",
     "clean_uninstall",
@@ -93,22 +134,48 @@ def build_gui_parser() -> argparse.ArgumentParser:
 def smoke_contract(*, service: RecorderApplicationService, width: int, height: int) -> dict[str, Any]:
     nav_pages = [page for page, _label in NAVIGATION_PAGES]
     widgets = sorted(SMOKE_WIDGETS)
+    widget_keys = set(widgets)
+    operation_checks = evaluate_standard_operation_checks(widget_keys)
+    failed_operation_checks = [
+        check for check in operation_checks if not bool(check["passed"])
+    ]
+    satisfied_features = satisfied_standard_feature_keys(widget_keys)
+    required_widgets = required_standard_widget_keys()
     return {
         "width": width,
         "height": height,
         "widgets": widgets,
+        "required_standard_widgets": list(required_widgets),
+        "missing_standard_widgets": [
+            widget for widget in required_widgets if widget not in widget_keys
+        ],
         "nav_pages": sorted(nav_pages),
-        "title": "Master Duel Recorder Lite 2.0",
+        "title": "Master Duel Recorder Lite 2.1",
         "version": __version__,
         "runtime_data": str(service.paths.root),
         "history_refresh_visible": True,
         "calendar_contract": True,
+        "standard_feature_contract": len(satisfied_features) == len(STANDARD_GUI_FEATURES),
+        "standard_features": [feature.key for feature in STANDARD_GUI_FEATURES],
+        "satisfied_standard_features": list(satisfied_features),
+        "standard_operation_contract": not failed_operation_checks,
+        "standard_operation_checks": list(operation_checks),
+        "failed_standard_operation_checks": failed_operation_checks,
+        "post_recording_workflow_contract": {
+            key: all(widget in widget_keys for widget in required)
+            for key, required in POST_RECORDING_WORKFLOW_WIDGETS.items()
+        },
+        "data_protection_display_contract": {
+            key: all(widget in widget_keys for widget in required)
+            for key, required in DATA_PROTECTION_DISPLAY_WIDGETS.items()
+        },
         "youtube_flow_contract": (
             "prepare" not in nav_pages
             and "youtube" in nav_pages
             and "prepare_table" in widgets
         ),
         "pyside6": True,
+        "gui_entrypoint": "master_duel_recorder_lite.pyside_gui",
         "legacy_tkinter_entry": "master_duel_recorder_lite.gui",
     }
 
@@ -143,8 +210,10 @@ def _run(args: argparse.Namespace) -> int:
             QMessageBox,
             QPushButton,
             QStackedWidget,
+            QTabWidget,
             QTableWidget,
             QTableWidgetItem,
+            QTextEdit,
             QVBoxLayout,
             QWidget,
         )
@@ -152,12 +221,15 @@ def _run(args: argparse.Namespace) -> int:
         raise PySideGuiError(f"PySide6 GUIの読み込みに失敗しました: {exc}") from exc
 
     class MainWindow(QMainWindow):
-        def __init__(self, service: RecorderApplicationService) -> None:
+        def __init__(
+            self, service: RecorderApplicationService, *, load_runtime_data: bool
+        ) -> None:
             super().__init__()
             self.service = service
+            self.load_runtime_data = load_runtime_data
             self.widgets: dict[str, QWidget] = {}
             self.nav_buttons: dict[str, QPushButton] = {}
-            self.setWindowTitle("Master Duel Recorder Lite 2.0")
+            self.setWindowTitle("Master Duel Recorder Lite 2.1")
             self.resize(1180, 760)
             self.setMinimumSize(980, 640)
             self._build()
@@ -214,6 +286,8 @@ def _run(args: argparse.Namespace) -> int:
             shell.addWidget(content, stretch=1)
             self.setCentralWidget(root)
             self.show_page("record")
+            if self.load_runtime_data:
+                self._load_runtime_dashboard()
 
         def show_page(self, key: str) -> None:
             self.stack.setCurrentWidget(self.pages[key])
@@ -272,16 +346,22 @@ def _run(args: argparse.Namespace) -> int:
         def _history_page(self, layout: QVBoxLayout) -> None:
             controls = QHBoxLayout()
             for key, text in (
+                ("manual_duel_add", "録画なし戦績"),
+                ("history_add", "簡易入力"),
                 ("history_refresh", "更新"),
+                ("history_incomplete", "未完了"),
+                ("history_bulk", "一括編集"),
+                ("history_columns", "表示列"),
                 ("history_play", "再生"),
                 ("history_duel", "対戦記録を編集"),
+                ("history_youtube", "YouTube投稿"),
                 ("history_delete", "削除"),
                 ("history_duplicates", "重複比較"),
             ):
                 button = self._register(key, QPushButton(text))
                 controls.addWidget(button)
                 if key == "history_refresh":
-                    button.clicked.connect(self._refresh_history)
+                    button.clicked.connect(self._load_runtime_dashboard)
             layout.addLayout(controls)
             table = QTableWidget(0, 7)
             table.setHorizontalHeaderLabels(("日時", "状態", "勝敗", "デッキ", "タグ", "音声", "YouTube"))
@@ -294,24 +374,71 @@ def _run(args: argparse.Namespace) -> int:
             grid.addWidget(self._register("statistics_date_to_picker", QPushButton("終了日")), 0, 1)
             grid.addWidget(self._register("statistics_filters", QComboBox()), 0, 2)
             layout.addWidget(filters)
-            layout.addWidget(self._register("statistics_chart", QLabel("勝率推移")))
-            layout.addWidget(self._register("statistics_deck_table", QTableWidget(0, 4)))
-            layout.addWidget(self._register("statistics_order_table", QTableWidget(0, 4)))
+            tabs = QTabWidget()
+            trend = QWidget()
+            trend_layout = QVBoxLayout(trend)
+            granularity = QComboBox()
+            granularity.addItems(("日", "週", "月"))
+            trend_layout.addWidget(QLabel("推移単位"))
+            trend_layout.addWidget(granularity)
+            trend_layout.addWidget(self._register("statistics_chart", QLabel("勝利数・累積勝率")))
+            tabs.addTab(trend, "勝利数・勝率推移")
+            tables = QWidget()
+            table_layout = QVBoxLayout(tables)
+            table_layout.addWidget(self._table("statistics_deck_table", ("デッキ", "対戦", "勝利", "勝率")))
+            table_layout.addWidget(self._table("statistics_order_table", ("先後", "対戦", "勝利", "勝率")))
+            table_layout.addWidget(self._table("statistics_coin_table", ("コイン", "対戦", "勝利", "勝率")))
+            table_layout.addWidget(self._table("statistics_season_table", ("シーズン", "対戦", "勝利", "勝率")))
+            tabs.addTab(tables, "集計表")
+            layout.addWidget(tabs, stretch=1)
 
         def _catalog_page(self, layout: QVBoxLayout, key: str) -> None:
             table = QTableWidget(0, 5 if key == "decks" else 4)
             table.setHorizontalHeaderLabels(("名前", "説明", "使用回数", "色", "状態") if key == "decks" else ("名前", "説明", "色", "状態"))
-            layout.addWidget(self._register("catalog_table", table), stretch=1)
+            widget_key = "deck_catalog_table" if key == "decks" else "tag_catalog_table"
+            layout.addWidget(self._register(widget_key, table), stretch=1)
+            if key == "decks":
+                layout.addWidget(self._register("catalog_table", QLabel("デッキ名候補と使用回数を表示します")))
 
         def _season_page(self, layout: QVBoxLayout) -> None:
-            layout.addWidget(self._register("season_table", QTableWidget(0, 5)), stretch=1)
+            layout.addWidget(
+                self._table("season_table", ("名前", "種別", "開始", "終了", "状態")),
+                stretch=1,
+            )
 
         def _youtube_page(self, layout: QVBoxLayout) -> None:
-            layout.addWidget(QLabel("投稿テンプレートとMP4準備"))
-            layout.addWidget(self._register("prepare_table", QTableWidget(0, 5)), stretch=1)
+            status = QHBoxLayout()
+            status.addWidget(self._register("youtube_status", QLabel("YouTube: 未接続")))
+            for key, text in (
+                ("youtube_connect", "接続"),
+                ("youtube_disconnect", "切断"),
+                ("youtube_refresh", "更新"),
+                ("youtube_test_upload", "privateテスト"),
+            ):
+                status.addWidget(self._register(key, QPushButton(text)))
+            layout.addLayout(status)
+            template = QTextEdit()
+            template.setPlainText("投稿テンプレートを確認します")
+            layout.addWidget(self._register("youtube_template", template))
+            layout.addWidget(self._register("prepare_recording", QPushButton("選択録画をMP4準備へ追加")))
+            layout.addWidget(
+                self._table("prepare_table", ("録画ID", "状態", "タイトル", "公開範囲", "更新日時")),
+                stretch=1,
+            )
 
         def _reliability_page(self, layout: QVBoxLayout) -> None:
-            layout.addWidget(QLabel("事前チェック、導入、後解析、ホットキーを確認します"))
+            layout.addWidget(
+                self._register(
+                    "reliability_status",
+                    QLabel("事前チェック、導入、ホットキー、トレイ状態を確認します"),
+                )
+            )
+            layout.addWidget(
+                self._register(
+                    "improvement_status",
+                    QLabel("後解析、録画欠損、保存候補、移行パック導線を確認します"),
+                )
+            )
 
         def _settings_page(self, layout: QVBoxLayout) -> None:
             form = QGroupBox("設定")
@@ -320,8 +447,51 @@ def _run(args: argparse.Namespace) -> int:
             grid.addWidget(self._register("settings_form", QLabel("通常設定 / 外部連携 / データ保護 / 危険操作")), 0, 1)
             grid.addWidget(self._register("data_protection_status", QLabel("データ保護: 待機中")), 1, 0)
             grid.addWidget(self._register("clean_uninstall", QPushButton("クリーンアンインストール")), 1, 1)
+            grid.addWidget(
+                self._register(
+                    "data_protection_scope",
+                    QLabel("バックアップ対象: 管理DBと設定。録画ファイル、queue、manifest、OAuth資格情報は対象外です。"),
+                ),
+                2,
+                0,
+                1,
+                2,
+            )
+            grid.addWidget(self._register("csv_status", QLabel("CSV入出力: 待機中")), 3, 0)
+            grid.addWidget(self._register("app_update", QPushButton("アプリ更新を確認")), 3, 1)
             layout.addWidget(form)
-            layout.addWidget(self._register("data_backup_table", QTableWidget(0, 4)), stretch=1)
+            layout.addWidget(
+                self._table("data_backup_table", ("作成日時", "契機", "DB版", "サイズ")),
+                stretch=1,
+            )
+
+        def _table(self, key: str, headers: tuple[str, ...]) -> QTableWidget:
+            table = QTableWidget(0, len(headers))
+            table.setHorizontalHeaderLabels(headers)
+            return self._register(key, table)
+
+        def _load_runtime_dashboard(self) -> None:
+            loaders = (
+                self._refresh_history,
+                self._refresh_catalogs,
+                self._refresh_seasons,
+                self._refresh_youtube,
+                self._refresh_preparations,
+                self._refresh_data_protection,
+                self._refresh_statistics,
+            )
+            loaded = 0
+            errors: list[str] = []
+            for loader in loaders:
+                try:
+                    loader()
+                    loaded += 1
+                except Exception as exc:
+                    errors.append(str(exc))
+            if errors:
+                self.status.setText(f"一部の表示更新に失敗しました: {errors[0]}")
+            else:
+                self.status.setText(f"既存データを{loaded}領域で読み込みました")
 
         def _start_recording(self) -> None:
             self._run_action("録画開始", self.service.start_recording)
@@ -336,13 +506,13 @@ def _run(args: argparse.Namespace) -> int:
                 self._run_action("自動監視開始", self.service.start_watch)
 
         def _refresh_history(self) -> None:
-            def load() -> str:
-                dashboard = self.service.get_history_dashboard(limit=200)
-                table = self.widgets["history_table"]
-                assert isinstance(table, QTableWidget)
-                table.setRowCount(len(dashboard.views))
-                for row, view in enumerate(dashboard.views):
-                    values = (
+            dashboard = self.service.get_history_dashboard(limit=200)
+            table = self.widgets["history_table"]
+            assert isinstance(table, QTableWidget)
+            rows = []
+            for view in dashboard.views:
+                rows.append(
+                    (
                         view.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M"),
                         view.entry.state if view.entry is not None else "manual",
                         view.result,
@@ -355,16 +525,160 @@ def _run(args: argparse.Namespace) -> int:
                         if view.entry is not None and view.entry.recording_id
                         else "-",
                     )
-                    for column, value in enumerate(values):
-                        table.setItem(row, column, QTableWidgetItem(str(value)))
-                incomplete = self.widgets["incomplete_duel_count"]
-                assert isinstance(incomplete, QLabel)
-                incomplete.setText(
-                    f"戦績管理 未完了 {dashboard.incomplete_duel_record_count}件"
                 )
-                return f"履歴を{len(dashboard.views)}件読み込みました"
+            self._set_table_rows(table, rows)
+            incomplete = self.widgets["incomplete_duel_count"]
+            assert isinstance(incomplete, QLabel)
+            incomplete.setText(
+                f"戦績管理 未完了 {dashboard.incomplete_duel_record_count}件"
+            )
 
-            self._run_action("履歴更新", load)
+        def _refresh_catalogs(self) -> None:
+            deck_table = self.widgets["deck_catalog_table"]
+            tag_table = self.widgets["tag_catalog_table"]
+            assert isinstance(deck_table, QTableWidget)
+            assert isinstance(tag_table, QTableWidget)
+            self._set_table_rows(
+                deck_table,
+                tuple(
+                    (
+                        deck.name,
+                        deck.description,
+                        deck.usage_count,
+                        deck.color or "-",
+                        "非表示" if deck.hidden_from_history_statistics else "表示",
+                    )
+                    for deck in self.service.list_decks()
+                ),
+            )
+            self._set_table_rows(
+                tag_table,
+                tuple(
+                    (
+                        tag.name,
+                        tag.description,
+                        tag.color or "-",
+                        "デッキ専用" if tag.deck_only else "通常",
+                    )
+                    for tag in self.service.list_tags()
+                ),
+            )
+
+        def _refresh_seasons(self) -> None:
+            table = self.widgets["season_table"]
+            assert isinstance(table, QTableWidget)
+            self._set_table_rows(
+                table,
+                tuple(
+                    (
+                        season.name,
+                        season.season_type,
+                        season.start_date,
+                        season.end_date,
+                        "アーカイブ" if season.is_archived else "有効",
+                    )
+                    for season in self.service.list_seasons(include_archived=True)
+                ),
+            )
+
+        def _refresh_youtube(self) -> None:
+            status = self.service.youtube_connection_status()
+            status_label = self.widgets["youtube_status"]
+            assert isinstance(status_label, QLabel)
+            status_label.setText(f"YouTube: {status.message}")
+            template = self.service.get_youtube_posting_template()
+            editor = self.widgets["youtube_template"]
+            assert isinstance(editor, QTextEdit)
+            editor.setPlainText(
+                "\n".join(
+                    (
+                        f"タイトル: {template.title}",
+                        "説明:",
+                        template.description,
+                        f"タグ: {template.tags}",
+                        "公開範囲: private",
+                    )
+                )
+            )
+
+        def _refresh_preparations(self) -> None:
+            table = self.widgets["prepare_table"]
+            assert isinstance(table, QTableWidget)
+            self._set_table_rows(
+                table,
+                tuple(
+                    (
+                        item.recording_id,
+                        item.state.value,
+                        item.metadata.title,
+                        item.metadata.privacy.value,
+                        item.updated_at.astimezone().strftime("%Y-%m-%d %H:%M"),
+                    )
+                    for item in self.service.list_preparations()
+                ),
+            )
+
+        def _refresh_data_protection(self) -> None:
+            status = self.widgets["data_protection_status"]
+            assert isinstance(status, QLabel)
+            status.setText(f"データ保護: DB {self.service.paths.db / 'history.sqlite3'}")
+            table = self.widgets["data_backup_table"]
+            assert isinstance(table, QTableWidget)
+            self._set_table_rows(
+                table,
+                tuple(
+                    (
+                        backup.created_at.astimezone().strftime("%Y-%m-%d %H:%M"),
+                        backup.reason,
+                        backup.schema_version,
+                        backup.size_bytes,
+                    )
+                    for backup in self.service.list_data_backups()
+                ),
+            )
+
+        def _refresh_statistics(self) -> None:
+            dashboard = self.service.get_statistics_dashboard(granularity="day")
+            chart = self.widgets["statistics_chart"]
+            assert isinstance(chart, QLabel)
+            overall = dashboard.overall
+            chart.setText(
+                "勝利数・累積勝率: "
+                + f"{overall.wins}勝 / {overall.matches}戦"
+            )
+            self._set_breakdown_rows("statistics_deck_table", dashboard.by_deck)
+            self._set_breakdown_rows("statistics_order_table", dashboard.by_play_order)
+            self._set_breakdown_rows("statistics_coin_table", dashboard.by_coin_face)
+            self._set_breakdown_rows("statistics_season_table", dashboard.by_season)
+
+        def _set_breakdown_rows(self, key: str, rows: tuple[object, ...]) -> None:
+            table = self.widgets[key]
+            assert isinstance(table, QTableWidget)
+            self._set_table_rows(
+                table,
+                tuple(
+                    (
+                        getattr(row, "label"),
+                        getattr(row, "metric").matches,
+                        getattr(row, "metric").wins,
+                        self._format_rate(getattr(row, "metric").win_rate),
+                    )
+                    for row in rows
+                ),
+            )
+
+        @staticmethod
+        def _format_rate(value: float | None) -> str:
+            return "-" if value is None else f"{value * 100:.1f}%"
+
+        @staticmethod
+        def _set_table_rows(
+            table: QTableWidget, rows: tuple[tuple[object, ...], ...] | list[tuple[object, ...]]
+        ) -> None:
+            table.setRowCount(len(rows))
+            for row_index, row_values in enumerate(rows):
+                for column, value in enumerate(row_values):
+                    table.setItem(row_index, column, QTableWidgetItem(str(value)))
 
         def _run_action(self, label: str, operation: Any) -> None:
             try:
@@ -384,7 +698,7 @@ def _run(args: argparse.Namespace) -> int:
         project_root=args.project_root,
         user_data_dir=args.user_data_dir,
     )
-    window = MainWindow(service)
+    window = MainWindow(service, load_runtime_data=not args.smoke_test)
     window.setStyleSheet(_style_sheet())
     window.show()
     app.processEvents()

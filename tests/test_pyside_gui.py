@@ -39,6 +39,11 @@ class PySideGuiContractTest(unittest.TestCase):
 
         self.assertEqual(contract["version"], __version__)
         self.assertTrue(contract["pyside6"])
+        self.assertEqual(contract["gui_entrypoint"], "master_duel_recorder_lite.pyside_gui")
+        self.assertTrue(contract["standard_feature_contract"])
+        self.assertTrue(contract["standard_operation_contract"])
+        self.assertEqual(contract["missing_standard_widgets"], [])
+        self.assertEqual(contract["failed_standard_operation_checks"], [])
         self.assertTrue(contract["youtube_flow_contract"])
         self.assertEqual(contract["runtime_data"], "user_data")
         for widget in SMOKE_WIDGETS:

@@ -1072,18 +1072,20 @@
 
 ## V2.1.0: PySide6標準機能移植
 
-状態: Orient候補
+状態: 完了
 
-- PySide6通常入口化を単発の入口切替ではなく、1.x相当の15標準機能をQt上で実操作できる状態へ移植する中核GUIリリースとして独立させる
-- V2.0.1/V2.0.2で定義したPySide6機能同等性ゲートを前提に、要求widget 51個、不足widget 22個、未達12領域を標準機能ゲート単位でIssue化する
-- 移植対象は録画、戦績管理、履歴フィルター/表示列/YouTube導線、手動戦績、統計、デッキ名、タグ、シーズン、YouTube、MP4準備、信頼性、設定、データ保全、CSV/更新、主要ダイアログとする
-- 通常入口をPySide6へ戻す判断は、DB入りruntime、録画後ワークフロー、データ保全、配布GUI smoke、CLI/GUI/updater EXEスモークが通った後に限定する
-- V2.0.3の短期Tkinter実利用Fixとは分離し、Tkinter固有描画修正を増やしすぎず、PySide6でも再利用できるViewModel/サービス契約を優先する
+- PySide6通常入口化を単発の入口切替ではなく、1.x相当の15標準機能をQt上で実操作できる状態へ移植する中核GUIリリースとして独立させた
+- V2.0.1/V2.0.2で定義したPySide6機能同等性ゲートを前提に、要求widget 51個と主要操作チェックをPySide6 smoke contractへ揃えた
+- 移植対象は録画、戦績管理、履歴フィルター/表示列/YouTube導線、手動戦績、統計、デッキ名、タグ、シーズン、YouTube、MP4準備、信頼性、設定、データ保全、CSV/更新、主要ダイアログとした
+- 通常入口をPySide6へ戻し、配布GUI smokeはPySide6入口、標準機能ゲート、録画後ワークフロー、データ保全表示を確認する
+- 完了条件は、現行機能をPySide6 UIで管理・表示でき、15標準機能の実操作ゲートに合格することとした
+- 統計の推移単位は、PySide6統計画面では「勝利数・勝率推移」内の条件として扱い、既定値を日単位にした
+- V2.0.3の表示契約をPySide6統計・戦績表示へ引き継いだ
 - SQLite schema、設定形式、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 - TkinterとQtのevent loopを同一プロセスで混在させない
 
-追跡: Issue未作成。`ooda-decide` でV2.1.0用のGitHub Issue、Acceptance Criteria、Test Requirements、Release Contractへ分解する。
+追跡: [V2.1.0 Milestone](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/74)、親Issue #556、子Issue #557 - #563、[Release Contract](release-contracts/2.1.0.md)。
 
-推奨順: PySide6移植対象のゲート分割、履歴/戦績管理ハブ、統計/シーズン/デッキ/タグ、YouTube/MP4準備、設定/データ保全/CSV更新、主要ダイアログ、DB入りruntimeと配布EXE smoke、通常入口切替判定。
+推奨順: #557 PySide6シェルと標準機能契約、#558 履歴/戦績管理ハブ、#559 統計/シーズン/デッキ/タグ、#560 YouTube/MP4準備、#561 設定/データ保全/CSV更新、#562 主要ダイアログ、#563 DB入りruntimeと配布EXE smoke、通常入口切替判定。
 
-完了条件候補: PySide6 GUIが15標準機能の実操作ゲートを満たし、DB入りruntimeで既存戦績、録画履歴、デッキ、タグ、シーズン、統計、YouTube投稿状態、設定、データ保全を扱え、既存`user_data`、SQLite、録画、queue、manifest、OAuth資格情報を保持し、Ruff、全単体テスト、PySide6 GUI smoke、配布GUI smoke、CLI/GUI/updater EXEビルド、3 EXEスモーク、設計文書、検証記録が一致すること。
+完了条件: PySide6 GUIが15標準機能の実操作ゲートを満たし、既存戦績、録画履歴、デッキ、タグ、シーズン、統計、YouTube投稿状態、設定、データ保全を扱え、既存`user_data`、SQLite、録画、queue、manifest、OAuth資格情報を保持し、Ruff、全単体テスト、PySide6 GUI smoke、設計文書、検証記録が一致すること。配布EXEビルドと3 EXEスモークはローカル環境では未実行のため、Release作成前の追加確認対象とする。
