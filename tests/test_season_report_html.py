@@ -68,6 +68,9 @@ class SeasonReportHtmlExporterTest(unittest.TestCase):
         self.assertNotIn("file:", source.casefold())
         self.assertNotIn(str(self.paths.root), source)
         self.assertIn("@media print", source)
+        self.assertIn("累積勝率", source)
+        self.assertIn("全体・コイントス・先後内訳", source)
+        self.assertNotIn("最終勝敗", source)
         self.assertEqual(tuple(self.output.iterdir()), (destination,))
 
     def test_existing_file_requires_explicit_overwrite(self) -> None:

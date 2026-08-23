@@ -352,8 +352,8 @@ class StatisticsTrendChart(tk.Canvas):
                 fill=self.colors["tertiary"],
                 outline="",
             )
-            if point.metric.win_rate is not None:
-                line_points.extend((x, bottom - chart_height * point.metric.win_rate))
+            if point.cumulative_win_rate is not None:
+                line_points.extend((x, bottom - chart_height * point.cumulative_win_rate))
             label_stride = max(1, (len(self.points) + 7) // 8)
             if index % label_stride == 0 or index == len(self.points) - 1:
                 self.create_text(
@@ -393,7 +393,7 @@ class StatisticsTrendChart(tk.Canvas):
         self.create_text(
             left + 102,
             14,
-            text="勝率",
+            text="累積勝率",
             anchor="w",
             fill=self.colors["text"],
             font=("Segoe UI", 9),
@@ -4017,7 +4017,7 @@ class RecorderGui:
                 duel_type = duel_choice_label("duel_type", view.duel_type)
                 opponent_deck = view.opponent_deck or "未設定"
             own_deck = view.own_deck or "未設定"
-            deck_display = f"    {own_deck}" if view.own_deck_color else own_deck
+            deck_display = _history_deck_display(own_deck, view.own_deck_color)
             self.history_tree.insert(
                 "",
                 "end",
@@ -4068,7 +4068,7 @@ class RecorderGui:
                 background=_swatch_border_color(color),
                 borderwidth=0,
             )
-            swatch.place(x=x + 6, y=y + 6, width=14, height=max(1, height - 12))
+            swatch.place(x=x + 5, y=y + 6, width=12, height=max(1, height - 12))
             inner = tk.Frame(swatch, background=color, borderwidth=0)
             inner.place(x=1, y=1, relwidth=1, relheight=1, width=-2, height=-2)
             swatch.bind(
@@ -5912,7 +5912,7 @@ class RecorderGui:
         reflection = self._surface(notebook, padding=(16, 12))
         notebook.add(overview, text="概要")
         notebook.add(deck_tab, text="デッキ・先後")
-        notebook.add(axis_tab, text="コイントス")
+        notebook.add(axis_tab, text="全体・先後")
         notebook.add(trend_tab, text="推移")
         notebook.add(reflection, text="振り返り")
 
@@ -6108,7 +6108,7 @@ class RecorderGui:
             ("wins", "勝", 50),
             ("losses", "負", 50),
             ("draws", "引分", 50),
-            ("rate", "勝率", 80),
+            ("rate", "累積勝率", 86),
             ("decks", "使用デッキ比率", 320),
         ):
             trend_tree.heading(key, text=label)
@@ -6139,7 +6139,7 @@ class RecorderGui:
                         point.metric.wins,
                         point.metric.losses,
                         point.metric.draws,
-                        _format_win_rate(point.metric),
+                        _format_trend_win_rate(point),
                         deck_text,
                     ),
                 )
@@ -7477,6 +7477,16 @@ def _format_win_rate(metric: StatisticsMetric) -> str:
 
 def _format_statistics_detail(metric: StatisticsMetric) -> str:
     return f"{metric.matches}戦  {metric.wins}勝  {metric.losses}敗  {metric.draws}引分"
+
+
+def _format_trend_win_rate(point: StatisticsTrendPoint) -> str:
+    if point.cumulative_win_rate is None:
+        return "-"
+    return f"{point.cumulative_win_rate * 100:.1f}%"
+
+
+def _history_deck_display(deck_name: str, color: str | None) -> str:
+    return f"     {deck_name}" if color else deck_name
 
 
 def _statistics_breakdown_values(

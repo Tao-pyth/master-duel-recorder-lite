@@ -82,6 +82,12 @@ class StatisticsTrendPoint:
     period_start: date
     label: str
     metric: StatisticsMetric
+    cumulative_metric: StatisticsMetric | None = None
+
+    @property
+    def cumulative_win_rate(self) -> float | None:
+        metric = self.cumulative_metric or self.metric
+        return metric.win_rate
 
 
 @dataclass(frozen=True)
@@ -369,11 +375,17 @@ def _trend(
             row
         )
     points: list[StatisticsTrendPoint] = []
+    cumulative_rows: list[_StatisticsRow] = []
     current = first
     while current <= last:
+        period_rows = grouped[current]
+        cumulative_rows.extend(period_rows)
         points.append(
             StatisticsTrendPoint(
-                current, _period_label(current, granularity), _metric(grouped[current])
+                current,
+                _period_label(current, granularity),
+                _metric(period_rows),
+                _metric(cumulative_rows),
             )
         )
         current = _next_period(current, granularity)

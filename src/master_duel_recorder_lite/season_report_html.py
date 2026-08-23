@@ -117,7 +117,7 @@ th {{ background: #edf3f2; }} .swatch {{ display: inline-block; width: 5px; heig
 <div class="metric"><strong>勝率差</strong><br>{escape(delta_text)}</div>
 </div><p>母集団: 確定済みで勝敗入力済みの正常録画または手動戦績。シーズン割当と期間の両方が一致し、非表示の自分デッキは除外。</p></section>
 <section><h2>デッキ・先後</h2><table><thead><tr><th>デッキ</th><th>区分</th><th>対戦</th><th>勝</th><th>負</th><th>引分</th><th>勝率</th><th>注意</th></tr></thead><tbody>{deck_rows}</tbody></table></section>
-<section><h2>コイントス・勝敗内訳</h2><table><thead><tr><th>軸</th><th>対戦</th><th>勝</th><th>負</th><th>引分</th><th>勝率</th><th>注意</th></tr></thead><tbody>{axis_rows}</tbody></table></section>
+<section><h2>全体・コイントス・先後内訳</h2><table><thead><tr><th>軸</th><th>対戦</th><th>勝</th><th>負</th><th>引分</th><th>勝率</th><th>注意</th></tr></thead><tbody>{axis_rows}</tbody></table></section>
 <section><h2>日別推移</h2>{_trend_table(daily_rows)}</section>
 <section><h2>週別推移</h2>{_trend_table(weekly_rows)}</section>
 <section><h2>週別使用デッキ</h2><table><thead><tr><th>期間</th><th>対戦</th><th>使用比率</th></tr></thead><tbody>{usage_rows}</tbody></table></section>
@@ -137,7 +137,7 @@ def _trend_rows(points: tuple[StatisticsTrendPoint, ...]) -> str:
     return "".join(
         f"<tr><td>{escape(point.label)}</td><td>{point.metric.matches}</td>"
         f"<td>{point.metric.wins}</td><td>{point.metric.losses}</td>"
-        f"<td>{point.metric.draws}</td><td>{_rate(point.metric)}</td></tr>"
+        f"<td>{point.metric.draws}</td><td>{_trend_rate(point)}</td></tr>"
         for point in points
     )
 
@@ -145,7 +145,7 @@ def _trend_rows(points: tuple[StatisticsTrendPoint, ...]) -> str:
 def _trend_table(rows: str) -> str:
     return (
         "<table><thead><tr><th>期間</th><th>対戦</th><th>勝</th><th>負</th>"
-        f"<th>引分</th><th>勝率</th></tr></thead><tbody>{rows}</tbody></table>"
+        f"<th>引分</th><th>累積勝率</th></tr></thead><tbody>{rows}</tbody></table>"
     )
 
 
@@ -155,6 +155,11 @@ def _metric_text(metric: StatisticsMetric) -> str:
 
 def _rate(metric: StatisticsMetric) -> str:
     return "-" if metric.win_rate is None else f"{metric.win_rate * 100:.1f}%"
+
+
+def _trend_rate(point: StatisticsTrendPoint) -> str:
+    rate = point.cumulative_win_rate
+    return "-" if rate is None else f"{rate * 100:.1f}%"
 
 
 def _multiline(value: str) -> str:

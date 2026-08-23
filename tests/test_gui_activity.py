@@ -19,6 +19,7 @@ from master_duel_recorder_lite.gui import (
     _format_win_rate,
     _audio_input_display,
     _catalog_row_values,
+    _history_deck_display,
     _review_launch_command,
     _swatch_border_color,
     calendar_header_contract,
@@ -338,6 +339,12 @@ class GuiActivityTest(unittest.TestCase):
     def test_deck_color_swatch_border_uses_contrast_color(self) -> None:
         self.assertEqual(_swatch_border_color("#FFFF66"), "#202124")
         self.assertEqual(_swatch_border_color("#123456"), "#ffffff")
+
+    def test_history_deck_display_reserves_swatch_space_without_truncating_name(self) -> None:
+        deck = "天盃龍・長い日本語デッキ名"
+
+        self.assertEqual(_history_deck_display(deck, None), deck)
+        self.assertEqual(_history_deck_display(deck, "#3366AA"), f"     {deck}")
 
     def test_process_audio_input_display_does_not_read_as_audio_none(self) -> None:
         process = _audio_input_display("process", "")

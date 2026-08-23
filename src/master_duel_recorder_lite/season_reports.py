@@ -215,6 +215,8 @@ def _deck_orders(
                 else [row for row in deck_rows if row.play_order == play_order]
             )
             metric = _metric(selected)
+            if play_order == "unknown" and metric.matches == 0:
+                continue
             result.append(
                 DeckOrderBreakdown(
                     deck_id,
@@ -230,15 +232,25 @@ def _deck_orders(
 
 
 def _axes(rows: tuple[StatisticsRow, ...]) -> tuple[ReportAxisBreakdown, ...]:
+    overall = _metric(rows)
     definitions = (
         ("coin_face", "コイン", (("heads", "表"), ("tails", "裏"), ("unknown", "未設定"))),
         ("play_order", "先後", (("first", "先攻"), ("second", "後攻"), ("unknown", "未設定"))),
-        ("result", "最終勝敗", (("win", "勝ち"), ("loss", "負け"), ("draw", "引分"))),
     )
-    result: list[ReportAxisBreakdown] = []
+    result: list[ReportAxisBreakdown] = [
+        ReportAxisBreakdown(
+            "overall",
+            "all",
+            "全体",
+            overall,
+            _is_small(overall),
+        )
+    ]
     for field, axis_label, choices in definitions:
         for key, label in choices:
             metric = _metric([row for row in rows if getattr(row, field) == key])
+            if key == "unknown" and metric.matches == 0:
+                continue
             result.append(
                 ReportAxisBreakdown(
                     field,
