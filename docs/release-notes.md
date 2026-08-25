@@ -11,6 +11,8 @@
 - 戦績管理の編集ボタンから実際のPySide6戦績編集ダイアログを開き、勝敗、先後、コイン、対戦種別、デッキ、タグ、メモ、シーズンを保存できるようにした
 - レビュー画面にマーカー編集ボタンを追加し、選択中のmarkerラベルを編集保存できるようにした
 - SQLite schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、全596 pytest、全597 unittest、PySide6 GUI smoke、CLI/GUI/updater EXEビルド、3 EXEスモークに合格した
+- GitHub Actions run `32866385225` でWindows EXE release workflow、3 EXEスモーク、公開asset検証、ダウンロード後スモークに合格し、GitHub Release `v2.4.2` として公開した
 
 ## V2.4.1: PySide6 UI情報設計Hotfix - 2026-08-25
 
