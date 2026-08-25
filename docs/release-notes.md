@@ -15,6 +15,7 @@
 - PySide6 smoke contractと回帰テストへ、信頼性統合、テンプレート非露出、戦績フィルター、カラー表示、表高さの契約を追加した
 - SQLite schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
 - Ruff、全593テスト、PySide6 GUI smoke、CLI/GUI/updater EXEビルド、3 EXEスモークに合格した
+- GitHub Actions run `32861778037` でWindows EXE release workflow、3 EXEスモーク、公開asset検証、ダウンロード後スモークに合格し、GitHub Release `v2.4.1` として公開した
 
 ## V2.4.0: 通常GUI内動画レビュー統合 - 2026-08-25
 
