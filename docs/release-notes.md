@@ -7,6 +7,7 @@
 - Release asset検証スクリプトがGitHub Actionsの `GITHUB_TOKEN` / `GH_TOKEN` を使うようにし、無認証rate limitでRelease workflowが失敗しないようにした
 - 最終出力ファイル名、元録画非破壊、原子的な一時出力からの置換は従来どおり維持した
 - SQLite schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- GitHub Actions run `32870293905` でWindows EXE release workflow、3 EXEスモーク、公開asset検証、ダウンロード後スモークに合格し、GitHub Release `v2.4.4` として公開した
 
 ## V2.4.3: レビュークリップ出力Hotfix - 2026-08-26
 
