@@ -10,6 +10,7 @@ from master_duel_recorder_lite.pyside_gui import (
     SMOKE_WIDGETS,
     UI_USABILITY_WIDGETS,
     build_gui_parser,
+    history_color_target_label,
     history_table_display_row,
     smoke_contract,
 )
@@ -33,12 +34,12 @@ class PySideGuiContractTest(unittest.TestCase):
                 "tags",
                 "seasons",
                 "youtube",
-                "reliability",
                 "settings",
             ),
         )
         self.assertNotIn("prepare", pages)
         self.assertNotIn("improve", pages)
+        self.assertNotIn("reliability", pages)
 
     def test_smoke_contract_matches_release_script_widgets(self) -> None:
         service = SimpleNamespace(paths=SimpleNamespace(root=Path("user_data")))
@@ -77,8 +78,14 @@ class PySideGuiContractTest(unittest.TestCase):
             "bar_and_line",
         )
         self.assertTrue(contract["table_readability_contract"]["horizontal_scroll"])
+        self.assertTrue(contract["table_readability_contract"]["stable_catalog_table_height"])
         self.assertTrue(contract["color_swatch_contract"]["history_deck_decoration"])
         self.assertTrue(contract["color_swatch_contract"]["catalog_color_codes_hidden"])
+        self.assertTrue(contract["color_swatch_contract"]["color_text_hidden"])
+        self.assertEqual(
+            contract["color_swatch_contract"]["settings_table"],
+            "settings_display_color_table",
+        )
         self.assertEqual(
             contract["control_height_contract"],
             {
@@ -93,24 +100,34 @@ class PySideGuiContractTest(unittest.TestCase):
             "active_season_status",
         )
         self.assertTrue(contract["health_status_contract"]["fixed_warning_removed"])
+        self.assertEqual(contract["health_status_contract"]["ready_text"], "準備OK")
         self.assertIn("deck_save", contract["catalog_edit_contract"]["deck_widgets"])
         self.assertIn("tag_save", contract["catalog_edit_contract"]["tag_widgets"])
         self.assertIn("season_save", contract["season_edit_contract"]["widgets"])
         self.assertTrue(contract["season_edit_contract"]["date_picker"])
         self.assertTrue(contract["template_screen_contract"]["connection_buttons_removed"])
+        self.assertTrue(contract["template_screen_contract"]["mp4_preparation_hidden"])
+        self.assertTrue(contract["template_screen_contract"]["background_status_hidden"])
         self.assertEqual(
             contract["template_screen_contract"]["connection_management_page"],
             "settings",
         )
         self.assertIn(
-            "reliability_refresh",
+            "settings_reliability_refresh",
             contract["reliability_action_contract"]["buttons"],
         )
-        self.assertTrue(contract["background_operation_contract"]["youtube_upload_worker"])
+        self.assertTrue(contract["reliability_action_contract"]["navigation_removed"])
         self.assertEqual(
-            contract["background_operation_contract"]["progress_widget"],
-            "youtube_upload_progress",
+            contract["reliability_action_contract"]["settings_tab"],
+            "録画診断・信頼性",
         )
+        self.assertEqual(
+            contract["reliability_action_contract"]["record_page_entry"],
+            "record_reliability_check",
+        )
+        self.assertTrue(contract["background_operation_contract"]["youtube_upload_worker"])
+        self.assertIsNone(contract["background_operation_contract"]["progress_widget"])
+        self.assertTrue(contract["background_operation_contract"]["template_progress_hidden"])
         self.assertTrue(contract["background_operation_contract"]["double_submit_guard"])
         self.assertTrue(contract["settings_parity_contract"])
         self.assertEqual(
@@ -126,6 +143,14 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertEqual(contract["missing_standard_widgets"], [])
         self.assertEqual(contract["failed_standard_operation_checks"], [])
         self.assertTrue(contract["youtube_flow_contract"])
+        self.assertIn(
+            "history_saved_filter",
+            contract["history_hub_operation_contract"]["filter_widgets"],
+        )
+        self.assertIn(
+            "tag_entry_ids",
+            contract["history_hub_operation_contract"]["query_filters"],
+        )
         self.assertEqual(contract["review_video_contract"]["entry_button"], "history_play")
         self.assertEqual(
             contract["review_video_contract"]["supported_extensions"],
@@ -142,6 +167,8 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertNotIn("youtube_disconnect", contract["widgets"])
         self.assertNotIn("youtube_refresh", contract["widgets"])
         self.assertNotIn("youtube_test_upload", contract["widgets"])
+        self.assertNotIn("youtube_background_status", contract["widgets"])
+        self.assertNotIn("youtube_upload_progress", contract["widgets"])
         self.assertEqual(contract["runtime_data"], "user_data")
         for widget in (*SMOKE_WIDGETS, *UI_USABILITY_WIDGETS):
             self.assertIn(widget, contract["widgets"])
@@ -181,6 +208,14 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertNotIn("first", row)
         self.assertNotIn("heads", row)
         self.assertNotIn("ranked", row)
+
+    def test_history_color_target_label_uses_japanese_display_names(self) -> None:
+        self.assertEqual(history_color_target_label("coin_face.heads"), "コイン: 表")
+        self.assertEqual(
+            history_color_target_label("entry_origin.recording"),
+            "登録元: 録画",
+        )
+        self.assertEqual(history_color_target_label("custom.key"), "custom.key")
 
     def test_review_timeline_display_row_keeps_timeline_support_columns(self) -> None:
         event = SimpleNamespace(

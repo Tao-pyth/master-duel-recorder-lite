@@ -33,11 +33,11 @@ try {
     $result = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
     $requiredWidgets = @(
         "activity", "app_update", "catalog_table", "clean_uninstall", "csv_status", "data_backup_table", "data_protection_scope", "data_protection_status", "deck_catalog_table", "ffmpeg_setup",
-        "history_add", "history_bulk", "history_columns", "history_delete", "history_duel", "history_duplicates", "history_incomplete", "history_play", "history_refresh", "history_table", "history_youtube",
-        "improvement_status", "incomplete_duel_count", "manual_duel_add", "prepare_recording", "prepare_table", "record_start", "record_status", "record_stop", "reliability_status",
-        "season_table", "settings_audio_input", "settings_audio_mode", "settings_audio_test", "settings_csv_export", "settings_data_backup", "settings_display_colors", "settings_ffmpeg_path", "settings_form", "settings_managed_export", "settings_runtime_path", "settings_save", "settings_youtube_connect", "settings_youtube_disconnect", "settings_youtube_refresh", "settings_youtube_status", "settings_youtube_test_upload", "statistics_chart", "statistics_coin_table", "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "statistics_season_table",
+        "history_add", "history_bulk", "history_coin_filter", "history_columns", "history_delete", "history_duel", "history_duplicates", "history_incomplete", "history_origin_filter", "history_own_deck_filter", "history_play", "history_refresh", "history_saved_filter", "history_season_filter", "history_table", "history_tag_filter", "history_youtube",
+        "improvement_status", "incomplete_duel_count", "manual_duel_add", "prepare_recording", "prepare_table", "record_reliability_check", "record_start", "record_status", "record_stop",
+        "season_table", "settings_audio_input", "settings_audio_mode", "settings_audio_test", "settings_csv_export", "settings_data_backup", "settings_display_color_table", "settings_display_colors", "settings_double_click_help", "settings_ffmpeg_path", "settings_form", "settings_managed_export", "settings_reliability_refresh", "settings_reliability_setup_check", "settings_reliability_status", "settings_runtime_path", "settings_save", "settings_youtube_connect", "settings_youtube_disconnect", "settings_youtube_refresh", "settings_youtube_status", "settings_youtube_test_upload", "statistics_chart", "statistics_coin_table", "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "statistics_season_table",
         "tag_catalog_table", "target_selector", "visual_details_toggle", "visual_diagnostics_folder", "visual_status", "watch_toggle",
-        "youtube_background_status", "youtube_status", "youtube_template", "youtube_template_save", "youtube_template_tags", "youtube_template_title", "youtube_upload_progress"
+        "youtube_status", "youtube_template", "youtube_template_save", "youtube_template_tags", "youtube_template_title"
     )
     if ($result.version -ne $ExpectedVersion -or $result.width -lt 900 -or $result.height -lt 600 -or -not $result.history_refresh_visible -or -not $result.calendar_contract -or -not $result.pyside6 -or -not $result.standard_feature_contract -or -not $result.standard_operation_contract) {
         throw "GUI smoke contract is invalid"
@@ -63,17 +63,20 @@ try {
     if (-not $result.app_update_state_contract.download_enabled_only_after_candidate -or -not $result.app_update_state_contract.latest_without_candidate_disables_download) {
         throw "GUI smoke app update state contract is invalid"
     }
-    if (-not $result.template_screen_contract.connection_buttons_removed) {
+    if (-not $result.template_screen_contract.connection_buttons_removed -or -not $result.template_screen_contract.mp4_preparation_hidden -or -not $result.template_screen_contract.background_status_hidden) {
         throw "GUI smoke template screen contract is invalid"
     }
     if (-not $result.background_operation_contract.youtube_upload_worker -or -not $result.background_operation_contract.double_submit_guard) {
         throw "GUI smoke background operation contract is invalid"
     }
-    if ($result.background_operation_contract.progress_widget -ne "youtube_upload_progress") {
+    if ($null -ne $result.background_operation_contract.progress_widget -or -not $result.background_operation_contract.template_progress_hidden) {
         throw "GUI smoke background progress widget is invalid"
     }
-    if (-not $result.reliability_action_contract.click_updates_status) {
+    if (-not $result.reliability_action_contract.click_updates_status -or -not $result.reliability_action_contract.navigation_removed) {
         throw "GUI smoke reliability action contract is invalid"
+    }
+    if ($result.nav_pages -contains "reliability") {
+        throw "GUI smoke still exposes reliability as a main navigation page"
     }
     foreach ($key in @("history_hub", "incomplete_action", "play_action", "edit_action", "danger_delete_action", "duplicate_review", "youtube_action", "timeline_entry", "diagnostic_entry", "review_entry")) {
         if (-not $result.post_recording_workflow_contract.$key) {

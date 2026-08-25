@@ -43,7 +43,6 @@ NAVIGATION_PAGES: tuple[tuple[str, str], ...] = (
     ("tags", "タグ"),
     ("seasons", "シーズン"),
     ("youtube", "テンプレート"),
-    ("reliability", "信頼性"),
     ("settings", "設定"),
 )
 
@@ -80,7 +79,7 @@ RICH_UI_SECTION_WIDGETS: tuple[str, ...] = (
     "tag_editor",
     "season_editor",
     "template_editor",
-    "reliability_preflight_panel",
+    "settings_reliability_panel",
     "settings_tabs",
     "prepare_internal_page",
     "improve_internal_page",
@@ -101,10 +100,15 @@ UI_USABILITY_WIDGETS: tuple[str, ...] = (
     "deck_name_input",
     "tag_name_input",
     "season_name_input",
-    "reliability_refresh",
-    "reliability_setup_check",
-    "youtube_background_status",
-    "youtube_upload_progress",
+    "record_reliability_check",
+    "settings_reliability_refresh",
+    "settings_reliability_setup_check",
+    "history_saved_filter",
+    "history_season_filter",
+    "history_own_deck_filter",
+    "history_tag_filter",
+    "history_coin_filter",
+    "history_origin_filter",
 )
 
 SETTINGS_PARITY_WIDGETS: tuple[str, ...] = (
@@ -151,7 +155,12 @@ SETTINGS_PARITY_WIDGETS: tuple[str, ...] = (
     "settings_csv_export",
     "settings_csv_import",
     "settings_csv_sample",
+    "settings_reliability_status",
+    "settings_reliability_refresh",
+    "settings_reliability_setup_check",
     "settings_display_colors",
+    "settings_display_color_table",
+    "settings_double_click_help",
     "settings_double_click_play",
     "settings_double_click_edit",
     "app_update_status",
@@ -237,6 +246,27 @@ def history_entry_origin_label(value: str) -> str:
         "manual": "手動",
         "import": "取込",
     }.get(value, value or "-")
+
+
+HISTORY_COLOR_TARGET_LABELS: dict[str, str] = {
+    "result.win": "勝敗: 勝ち",
+    "result.loss": "勝敗: 負け",
+    "result.draw": "勝敗: 引き分け",
+    "result.unknown": "勝敗: 未設定",
+    "play_order.first": "先後: 先攻",
+    "play_order.second": "先後: 後攻",
+    "play_order.unknown": "先後: 未設定",
+    "coin_face.heads": "コイン: 表",
+    "coin_face.tails": "コイン: 裏",
+    "coin_face.unknown": "コイン: 未設定",
+    "entry_origin.recording": "登録元: 録画",
+    "entry_origin.manual": "登録元: 手動",
+    "entry_origin.import": "登録元: 取込",
+}
+
+
+def history_color_target_label(key: str) -> str:
+    return HISTORY_COLOR_TARGET_LABELS.get(key, key)
 
 
 def history_table_display_row(view: object) -> tuple[str, str, str, str, str, str, str, str, str, str]:
@@ -331,11 +361,14 @@ def smoke_contract(
             "selection": "soft-row-selection",
             "horizontal_scroll": True,
             "explicit_column_widths": True,
+            "stable_catalog_table_height": True,
         },
         "color_swatch_contract": {
             "catalog_tables": ["deck_catalog_table", "tag_catalog_table"],
+            "settings_table": "settings_display_color_table",
             "history_deck_decoration": True,
             "catalog_color_codes_hidden": True,
+            "color_text_hidden": True,
             "selection_color_independent": True,
         },
         "history_hub_operation_contract": {
@@ -382,6 +415,25 @@ def smoke_contract(
                 "history_filter_apply",
                 "history_filter_clear",
             ],
+            "filter_widgets": [
+                "history_period_mode",
+                "history_saved_filter",
+                "history_season_filter",
+                "history_own_deck_filter",
+                "history_tag_filter",
+                "history_coin_filter",
+                "history_origin_filter",
+            ],
+            "query_filters": [
+                "occurred_from",
+                "occurred_to",
+                "season_id",
+                "own_deck_id",
+                "tag_entry_ids",
+                "coin_face",
+                "entry_origin",
+            ],
+            "saved_filter_contract": "applies_saved_duel_filter_criteria",
             "danger_button": "history_delete",
         },
         "review_video_contract": {
@@ -408,11 +460,14 @@ def smoke_contract(
             "status_widget": "active_season_status",
             "service_method": "RecorderApplicationService.active_season_summaries",
             "fixed_loading_text_removed": True,
+            "states": ["未確認", "なし", "開催中", "取得失敗"],
         },
         "health_status_contract": {
             "status_widget": "nav_health_status",
             "service_method": "RecorderApplicationService.diagnose",
             "fixed_warning_removed": True,
+            "ready_text": "準備OK",
+            "diagnostic_tooltip": True,
         },
         "catalog_edit_contract": {
             "deck_widgets": [
@@ -446,9 +501,12 @@ def smoke_contract(
                 "youtube_template",
                 "youtube_template_tags",
                 "youtube_template_save",
-                "youtube_background_status",
-                "youtube_upload_progress",
             ],
+            "mp4_preparation_hidden": all(
+                widget not in widget_keys
+                for widget in ("youtube_template_list", "prepare_internal_table")
+            ),
+            "background_status_hidden": "youtube_background_status" not in widget_keys,
             "connection_buttons_removed": all(
                 widget not in widget_keys
                 for widget in (
@@ -461,13 +519,20 @@ def smoke_contract(
             "connection_management_page": "settings",
         },
         "reliability_action_contract": {
-            "buttons": ["reliability_refresh", "reliability_setup_check"],
+            "navigation_removed": "reliability" not in nav_pages,
+            "settings_tab": "録画診断・信頼性",
+            "buttons": [
+                "settings_reliability_refresh",
+                "settings_reliability_setup_check",
+            ],
+            "record_page_entry": "record_reliability_check",
             "click_updates_status": True,
         },
         "background_operation_contract": {
             "executor": "ThreadPoolExecutor",
             "youtube_upload_worker": True,
-            "progress_widget": "youtube_upload_progress",
+            "progress_widget": None,
+            "template_progress_hidden": "youtube_upload_progress" not in widget_keys,
             "double_submit_guard": True,
         },
         "control_height_contract": {
@@ -500,6 +565,8 @@ def smoke_contract(
             "prepare" not in nav_pages
             and "youtube" in nav_pages
             and "prepare_table" in widgets
+            and "prepare_recording" in widgets
+            and "prepare_recording" not in UI_USABILITY_WIDGETS
         ),
         "pyside6": True,
         "gui_entrypoint": "master_duel_recorder_lite.pyside_gui",
@@ -543,7 +610,6 @@ def _run(args: argparse.Namespace) -> int:
             QListWidget,
             QMainWindow,
             QMessageBox,
-            QProgressBar,
             QPushButton,
             QScrollArea,
             QSizePolicy,
@@ -691,6 +757,8 @@ def _run(args: argparse.Namespace) -> int:
             self.setting_checks: dict[str, QCheckBox] = {}
             self.setting_field_keys: dict[str, str] = {}
             self.setting_check_keys: dict[str, str] = {}
+            self.settings_tabs: QTabWidget | None = None
+            self.settings_reliability_tab_index: int | None = None
             self.ui_preferences = load_ui_preferences(self.service.paths.config)
             self.setWindowTitle(f"Master Duel Recorder Lite {__version__}")
             self.resize(1180, 760)
@@ -801,8 +869,6 @@ def _run(args: argparse.Namespace) -> int:
                 self._season_page(layout)
             elif key == "youtube":
                 self._template_page(layout)
-            elif key == "reliability":
-                self._reliability_page(layout)
             elif key == "settings":
                 self._settings_page(layout)
             elif key == "prepare":
@@ -877,6 +943,7 @@ def _run(args: argparse.Namespace) -> int:
             column_widths: tuple[int | None, ...] | None = None,
             stretch_last: bool = True,
             minimum_height: int | None = None,
+            maximum_height: int | None = None,
         ) -> None:
             table.setAlternatingRowColors(True)
             table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -901,6 +968,8 @@ def _run(args: argparse.Namespace) -> int:
                     table.setColumnWidth(index, width)
             if minimum_height is not None:
                 table.setMinimumHeight(minimum_height)
+            if maximum_height is not None:
+                table.setMaximumHeight(max(maximum_height, minimum_height or 0))
 
         @staticmethod
         def _decorate_item_with_color(
@@ -994,7 +1063,11 @@ def _run(args: argparse.Namespace) -> int:
             diag_actions.addStretch(1)
             diag_actions.addWidget(QPushButton("保存"))
             diag_actions.addWidget(self._register("visual_diagnostics_folder", QPushButton("開く")))
-            diag_actions.addWidget(QPushButton("診断実行"))
+            diag_button = self._register("record_reliability_check", QPushButton("診断を確認"))
+            assert isinstance(diag_button, QPushButton)
+            diag_button.setToolTip("設定の録画診断・信頼性タブを開きます")
+            diag_button.clicked.connect(self._show_reliability_settings)
+            diag_actions.addWidget(diag_button)
             diagnostics_layout.addLayout(diag_actions)
             diag_table = QTableWidget(3, 2)
             diag_table.setHorizontalHeaderLabels(("状態", "項目と結果"))
@@ -1047,29 +1120,47 @@ def _run(args: argparse.Namespace) -> int:
 
             filters = self._register("history_filter_bar", QFrame())
             assert isinstance(filters, QFrame)
-            filter_layout = QHBoxLayout(filters)
+            filter_layout = QGridLayout(filters)
             filter_layout.setContentsMargins(0, 0, 0, 0)
-            filter_layout.addWidget(QLabel("フィルター"))
+            filter_layout.setColumnStretch(8, 1)
+            filter_layout.addWidget(QLabel("期間"), 0, 0)
             period = self._register("history_period_mode", QComboBox())
             assert isinstance(period, QComboBox)
             period.addItems(("すべて", "期間指定"))
-            filter_layout.addWidget(period)
-            filter_layout.addWidget(self._date_picker("history_date_from_picker"))
-            filter_layout.addWidget(self._date_picker("history_date_to_picker"))
+            filter_layout.addWidget(period, 0, 1)
+            filter_layout.addWidget(self._date_picker("history_date_from_picker"), 0, 2)
+            filter_layout.addWidget(self._date_picker("history_date_to_picker"), 0, 3)
+            saved_filter = self._register("history_saved_filter", QComboBox())
+            season_filter = self._register("history_season_filter", QComboBox())
+            deck_filter = self._register("history_own_deck_filter", QComboBox())
+            tag_filter = self._register("history_tag_filter", QComboBox())
+            coin_filter = self._register("history_coin_filter", QComboBox())
+            origin_filter = self._register("history_origin_filter", QComboBox())
+            for column, combo in enumerate(
+                (
+                    saved_filter,
+                    season_filter,
+                    deck_filter,
+                    tag_filter,
+                    coin_filter,
+                    origin_filter,
+                ),
+                start=1,
+            ):
+                assert isinstance(combo, QComboBox)
+                combo.setMinimumWidth(92)
+                filter_layout.addWidget(combo, 1, column)
+            filter_layout.addWidget(QLabel("条件"), 1, 0)
+            self._populate_history_filter_choices()
             apply_filter = self._button("history_filter_apply", "適用")
             clear_filter = self._button("history_filter_clear", "解除")
             apply_filter.clicked.connect(self._refresh_history)
             clear_filter.clicked.connect(self._clear_history_filters)
-            filter_layout.addWidget(apply_filter)
-            filter_layout.addWidget(clear_filter)
-            for text in ("デッキ", "タグ", "登録元"):
-                box = QComboBox()
-                box.addItems((text, "すべて"))
-                filter_layout.addWidget(box)
+            filter_layout.addWidget(apply_filter, 0, 4)
+            filter_layout.addWidget(clear_filter, 0, 5)
             history_add = self._button("history_add", "簡易入力")
             history_add.clicked.connect(self._show_manual_duel_entry)
-            filter_layout.addWidget(history_add)
-            filter_layout.addStretch(1)
+            filter_layout.addWidget(history_add, 1, 7)
             layout.addWidget(filters)
 
             table = QTableWidget(0, 10)
@@ -1268,13 +1359,15 @@ def _run(args: argparse.Namespace) -> int:
                 self._configure_table(
                     table,
                     column_widths=(74, 180, None, 86, 120),
-                    minimum_height=250,
+                    minimum_height=320,
+                    maximum_height=360,
                 )
             else:
                 self._configure_table(
                     table,
                     column_widths=(74, 180, None, 120),
-                    minimum_height=250,
+                    minimum_height=320,
+                    maximum_height=360,
                 )
             layout.addWidget(table, stretch=1)
             if is_deck:
@@ -1368,56 +1461,30 @@ def _run(args: argparse.Namespace) -> int:
             editor_layout.addWidget(variables)
             status = self._register(
                 "youtube_status",
-                QLabel("YouTube連携は設定画面で管理します。テンプレートは投稿時の初期値です。"),
+                QLabel(
+                    "YouTube連携は設定画面で管理します。動画形式の準備は投稿時に内部で行います。"
+                ),
             )
             assert isinstance(status, QLabel)
             status.setWordWrap(True)
             editor_layout.addWidget(status)
-            background_status = self._register(
-                "youtube_background_status", QLabel("バックグラウンド処理: 待機中")
-            )
-            assert isinstance(background_status, QLabel)
-            background_status.setWordWrap(True)
-            editor_layout.addWidget(background_status)
-            progress = self._register("youtube_upload_progress", QProgressBar())
-            assert isinstance(progress, QProgressBar)
-            progress.setRange(0, 0)
-            progress.setTextVisible(False)
-            progress.setVisible(False)
-            editor_layout.addWidget(progress)
             save_row = QHBoxLayout()
             save_row.addStretch(1)
-            list_button = self._register("youtube_template_list", QPushButton("準備一覧を更新"))
             save_button = self._register("youtube_template_save", QPushButton("保存"))
-            assert isinstance(list_button, QPushButton)
             assert isinstance(save_button, QPushButton)
-            list_button.clicked.connect(self._refresh_preparations)
             save_button.clicked.connect(self._save_youtube_template)
-            save_row.addWidget(list_button)
             save_row.addWidget(save_button)
             editor_layout.addLayout(save_row)
             layout.addWidget(editor, stretch=1)
 
-            prepare_row = QHBoxLayout()
-            prepare_row.addWidget(self._button("prepare_recording", "選択録画をMP4準備へ追加"))
-            prepare_row.addWidget(QLabel("投稿前処理キューは内部ページとして維持します"))
-            prepare_row.addStretch(1)
-            layout.addLayout(prepare_row)
-            layout.addWidget(
-                self._table(
-                    "prepare_table",
-                    ("録画ID", "状態", "タイトル", "公開範囲", "更新日時"),
-                    (("sample-rec", "waiting", "投稿準備サンプル", "private", "2026-08-23"),),
-                    column_widths=(140, 92, None, 92, 148),
-                )
-            )
-
-        def _reliability_page(self, layout: QVBoxLayout) -> None:
+        def _reliability_settings_tab(self) -> QWidget:
+            tab = QWidget()
+            layout = QVBoxLayout(tab)
             preflight, preflight_layout = self._section(
-                "reliability_preflight_panel", "自動録画への信頼性"
+                "settings_reliability_panel", "録画診断・信頼性"
             )
             status = self._register(
-                "reliability_status",
+                "settings_reliability_status",
                 QLabel(
                     "30秒事前チェック、Master Duel録画用window/monitor診断、"
                     "ホットキー、トレイ状態を確認します。"
@@ -1427,8 +1494,8 @@ def _run(args: argparse.Namespace) -> int:
             status.setWordWrap(True)
             preflight_layout.addWidget(status)
             actions = QHBoxLayout()
-            refresh = self._register("reliability_refresh", QPushButton("状態更新"))
-            setup = self._register("reliability_setup_check", QPushButton("初回導入を確認"))
+            refresh = self._register("settings_reliability_refresh", QPushButton("状態更新"))
+            setup = self._register("settings_reliability_setup_check", QPushButton("初回導入を確認"))
             assert isinstance(refresh, QPushButton)
             assert isinstance(setup, QPushButton)
             refresh.clicked.connect(self.refresh_reliability_status)
@@ -1450,17 +1517,29 @@ def _run(args: argparse.Namespace) -> int:
             improvement_status.setWordWrap(True)
             improvement_layout.addWidget(improvement_status)
             layout.addWidget(improvement)
+            layout.addStretch(1)
+            return tab
 
         def _settings_page(self, layout: QVBoxLayout) -> None:
             tabs = self._register("settings_tabs", QTabWidget())
             assert isinstance(tabs, QTabWidget)
+            self.settings_tabs = tabs
             tabs.addTab(self._recording_settings_tab(), "録画設定")
+            self.settings_reliability_tab_index = tabs.addTab(
+                self._reliability_settings_tab(), "録画診断・信頼性"
+            )
             tabs.addTab(self._youtube_settings_tab(), "YouTube")
             tabs.addTab(self._data_settings_tab(), "管理データ")
             tabs.addTab(self._csv_settings_tab(), "CSV入出力")
-            tabs.addTab(self._display_settings_tab(), "表示")
+            tabs.addTab(self._display_settings_tab(), "戦績表示設定")
             tabs.addTab(self._update_settings_tab(), "アプリ更新")
             layout.addWidget(tabs, stretch=1)
+
+        def _show_reliability_settings(self) -> None:
+            self.show_page("settings")
+            if self.settings_tabs is not None and self.settings_reliability_tab_index is not None:
+                self.settings_tabs.setCurrentIndex(self.settings_reliability_tab_index)
+            self.refresh_reliability_status()
 
         def _settings_field(
             self,
@@ -1846,13 +1925,34 @@ def _run(args: argparse.Namespace) -> int:
             assert isinstance(colors, QLabel)
             colors.setWordWrap(True)
             layout.addWidget(colors)
-            color_table = QTableWidget(0, 2)
-            color_table.setHorizontalHeaderLabels(("対象", "色"))
-            self._configure_table(color_table, column_widths=(240, 120), minimum_height=220)
-            rows = tuple((key, self.ui_preferences.history_cell_colors.get(key, "#FFFFFF")) for key in self.ui_preferences.history_cell_colors)
+            color_table = self._register("settings_display_color_table", QTableWidget(0, 2))
+            assert isinstance(color_table, QTableWidget)
+            color_table.setHorizontalHeaderLabels(("対象", "カラー"))
+            self._configure_table(
+                color_table,
+                column_widths=(240, 120),
+                minimum_height=220,
+                maximum_height=260,
+            )
+            rows = tuple(
+                (
+                    history_color_target_label(key),
+                    self.ui_preferences.history_cell_colors.get(key, "#FFFFFF"),
+                )
+                for key in self.ui_preferences.history_cell_colors
+            )
             self._set_table_rows(color_table, rows)
             layout.addWidget(color_table)
             layout.addWidget(self._setting_label("戦績管理のダブルクリック"))
+            help_label = self._register(
+                "settings_double_click_help",
+                QLabel(
+                    "戦績管理の行をダブルクリックした時に、録画再生と戦績編集のどちらを優先するかを指定します。"
+                ),
+            )
+            assert isinstance(help_label, QLabel)
+            help_label.setWordWrap(True)
+            layout.addWidget(help_label)
             play = self._register("settings_double_click_play", QCheckBox("録画再生"))
             edit = self._register("settings_double_click_edit", QCheckBox("戦績編集"))
             assert isinstance(play, QCheckBox)
@@ -1913,15 +2013,15 @@ def _run(args: argparse.Namespace) -> int:
             target.addItems(("2026-08-19 sample-rec", "最新録画"))
             row.addWidget(target, stretch=1)
             row.addWidget(QLineEdit("投稿タイトル"))
-            row.addWidget(QPushButton("キューへ追加"))
+            row.addWidget(self._button("prepare_recording", "キューへ追加"))
             row.addWidget(QPushButton("待機中を実行"))
             panel_layout.addLayout(row)
             panel_layout.addWidget(
                 self._table(
-                    "prepare_internal_table",
-                    ("録画ID", "タイトル", "状態"),
-                    (("sample-rec", "投稿準備サンプル", "waiting"),),
-                    column_widths=(150, None, 110),
+                    "prepare_table",
+                    ("録画ID", "状態", "タイトル", "公開範囲", "更新日時"),
+                    (("sample-rec", "waiting", "投稿準備サンプル", "private", "2026-08-23"),),
+                    column_widths=(140, 92, None, 92, 148),
                 )
             )
             layout.addWidget(panel, stretch=1)
@@ -1969,6 +2069,7 @@ def _run(args: argparse.Namespace) -> int:
 
         def _load_runtime_dashboard(self) -> None:
             loaders = (
+                self._populate_history_filter_choices,
                 self._refresh_history,
                 self._refresh_catalogs,
                 self._refresh_seasons,
@@ -2001,13 +2102,16 @@ def _run(args: argparse.Namespace) -> int:
             try:
                 summaries = self.service.active_season_summaries()
             except Exception as exc:
-                label.setText(f"開催中のシーズンを確認できません: {exc}")
+                label.setText("シーズン: 取得失敗")
+                label.setToolTip(f"開催中のシーズンを確認できません: {exc}")
                 return
             if not summaries:
-                label.setText("開催中のシーズン: なし")
+                label.setText("シーズン: なし")
+                label.setToolTip("今日を含む有効なシーズンはありません")
                 return
             names = " / ".join(summary.season.name for summary in summaries)
-            label.setText(f"開催中のシーズン: {names}")
+            label.setText(f"シーズン: 開催中 {names}")
+            label.setToolTip("開催中のシーズンです。シーズン画面で詳細を確認できます。")
 
         def _refresh_health_status(self) -> None:
             label = self.widgets.get("nav_health_status")
@@ -2016,16 +2120,20 @@ def _run(args: argparse.Namespace) -> int:
             try:
                 report = self.service.diagnose()
             except Exception as exc:
-                label.setText(f"△ 状態確認失敗: {exc}")
+                label.setText("要確認")
+                label.setToolTip(f"状態確認に失敗しました: {exc}")
                 return
             errors = [check for check in report.checks if getattr(check.status, "value", "") == "error"]
             warnings = [check for check in report.checks if getattr(check.status, "value", "") == "warning"]
             if errors:
-                label.setText(f"△ 要確認: {errors[0].label}")
+                label.setText("要確認")
+                label.setToolTip(f"{errors[0].label}: {errors[0].message}")
             elif warnings:
-                label.setText(f"△ 注意: {warnings[0].label}")
+                label.setText("注意")
+                label.setToolTip(f"{warnings[0].label}: {warnings[0].message}")
             else:
-                label.setText("✓ 利用可能")
+                label.setText("準備OK")
+                label.setToolTip("録画前チェックに重大な問題はありません")
 
         def _start_recording(self) -> None:
             self._run_action("録画開始", self.service.start_recording)
@@ -2054,19 +2162,170 @@ def _run(args: argparse.Namespace) -> int:
             }
             button.clicked.connect(actions[key])
 
-        def _history_query(self) -> DuelManagementQuery:
+        def _populate_history_filter_choices(self) -> None:
+            saved_filter = self.widgets.get("history_saved_filter")
+            season_filter = self.widgets.get("history_season_filter")
+            deck_filter = self.widgets.get("history_own_deck_filter")
+            tag_filter = self.widgets.get("history_tag_filter")
+            coin_filter = self.widgets.get("history_coin_filter")
+            origin_filter = self.widgets.get("history_origin_filter")
+            combos = (
+                saved_filter,
+                season_filter,
+                deck_filter,
+                tag_filter,
+                coin_filter,
+                origin_filter,
+            )
+            if not all(isinstance(combo, QComboBox) for combo in combos):
+                return
+            assert isinstance(saved_filter, QComboBox)
+            assert isinstance(season_filter, QComboBox)
+            assert isinstance(deck_filter, QComboBox)
+            assert isinstance(tag_filter, QComboBox)
+            assert isinstance(coin_filter, QComboBox)
+            assert isinstance(origin_filter, QComboBox)
+
+            selected = {
+                key: combo.currentData()
+                for key, combo in (
+                    ("saved", saved_filter),
+                    ("season", season_filter),
+                    ("deck", deck_filter),
+                    ("tag", tag_filter),
+                    ("coin", coin_filter),
+                    ("origin", origin_filter),
+                )
+            }
+            if not self.load_runtime_data:
+                self._reset_combo(saved_filter, "保存済み条件", None)
+                self._reset_combo(season_filter, "シーズン", None)
+                self._reset_combo(deck_filter, "デッキ", None)
+                self._reset_combo(tag_filter, "タグ", None)
+                self._reset_combo(coin_filter, "コイン", None)
+                self._reset_combo(origin_filter, "登録元", None)
+                for value in ("heads", "tails", "unknown"):
+                    coin_filter.addItem(duel_choice_label("coin_face", value), value)
+                for value in ("recording", "manual", "import"):
+                    origin_filter.addItem(history_entry_origin_label(value), value)
+                return
+            try:
+                seasons = self.service.list_seasons(include_archived=True)
+                decks = self.service.list_decks()
+                tags = self.service.list_tags()
+                saved_filters = self.service.list_saved_duel_filters()
+            except Exception:
+                seasons = ()
+                decks = ()
+                tags = ()
+                saved_filters = ()
+
+            self._reset_combo(saved_filter, "保存済み条件", None)
+            for saved in saved_filters:
+                saved_filter.addItem(str(saved.name), saved)
+            self._restore_combo_data(saved_filter, selected["saved"])
+
+            self._reset_combo(season_filter, "シーズン", None)
+            for season in seasons:
+                season_filter.addItem(str(season.name), int(season.season_id))
+            self._restore_combo_data(season_filter, selected["season"])
+
+            self._reset_combo(deck_filter, "デッキ", None)
+            for deck in decks:
+                deck_filter.addItem(str(deck.name), int(deck.entry_id))
+            self._restore_combo_data(deck_filter, selected["deck"])
+
+            self._reset_combo(tag_filter, "タグ", None)
+            for tag in tags:
+                tag_filter.addItem(str(tag.name), int(tag.entry_id))
+            self._restore_combo_data(tag_filter, selected["tag"])
+
+            self._reset_combo(coin_filter, "コイン", None)
+            for value in ("heads", "tails", "unknown"):
+                coin_filter.addItem(duel_choice_label("coin_face", value), value)
+            self._restore_combo_data(coin_filter, selected["coin"])
+
+            self._reset_combo(origin_filter, "登録元", None)
+            for value in ("recording", "manual", "import"):
+                origin_filter.addItem(history_entry_origin_label(value), value)
+            self._restore_combo_data(origin_filter, selected["origin"])
+
+        @staticmethod
+        def _reset_combo(combo: QComboBox, label: str, data: object | None) -> None:
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem(label, data)
+            combo.blockSignals(False)
+
+        @staticmethod
+        def _restore_combo_data(combo: QComboBox, data: object | None) -> None:
+            if data is None:
+                combo.setCurrentIndex(0)
+                return
+            for index in range(combo.count()):
+                if combo.itemData(index) == data:
+                    combo.setCurrentIndex(index)
+                    return
+            combo.setCurrentIndex(0)
+
+        def _history_filter_dates(self) -> tuple[date | None, date | None]:
             period = self.widgets.get("history_period_mode")
             if not isinstance(period, QComboBox) or period.currentText() != "期間指定":
-                return DuelManagementQuery(limit=200)
+                return None, None
             date_from = self.widgets.get("history_date_from_picker")
             date_to = self.widgets.get("history_date_to_picker")
+            return (
+                date_from.date().toPython() if isinstance(date_from, QDateEdit) else None,
+                date_to.date().toPython() if isinstance(date_to, QDateEdit) else None,
+            )
+
+        def _history_query_from_criteria(
+            self, criteria: object, occurred_from: date | None, occurred_to: date | None
+        ) -> DuelManagementQuery:
             return DuelManagementQuery(
                 limit=200,
-                occurred_from=date_from.date().toPython()
-                if isinstance(date_from, QDateEdit)
+                occurred_from=occurred_from,
+                occurred_to=occurred_to,
+                season_id=getattr(criteria, "season_id", None),
+                own_deck_id=getattr(criteria, "own_deck_id", None),
+                opponent_deck_id=getattr(criteria, "opponent_deck_id", None),
+                tag_entry_ids=tuple(getattr(criteria, "tag_entry_ids", ()) or ()),
+                coin_face=getattr(criteria, "coin_face", None),
+                entry_origin=getattr(criteria, "entry_origin", None),
+            )
+
+        def _history_query(self) -> DuelManagementQuery:
+            occurred_from, occurred_to = self._history_filter_dates()
+            saved_filter = self.widgets.get("history_saved_filter")
+            if isinstance(saved_filter, QComboBox):
+                selected_filter = saved_filter.currentData()
+                criteria = getattr(selected_filter, "criteria", None)
+                if criteria is not None:
+                    return self._history_query_from_criteria(
+                        criteria, occurred_from, occurred_to
+                    )
+            season_filter = self.widgets.get("history_season_filter")
+            deck_filter = self.widgets.get("history_own_deck_filter")
+            tag_filter = self.widgets.get("history_tag_filter")
+            coin_filter = self.widgets.get("history_coin_filter")
+            origin_filter = self.widgets.get("history_origin_filter")
+            tag_id = tag_filter.currentData() if isinstance(tag_filter, QComboBox) else None
+            return DuelManagementQuery(
+                limit=200,
+                occurred_from=occurred_from,
+                occurred_to=occurred_to,
+                season_id=season_filter.currentData()
+                if isinstance(season_filter, QComboBox)
                 else None,
-                occurred_to=date_to.date().toPython()
-                if isinstance(date_to, QDateEdit)
+                own_deck_id=deck_filter.currentData()
+                if isinstance(deck_filter, QComboBox)
+                else None,
+                tag_entry_ids=(int(tag_id),) if tag_id is not None else (),
+                coin_face=coin_filter.currentData()
+                if isinstance(coin_filter, QComboBox)
+                else None,
+                entry_origin=origin_filter.currentData()
+                if isinstance(origin_filter, QComboBox)
                 else None,
             )
 
@@ -2074,6 +2333,17 @@ def _run(args: argparse.Namespace) -> int:
             period = self.widgets.get("history_period_mode")
             if isinstance(period, QComboBox):
                 period.setCurrentText("すべて")
+            for key in (
+                "history_saved_filter",
+                "history_season_filter",
+                "history_own_deck_filter",
+                "history_tag_filter",
+                "history_coin_filter",
+                "history_origin_filter",
+            ):
+                combo = self.widgets.get(key)
+                if isinstance(combo, QComboBox):
+                    combo.setCurrentIndex(0)
             self._refresh_history()
 
         def _selected_history_view(self) -> object | None:
@@ -2323,12 +2593,9 @@ def _run(args: argparse.Namespace) -> int:
                 self.background_timer.stop()
 
         def _set_youtube_background_status(self, busy: bool, message: str) -> None:
-            status = self.widgets.get("youtube_background_status")
+            status = self.widgets.get("youtube_status")
             if isinstance(status, QLabel):
                 status.setText(message)
-            progress = self.widgets.get("youtube_upload_progress")
-            if isinstance(progress, QProgressBar):
-                progress.setVisible(busy)
             button = self.widgets.get("history_youtube")
             if isinstance(button, QPushButton):
                 button.setEnabled(not busy)
@@ -2607,11 +2874,13 @@ def _run(args: argparse.Namespace) -> int:
             if not qcolor.isValid():
                 qcolor = QColor("#2F6B5F")
             button.setProperty("catalogColor", qcolor.name().upper())
-            button.setText("色を選択")
-            button.setToolTip("現在の色をスウォッチで表示しています")
+            button.setText("カラーを変更")
+            button.setToolTip(f"現在のカラー: {qcolor.name().upper()}")
+            text_color = self._contrast_text_color(qcolor).name()
             button.setStyleSheet(
                 "QPushButton {"
-                f"border-left: 28px solid {qcolor.name()};"
+                f"background-color: {qcolor.name()};"
+                f"color: {text_color};"
                 "text-align: center;"
                 "}"
             )
@@ -3049,7 +3318,7 @@ def _run(args: argparse.Namespace) -> int:
             )
 
         def refresh_reliability_status(self, *_args: object) -> None:
-            status = self.widgets.get("reliability_status")
+            status = self.widgets.get("settings_reliability_status")
             if isinstance(status, QLabel):
                 status.setText("事前チェックを実行しています")
             try:
@@ -3298,9 +3567,9 @@ def _run(args: argparse.Namespace) -> int:
                     if header_text == "カラー":
                         color = QColor(str(value))
                         if color.isValid():
-                            item.setText("色")
+                            item.setText("")
                             item.setData(Qt.ItemDataRole.DecorationRole, color)
-                            item.setToolTip("登録色")
+                            item.setToolTip(f"登録カラー: {color.name().upper()}")
                     table.setItem(row_index, column, item)
             table.resizeRowsToContents()
 

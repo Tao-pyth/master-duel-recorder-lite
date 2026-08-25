@@ -261,6 +261,55 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertEqual(len(views), 1)
         self.assertEqual(views[0].own_deck, "御巫")
 
+    def test_history_dashboard_filters_by_catalog_season_coin_and_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            season = service.add_season(
+                name="SEASON56",
+                season_type="ranked",
+                duel_type="ranked",
+                start_date=date(2026, 8, 1),
+                end_date=date(2026, 8, 31),
+            )
+            deck = service.add_deck("青眼")
+            tag = service.add_tag("お気に入り")
+            service.create_manual_duel_record(
+                DuelRecordValues(
+                    status="confirmed",
+                    result="win",
+                    own_deck="青眼",
+                    coin_face="heads",
+                    tags=("お気に入り",),
+                    season_id=season.season_id,
+                ),
+                occurred_at=datetime(2026, 8, 24, 12, tzinfo=timezone.utc),
+            )
+            service.create_manual_duel_record(
+                DuelRecordValues(
+                    status="confirmed",
+                    result="loss",
+                    own_deck="御巫",
+                    coin_face="tails",
+                    tags=("検証",),
+                    season_id=None,
+                ),
+                occurred_at=datetime(2026, 8, 24, 13, tzinfo=timezone.utc),
+            )
+
+            views = service.list_history_views(
+                query=DuelManagementQuery(
+                    season_id=season.season_id,
+                    own_deck_id=deck.entry_id,
+                    tag_entry_ids=(tag.entry_id,),
+                    coin_face="heads",
+                    entry_origin="manual",
+                )
+            )
+
+        self.assertEqual(len(views), 1)
+        self.assertEqual(views[0].own_deck, "青眼")
+        self.assertEqual(views[0].coin_face, "heads")
+
     def test_youtube_status_and_upload_are_available_from_application_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = MemoryCredentialStore()

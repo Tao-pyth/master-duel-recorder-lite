@@ -51,7 +51,7 @@ class V201GuiRecoveryTest(unittest.TestCase):
         self.assertIn("deck_save", widget_keys)
         self.assertIn("tag_save", widget_keys)
         self.assertIn("season_save", widget_keys)
-        self.assertIn("reliability_refresh", widget_keys)
+        self.assertIn("settings_reliability_refresh", widget_keys)
         self.assertEqual(
             set(satisfied_standard_feature_keys(widget_keys)),
             feature_keys,
@@ -85,6 +85,7 @@ class V201GuiRecoveryTest(unittest.TestCase):
         )
         self.assertLessEqual(set(UI_USABILITY_WIDGETS), set(contract["widgets"]))
         self.assertTrue(contract["template_screen_contract"]["connection_buttons_removed"])
+        self.assertTrue(contract["template_screen_contract"]["mp4_preparation_hidden"])
         self.assertEqual(
             contract["active_season_contract"]["service_method"],
             "RecorderApplicationService.active_season_summaries",
@@ -93,6 +94,7 @@ class V201GuiRecoveryTest(unittest.TestCase):
             contract["health_status_contract"]["service_method"],
             "RecorderApplicationService.diagnose",
         )
+        self.assertTrue(contract["reliability_action_contract"]["navigation_removed"])
         self.assertTrue(contract["reliability_action_contract"]["click_updates_status"])
 
     def test_standard_operation_checks_cover_each_standard_feature(self) -> None:
