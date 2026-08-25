@@ -10,6 +10,7 @@
 - PySide6 smoke contractと回帰テストへ、通常GUI内レビュー導線、対応拡張子、fallback、タイムライン列契約を追加した
 - SQLite schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
 - Ruff、全591テスト、PySide6戦績管理GUI smoke、CLI/GUI/updater EXEビルド、3 EXEスモークに合格した
+- GitHub Actions run `32848688489` でWindows EXE release workflow、3 EXEスモーク、公開asset検証、ダウンロード後スモークに合格し、GitHub Release `v2.4.0` として公開した
 
 ## V2.3.0: PySide6 UI実操作回復 - 2026-08-25
 
