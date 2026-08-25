@@ -13,6 +13,7 @@
 - PySide6 smoke contractと回帰テストへ、固定状態表示、編集保存、テンプレート画面責務、信頼性ボタン、バックグラウンド処理、UI高さ契約を追加した
 - SQLite schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
 - Ruff、全590テスト、PySide6 GUI smoke、スクリーンショット確認に合格した
+- GitHub Actions run `32796425233` でWindows EXE release workflow、3 EXEスモーク、公開asset検証、ダウンロード後スモークに合格し、GitHub Release `v2.3.0` として公開した
 
 ## V2.2.3: 戦績管理ハブ実操作Hotfix - 2026-08-23
 

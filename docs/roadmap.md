@@ -1159,7 +1159,7 @@
 
 ## V2.3.0: PySide6 UI実操作回復
 
-状態: 公開準備中
+状態: 完了
 
 - 左下ステータスを固定「要確認」から、録画前診断結果に基づく状態表示へ変更する
 - 録画画面の開催中シーズン表示を、現在日付を含むシーズン取得へ接続する
@@ -1172,5 +1172,7 @@
 - SQLite schema、設定形式、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 
 追跡: [Release Contract](release-contracts/2.3.0.md)。
+
+完了記録: commit `a7e3303`、タグ `v2.3.0`、GitHub Release公開、Windows EXE release workflow成功、公開asset検証、ダウンロード後EXEスモークまで完了。
 
 完了条件: PySide6 GUIの主要な未接続UIが実操作または明確な状態表示へ戻り、Ruff、全テスト、PySide6 GUI smoke、EXEビルド、3 EXEスモーク、公開Release asset検証、Release closureが完了すること。
