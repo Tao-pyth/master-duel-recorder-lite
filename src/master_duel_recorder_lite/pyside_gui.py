@@ -20,6 +20,7 @@ from .gui_feature_parity import (
     required_standard_widget_keys,
     satisfied_standard_feature_keys,
 )
+from .pyside_review import REVIEW_WIDGETS
 from .ui_preferences import load_ui_preferences, save_ui_preferences
 from .uninstall import run_cleanup_manifest
 
@@ -383,6 +384,15 @@ def smoke_contract(
             ],
             "danger_button": "history_delete",
         },
+        "review_video_contract": {
+            "entry_button": "history_play",
+            "widgets": list(REVIEW_WIDGETS),
+            "supported_extensions": [".mp4", ".mkv"],
+            "fallback": "external_player",
+            "timeline_columns": ["経過", "種別", "状態", "ラベル", "由来"],
+            "marker_source": "RecorderApplicationService.add_review_marker",
+            "clip_export_source": "RecorderApplicationService.export_review_clip",
+        },
         "settings_parity_widgets": list(SETTINGS_PARITY_WIDGETS),
         "settings_parity_contract": all(
             widget in widget_keys for widget in SETTINGS_PARITY_WIDGETS
@@ -657,6 +667,7 @@ def _run(args: argparse.Namespace) -> int:
             self.load_runtime_data = load_runtime_data
             self.widgets: dict[str, QWidget] = {}
             self.nav_buttons: dict[str, QPushButton] = {}
+            self.review_windows: list[QWidget] = []
             self.available_update: UpdateRelease | None = None
             self.history_views_by_row_id: dict[str, object] = {}
             self.catalog_entries_by_id: dict[int, object] = {}
@@ -2122,7 +2133,43 @@ def _run(args: argparse.Namespace) -> int:
             if not recording_id:
                 self._show_information("録画再生", "録画がある行を選択してください。")
                 return
-            self._run_action("録画再生", lambda: self.service.play_recording(recording_id))
+            try:
+                from .pyside_review import PySideReviewError, create_review_window
+
+                review_window = create_review_window(
+                    service=self.service,
+                    recording_id=recording_id,
+                    parent=self,
+                )
+            except PySideReviewError as exc:
+                self._fallback_to_external_player(recording_id, reason=str(exc))
+                return
+            except Exception as exc:
+                self._show_warning("レビュー画面を開けません", str(exc))
+                self._append_activity("レビュー画面の起動に失敗しました")
+                return
+            self.review_windows.append(review_window)
+            review_window.destroyed.connect(
+                lambda _object=None, window=review_window: self._forget_review_window(window)
+            )
+            review_window.show()
+            self._append_activity(f"レビュー画面を開きました: {recording_id}")
+
+        def _fallback_to_external_player(self, recording_id: str, *, reason: str) -> None:
+            try:
+                self.service.play_recording(recording_id)
+            except Exception as exc:
+                self._show_warning(
+                    "録画再生に失敗しました",
+                    f"{reason}\n外部プレイヤーでも開けませんでした: {exc}",
+                )
+                self._append_activity("録画再生に失敗しました")
+                return
+            self._append_activity(f"外部プレイヤーで開きました: {recording_id}")
+
+        def _forget_review_window(self, window: QWidget) -> None:
+            if window in self.review_windows:
+                self.review_windows.remove(window)
 
         def _show_selected_duel_editor(self) -> None:
             selected = self._selected_history_view()

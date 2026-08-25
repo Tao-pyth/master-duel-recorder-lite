@@ -53,6 +53,8 @@ PySide6レビューは`pyside_review.py`へ隔離し、PySide6 importは同モ�
 
 Tkinter GUIからは別プロセスで`mdrl review launch RECORDING_ID --fallback-external`を起動する。これにより、TkinterとQtのevent loop競合を避け、PySide6起動失敗が既存GUIの状態や管理データへ影響しないようにする。
 
+V2.4.0以降、PySide6通常GUIからは同一Qt event loop内で`pyside_review.create_review_window()`を呼び出す。レビューウィンドウは`app.exec()`を再実行せず、親GUIがウィンドウ参照を保持して寿命を管理する。Qt Multimediaの読み込み失敗、未対応拡張子、再生エラーでは`RecorderApplicationService.play_recording`による外部プレイヤーfallbackへ戻す。
+
 ## DB / 設定migrationを行わない理由
 
 V1.5.0で追加するデータはレビュー表示用の派生データであり、既存の録画履歴、対戦記録、タイムライン、YouTube投稿履歴から生成できる。新しい永続列や設定キーがなくても、録画再生、タイムライン選択、現在位置マーカー、クリップ出力導線を検証できるため、DB schema migrationとConfiguration Migrationは不要である。

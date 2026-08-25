@@ -13,6 +13,10 @@ from master_duel_recorder_lite.pyside_gui import (
     history_table_display_row,
     smoke_contract,
 )
+from master_duel_recorder_lite.pyside_review import (
+    REVIEW_WIDGETS,
+    review_timeline_display_row,
+)
 
 
 class PySideGuiContractTest(unittest.TestCase):
@@ -122,6 +126,18 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertEqual(contract["missing_standard_widgets"], [])
         self.assertEqual(contract["failed_standard_operation_checks"], [])
         self.assertTrue(contract["youtube_flow_contract"])
+        self.assertEqual(contract["review_video_contract"]["entry_button"], "history_play")
+        self.assertEqual(
+            contract["review_video_contract"]["supported_extensions"],
+            [".mp4", ".mkv"],
+        )
+        self.assertEqual(contract["review_video_contract"]["fallback"], "external_player")
+        self.assertEqual(
+            contract["review_video_contract"]["timeline_columns"],
+            ["経過", "種別", "状態", "ラベル", "由来"],
+        )
+        for widget in REVIEW_WIDGETS:
+            self.assertIn(widget, contract["review_video_contract"]["widgets"])
         self.assertNotIn("youtube_connect", contract["widgets"])
         self.assertNotIn("youtube_disconnect", contract["widgets"])
         self.assertNotIn("youtube_refresh", contract["widgets"])
@@ -165,6 +181,22 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertNotIn("first", row)
         self.assertNotIn("heads", row)
         self.assertNotIn("ranked", row)
+
+    def test_review_timeline_display_row_keeps_timeline_support_columns(self) -> None:
+        event = SimpleNamespace(
+            elapsed_label="01:23.456",
+            event_type="marker",
+            status="confirmed",
+            label="レビューで追加",
+            source="manual",
+        )
+
+        row = review_timeline_display_row(event)
+
+        self.assertEqual(
+            row,
+            ("01:23.456", "marker", "confirmed", "レビューで追加", "manual"),
+        )
 
 
 if __name__ == "__main__":
