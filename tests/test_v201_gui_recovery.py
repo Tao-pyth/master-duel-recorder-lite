@@ -48,6 +48,10 @@ class V201GuiRecoveryTest(unittest.TestCase):
         self.assertIn("youtube_template", widget_keys)
         self.assertIn("data_backup_table", widget_keys)
         self.assertIn("data_protection_scope", widget_keys)
+        self.assertIn("deck_save", widget_keys)
+        self.assertIn("tag_save", widget_keys)
+        self.assertIn("season_save", widget_keys)
+        self.assertIn("reliability_refresh", widget_keys)
         self.assertEqual(
             set(satisfied_standard_feature_keys(widget_keys)),
             feature_keys,
@@ -80,6 +84,16 @@ class V201GuiRecoveryTest(unittest.TestCase):
             set(RICH_UI_SECTION_WIDGETS),
         )
         self.assertLessEqual(set(UI_USABILITY_WIDGETS), set(contract["widgets"]))
+        self.assertTrue(contract["template_screen_contract"]["connection_buttons_removed"])
+        self.assertEqual(
+            contract["active_season_contract"]["service_method"],
+            "RecorderApplicationService.active_season_summaries",
+        )
+        self.assertEqual(
+            contract["health_status_contract"]["service_method"],
+            "RecorderApplicationService.diagnose",
+        )
+        self.assertTrue(contract["reliability_action_contract"]["click_updates_status"])
 
     def test_standard_operation_checks_cover_each_standard_feature(self) -> None:
         feature_keys = {feature.key for feature in STANDARD_GUI_FEATURES}
@@ -120,6 +134,10 @@ class V201GuiRecoveryTest(unittest.TestCase):
         self.assertIn("post_recording_workflow_contract", script)
         self.assertIn("data_protection_display_contract", script)
         self.assertIn("queue_manifest_oauth_excluded_text", script)
+        self.assertIn("template_screen_contract", script)
+        self.assertIn("background_operation_contract", script)
+        self.assertIn("settings_youtube_connect", script)
+        self.assertNotIn('"youtube_connect"', script)
 
     def test_feature_parity_document_lists_every_standard_feature(self) -> None:
         project_root = Path(__file__).resolve().parents[1]

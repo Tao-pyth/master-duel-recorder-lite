@@ -74,6 +74,40 @@ class PySideGuiContractTest(unittest.TestCase):
         )
         self.assertTrue(contract["table_readability_contract"]["horizontal_scroll"])
         self.assertTrue(contract["color_swatch_contract"]["history_deck_decoration"])
+        self.assertTrue(contract["color_swatch_contract"]["catalog_color_codes_hidden"])
+        self.assertEqual(
+            contract["control_height_contract"],
+            {
+                "button_min_height": 36,
+                "input_min_height": 36,
+                "combo_min_height": 36,
+                "date_picker_min_height": 36,
+            },
+        )
+        self.assertEqual(
+            contract["active_season_contract"]["status_widget"],
+            "active_season_status",
+        )
+        self.assertTrue(contract["health_status_contract"]["fixed_warning_removed"])
+        self.assertIn("deck_save", contract["catalog_edit_contract"]["deck_widgets"])
+        self.assertIn("tag_save", contract["catalog_edit_contract"]["tag_widgets"])
+        self.assertIn("season_save", contract["season_edit_contract"]["widgets"])
+        self.assertTrue(contract["season_edit_contract"]["date_picker"])
+        self.assertTrue(contract["template_screen_contract"]["connection_buttons_removed"])
+        self.assertEqual(
+            contract["template_screen_contract"]["connection_management_page"],
+            "settings",
+        )
+        self.assertIn(
+            "reliability_refresh",
+            contract["reliability_action_contract"]["buttons"],
+        )
+        self.assertTrue(contract["background_operation_contract"]["youtube_upload_worker"])
+        self.assertEqual(
+            contract["background_operation_contract"]["progress_widget"],
+            "youtube_upload_progress",
+        )
+        self.assertTrue(contract["background_operation_contract"]["double_submit_guard"])
         self.assertTrue(contract["settings_parity_contract"])
         self.assertEqual(
             contract["settings_parity_widgets"],
@@ -88,6 +122,10 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertEqual(contract["missing_standard_widgets"], [])
         self.assertEqual(contract["failed_standard_operation_checks"], [])
         self.assertTrue(contract["youtube_flow_contract"])
+        self.assertNotIn("youtube_connect", contract["widgets"])
+        self.assertNotIn("youtube_disconnect", contract["widgets"])
+        self.assertNotIn("youtube_refresh", contract["widgets"])
+        self.assertNotIn("youtube_test_upload", contract["widgets"])
         self.assertEqual(contract["runtime_data"], "user_data")
         for widget in (*SMOKE_WIDGETS, *UI_USABILITY_WIDGETS):
             self.assertIn(widget, contract["widgets"])

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 from dataclasses import dataclass
+from datetime import date
 import importlib.util
 import json
 from pathlib import Path
@@ -84,6 +86,8 @@ RICH_UI_SECTION_WIDGETS: tuple[str, ...] = (
 )
 
 UI_USABILITY_WIDGETS: tuple[str, ...] = (
+    "nav_health_status",
+    "active_season_status",
     "history_table",
     "history_date_from_picker",
     "history_date_to_picker",
@@ -93,6 +97,13 @@ UI_USABILITY_WIDGETS: tuple[str, ...] = (
     "deck_catalog_table",
     "tag_catalog_table",
     "season_table",
+    "deck_name_input",
+    "tag_name_input",
+    "season_name_input",
+    "reliability_refresh",
+    "reliability_setup_check",
+    "youtube_background_status",
+    "youtube_upload_progress",
 )
 
 SETTINGS_PARITY_WIDGETS: tuple[str, ...] = (
@@ -323,6 +334,8 @@ def smoke_contract(
         "color_swatch_contract": {
             "catalog_tables": ["deck_catalog_table", "tag_catalog_table"],
             "history_deck_decoration": True,
+            "catalog_color_codes_hidden": True,
+            "selection_color_independent": True,
         },
         "history_hub_operation_contract": {
             "connected_buttons": [
@@ -381,6 +394,78 @@ def smoke_contract(
             "download_enabled_only_after_candidate": True,
             "latest_without_candidate_disables_download": True,
         },
+        "active_season_contract": {
+            "status_widget": "active_season_status",
+            "service_method": "RecorderApplicationService.active_season_summaries",
+            "fixed_loading_text_removed": True,
+        },
+        "health_status_contract": {
+            "status_widget": "nav_health_status",
+            "service_method": "RecorderApplicationService.diagnose",
+            "fixed_warning_removed": True,
+        },
+        "catalog_edit_contract": {
+            "deck_widgets": [
+                "deck_name_input",
+                "deck_add",
+                "deck_save",
+                "deck_delete",
+            ],
+            "tag_widgets": [
+                "tag_name_input",
+                "tag_add",
+                "tag_save",
+                "tag_delete",
+            ],
+        },
+        "season_edit_contract": {
+            "widgets": [
+                "season_name_input",
+                "season_add",
+                "season_save",
+                "season_archive",
+                "season_report",
+                "season_start_date_picker",
+                "season_end_date_picker",
+            ],
+            "date_picker": True,
+        },
+        "template_screen_contract": {
+            "editor_widgets": [
+                "youtube_template_title",
+                "youtube_template",
+                "youtube_template_tags",
+                "youtube_template_save",
+                "youtube_background_status",
+                "youtube_upload_progress",
+            ],
+            "connection_buttons_removed": all(
+                widget not in widget_keys
+                for widget in (
+                    "youtube_connect",
+                    "youtube_disconnect",
+                    "youtube_refresh",
+                    "youtube_test_upload",
+                )
+            ),
+            "connection_management_page": "settings",
+        },
+        "reliability_action_contract": {
+            "buttons": ["reliability_refresh", "reliability_setup_check"],
+            "click_updates_status": True,
+        },
+        "background_operation_contract": {
+            "executor": "ThreadPoolExecutor",
+            "youtube_upload_worker": True,
+            "progress_widget": "youtube_upload_progress",
+            "double_submit_guard": True,
+        },
+        "control_height_contract": {
+            "button_min_height": 36,
+            "input_min_height": 36,
+            "combo_min_height": 36,
+            "date_picker_min_height": 36,
+        },
         "rich_ui_baseline_assets": list(RICH_BASELINE_ASSETS),
         "rich_ui_section_widgets": list(RICH_UI_SECTION_WIDGETS),
         "rich_ui_baseline_contract": all(
@@ -428,13 +513,14 @@ def _run(args: argparse.Namespace) -> int:
     if not availability.available:
         raise PySideGuiError(availability.message)
     try:
-        from PySide6.QtCore import QDate, QPointF, Qt
+        from PySide6.QtCore import QDate, QPointF, Qt, QTimer
         from PySide6.QtGui import QColor, QPainter, QPen
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QApplication,
             QCheckBox,
             QComboBox,
+            QColorDialog,
             QDateEdit,
             QFileDialog,
             QFrame,
@@ -447,6 +533,7 @@ def _run(args: argparse.Namespace) -> int:
             QListWidget,
             QMainWindow,
             QMessageBox,
+            QProgressBar,
             QPushButton,
             QScrollArea,
             QSizePolicy,
@@ -572,6 +659,23 @@ def _run(args: argparse.Namespace) -> int:
             self.nav_buttons: dict[str, QPushButton] = {}
             self.available_update: UpdateRelease | None = None
             self.history_views_by_row_id: dict[str, object] = {}
+            self.catalog_entries_by_id: dict[int, object] = {}
+            self.seasons_by_id: dict[int, object] = {}
+            self.selected_catalog_entry_ids: dict[str, int | None] = {
+                "decks": None,
+                "tags": None,
+            }
+            self.selected_season_id: int | None = None
+            self.background_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="mdrl-gui"
+            )
+            self.background_tasks: list[
+                tuple[str, concurrent.futures.Future[object], Any]
+            ] = []
+            self.youtube_upload_running = False
+            self.background_timer = QTimer(self)
+            self.background_timer.setInterval(300)
+            self.background_timer.timeout.connect(self._poll_background_tasks)
             self.setting_fields: dict[str, QLineEdit] = {}
             self.setting_checks: dict[str, QCheckBox] = {}
             self.setting_field_keys: dict[str, str] = {}
@@ -586,6 +690,11 @@ def _run(args: argparse.Namespace) -> int:
             self.widgets[key] = widget
             widget.setObjectName(key)
             return widget
+
+        def closeEvent(self, event: object) -> None:
+            self.background_timer.stop()
+            self.background_executor.shutdown(wait=False, cancel_futures=True)
+            super().closeEvent(event)
 
         def _build(self) -> None:
             root = QWidget()
@@ -614,9 +723,11 @@ def _run(args: argparse.Namespace) -> int:
                 nav_layout.addWidget(button)
                 self.nav_buttons[page] = button
             nav_layout.addStretch(1)
-            warning = QLabel("△  要確認")
-            warning.setObjectName("navWarning")
-            nav_layout.addWidget(warning)
+            health = self._register("nav_health_status", QLabel("状態: 未確認"))
+            assert isinstance(health, QLabel)
+            health.setObjectName("navWarning")
+            health.setWordWrap(True)
+            nav_layout.addWidget(health)
 
             content = QWidget()
             content.setObjectName("content")
@@ -726,6 +837,11 @@ def _run(args: argparse.Namespace) -> int:
             button.setProperty("variant", variant)
             return button
 
+        def _plain_button(self, text: str, variant: str = "secondary") -> QPushButton:
+            button = QPushButton(text)
+            button.setProperty("variant", variant)
+            return button
+
         def _date_picker(self, key: str) -> QDateEdit:
             picker = self._register(key, QDateEdit())
             assert isinstance(picker, QDateEdit)
@@ -733,10 +849,15 @@ def _run(args: argparse.Namespace) -> int:
             picker.setDisplayFormat("yyyy-MM-dd")
             picker.setDate(QDate.currentDate())
             picker.setMinimumWidth(128)
+            picker.setToolTip("カレンダーから日付を選択できます")
             calendar = picker.calendarWidget()
             if calendar is not None:
                 calendar.setGridVisible(True)
             return picker
+
+        @staticmethod
+        def _date_to_qdate(value: date) -> QDate:
+            return QDate(value.year, value.month, value.day)
 
         def _configure_table(
             self,
@@ -844,7 +965,12 @@ def _run(args: argparse.Namespace) -> int:
             manual_section, manual_layout = self._section("record_manual_section", "")
             manual_row = QHBoxLayout()
             manual_row.addWidget(self._button("manual_duel_add", "＋ 戦績を追加（録画なし）"))
-            manual_row.addWidget(QLabel("開催中のシーズンを読み込み中"))
+            active_season = self._register(
+                "active_season_status", QLabel("開催中のシーズン: 未確認")
+            )
+            assert isinstance(active_season, QLabel)
+            active_season.setWordWrap(True)
+            manual_row.addWidget(active_season)
             manual_row.addStretch(1)
             manual_layout.addLayout(manual_row)
             layout.addWidget(manual_section)
@@ -1060,25 +1186,49 @@ def _run(args: argparse.Namespace) -> int:
             is_deck = key == "decks"
             editor_key = "deck_editor" if is_deck else "tag_editor"
             title = "デッキ名管理" if is_deck else "タグ管理"
+            prefix = "deck" if is_deck else "tag"
             editor, editor_layout = self._section(editor_key, title)
             grid = QGridLayout()
             grid.addWidget(QLabel("名前"), 0, 0)
-            grid.addWidget(QLineEdit(), 0, 1, 1, 3)
+            name = self._register(f"{prefix}_name_input", QLineEdit())
+            assert isinstance(name, QLineEdit)
+            grid.addWidget(name, 0, 1, 1, 3)
             grid.addWidget(QLabel("説明"), 1, 0)
-            grid.addWidget(QLineEdit(), 1, 1, 1, 3)
+            description = self._register(f"{prefix}_description_input", QLineEdit())
+            assert isinstance(description, QLineEdit)
+            grid.addWidget(description, 1, 1, 1, 3)
             grid.addWidget(QLabel("カラー"), 2, 0)
-            grid.addWidget(QPushButton("色を選択"), 2, 1)
+            color_button = self._register(f"{prefix}_color_button", QPushButton("色を選択"))
+            assert isinstance(color_button, QPushButton)
+            color_button.clicked.connect(lambda _checked=False, area=key: self._choose_catalog_color(area))
+            self._set_color_button(color_button, "#2F6B5F" if is_deck else "#4F6F8F")
+            grid.addWidget(color_button, 2, 1)
             if is_deck:
-                grid.addWidget(QCheckBox("相手デッキのみで使用"), 2, 2)
-                grid.addWidget(QCheckBox("履歴・統計で非表示"), 2, 3)
+                opponent = self._register("deck_opponent_only", QCheckBox("相手デッキのみで使用"))
+                hidden = self._register("deck_hidden_from_history", QCheckBox("履歴・統計で非表示"))
+                assert isinstance(opponent, QCheckBox)
+                assert isinstance(hidden, QCheckBox)
+                grid.addWidget(opponent, 2, 2)
+                grid.addWidget(hidden, 2, 3)
             else:
-                grid.addWidget(QCheckBox("デッキ名登録でのみ使用"), 2, 2)
+                deck_only = self._register("tag_deck_only", QCheckBox("デッキ名登録でのみ使用"))
+                assert isinstance(deck_only, QCheckBox)
+                grid.addWidget(deck_only, 2, 2)
             editor_layout.addLayout(grid)
             actions = QHBoxLayout()
             actions.addStretch(1)
-            actions.addWidget(QPushButton("追加"))
-            actions.addWidget(QPushButton("保存"))
-            actions.addWidget(QPushButton("削除"))
+            add_button = self._register(f"{prefix}_add", QPushButton("追加"))
+            save_button = self._register(f"{prefix}_save", QPushButton("保存"))
+            delete_button = self._register(f"{prefix}_delete", QPushButton("削除"))
+            assert isinstance(add_button, QPushButton)
+            assert isinstance(save_button, QPushButton)
+            assert isinstance(delete_button, QPushButton)
+            add_button.clicked.connect(lambda _checked=False, area=key: self._add_catalog_entry(area))
+            save_button.clicked.connect(lambda _checked=False, area=key: self._save_catalog_entry(area))
+            delete_button.clicked.connect(lambda _checked=False, area=key: self._delete_catalog_entry(area))
+            actions.addWidget(add_button)
+            actions.addWidget(save_button)
+            actions.addWidget(delete_button)
             editor_layout.addLayout(actions)
             layout.addWidget(editor)
 
@@ -1100,6 +1250,9 @@ def _run(args: argparse.Namespace) -> int:
             )
             widget_key = "deck_catalog_table" if is_deck else "tag_catalog_table"
             table = self._table(widget_key, headers, rows)
+            table.itemSelectionChanged.connect(
+                lambda area=key: self._catalog_selection_changed(area)
+            )
             if is_deck:
                 self._configure_table(
                     table,
@@ -1125,36 +1278,48 @@ def _run(args: argparse.Namespace) -> int:
             editor, editor_layout = self._section("season_editor", "シーズン管理")
             grid = QGridLayout()
             grid.addWidget(QLabel("名前"), 0, 0)
-            grid.addWidget(QLineEdit(), 0, 1)
+            name = self._register("season_name_input", QLineEdit())
+            assert isinstance(name, QLineEdit)
+            grid.addWidget(name, 0, 1)
             grid.addWidget(QLabel("種別"), 0, 2)
-            type_box = QComboBox()
-            type_box.addItems(("ランク戦", "イベント", "その他"))
+            type_box = self._register("season_type_select", QComboBox())
+            assert isinstance(type_box, QComboBox)
+            type_box.addItems(("ランク戦", "イベント", "カスタム"))
             grid.addWidget(type_box, 0, 3)
             grid.addWidget(QLabel("開始日"), 1, 0)
             grid.addWidget(self._date_picker("season_start_date_picker"), 1, 1)
             grid.addWidget(QLabel("終了日"), 1, 2)
             grid.addWidget(self._date_picker("season_end_date_picker"), 1, 3)
             grid.addWidget(QLabel("説明"), 2, 0)
-            grid.addWidget(QLineEdit(), 2, 1, 1, 3)
+            description = self._register("season_description_input", QLineEdit())
+            assert isinstance(description, QLineEdit)
+            grid.addWidget(description, 2, 1, 1, 3)
             editor_layout.addLayout(grid)
             actions = QHBoxLayout()
             actions.addStretch(1)
-            for text in ("追加", "保存", "アーカイブ", "レポート"):
-                actions.addWidget(QPushButton(text))
+            for key, text, action in (
+                ("season_add", "追加", self._add_season),
+                ("season_save", "保存", self._save_selected_season),
+                ("season_archive", "アーカイブ", self._archive_selected_season),
+                ("season_report", "レポート", self._show_selected_season_report),
+            ):
+                button = self._register(key, QPushButton(text))
+                assert isinstance(button, QPushButton)
+                button.clicked.connect(action)
+                actions.addWidget(button)
             editor_layout.addLayout(actions)
             layout.addWidget(editor)
-            layout.addWidget(
-                self._table(
-                    "season_table",
-                    ("シーズン", "種別", "期間", "状態"),
-                    (
-                        ("WCS予選", "イベント", "2026-08-01 - 2026-08-20", "有効"),
-                        ("ランク戦 8月", "ランク戦", "2026-08-01 - 2026-08-31", "有効"),
-                    ),
-                    column_widths=(220, 96, 210, 96),
+            table = self._table(
+                "season_table",
+                ("シーズン", "種別", "期間", "状態"),
+                (
+                    ("WCS予選", "イベント", "2026-08-01 - 2026-08-20", "有効"),
+                    ("ランク戦 8月", "ランク戦", "2026-08-01 - 2026-08-31", "有効"),
                 ),
-                stretch=1,
+                column_widths=(220, 96, 210, 96),
             )
+            table.itemSelectionChanged.connect(self._season_selection_changed)
+            layout.addWidget(table, stretch=1)
 
         def _template_page(self, layout: QVBoxLayout) -> None:
             editor, editor_layout = self._section(
@@ -1162,7 +1327,8 @@ def _run(args: argparse.Namespace) -> int:
             )
             grid = QGridLayout()
             grid.addWidget(QLabel("タイトル"), 0, 0)
-            title = QLineEdit("{date} {own_deck} 対 {opponent_deck}")
+            title = self._register("youtube_template_title", QLineEdit("{date} {own_deck} 対 {opponent_deck}"))
+            assert isinstance(title, QLineEdit)
             grid.addWidget(title, 0, 1)
             grid.addWidget(QLabel("概要欄"), 1, 0)
             template = self._register("youtube_template", QTextEdit())
@@ -1179,7 +1345,9 @@ def _run(args: argparse.Namespace) -> int:
             )
             grid.addWidget(template, 1, 1)
             grid.addWidget(QLabel("タグ"), 2, 0)
-            grid.addWidget(QLineEdit("MasterDuel, 遊戯王, {own_deck}"), 2, 1)
+            tags = self._register("youtube_template_tags", QLineEdit("MasterDuel, 遊戯王, {own_deck}"))
+            assert isinstance(tags, QLineEdit)
+            grid.addWidget(tags, 2, 1)
             editor_layout.addLayout(grid)
             variables = QLabel(
                 "使用できる変数: {date}, {result}, {own_deck}, "
@@ -1187,21 +1355,35 @@ def _run(args: argparse.Namespace) -> int:
             )
             variables.setWordWrap(True)
             editor_layout.addWidget(variables)
-            connection = QHBoxLayout()
-            connection.addWidget(self._register("youtube_status", QLabel("YouTube: 未接続")))
-            for key, text in (
-                ("youtube_connect", "接続"),
-                ("youtube_disconnect", "切断"),
-                ("youtube_refresh", "更新"),
-                ("youtube_test_upload", "privateテスト"),
-            ):
-                connection.addWidget(self._button(key, text))
-            connection.addStretch(1)
-            editor_layout.addLayout(connection)
+            status = self._register(
+                "youtube_status",
+                QLabel("YouTube連携は設定画面で管理します。テンプレートは投稿時の初期値です。"),
+            )
+            assert isinstance(status, QLabel)
+            status.setWordWrap(True)
+            editor_layout.addWidget(status)
+            background_status = self._register(
+                "youtube_background_status", QLabel("バックグラウンド処理: 待機中")
+            )
+            assert isinstance(background_status, QLabel)
+            background_status.setWordWrap(True)
+            editor_layout.addWidget(background_status)
+            progress = self._register("youtube_upload_progress", QProgressBar())
+            assert isinstance(progress, QProgressBar)
+            progress.setRange(0, 0)
+            progress.setTextVisible(False)
+            progress.setVisible(False)
+            editor_layout.addWidget(progress)
             save_row = QHBoxLayout()
             save_row.addStretch(1)
-            save_row.addWidget(QPushButton("一覧"))
-            save_row.addWidget(QPushButton("保存"))
+            list_button = self._register("youtube_template_list", QPushButton("準備一覧を更新"))
+            save_button = self._register("youtube_template_save", QPushButton("保存"))
+            assert isinstance(list_button, QPushButton)
+            assert isinstance(save_button, QPushButton)
+            list_button.clicked.connect(self._refresh_preparations)
+            save_button.clicked.connect(self._save_youtube_template)
+            save_row.addWidget(list_button)
+            save_row.addWidget(save_button)
             editor_layout.addLayout(save_row)
             layout.addWidget(editor, stretch=1)
 
@@ -1234,8 +1416,14 @@ def _run(args: argparse.Namespace) -> int:
             status.setWordWrap(True)
             preflight_layout.addWidget(status)
             actions = QHBoxLayout()
-            actions.addWidget(QPushButton("状態更新"))
-            actions.addWidget(QPushButton("初回導入を確認"))
+            refresh = self._register("reliability_refresh", QPushButton("状態更新"))
+            setup = self._register("reliability_setup_check", QPushButton("初回導入を確認"))
+            assert isinstance(refresh, QPushButton)
+            assert isinstance(setup, QPushButton)
+            refresh.clicked.connect(self.refresh_reliability_status)
+            setup.clicked.connect(self.show_initial_setup_status)
+            actions.addWidget(refresh)
+            actions.addWidget(setup)
             actions.addStretch(1)
             preflight_layout.addLayout(actions)
             layout.addWidget(preflight)
@@ -1773,10 +1961,12 @@ def _run(args: argparse.Namespace) -> int:
                 self._refresh_history,
                 self._refresh_catalogs,
                 self._refresh_seasons,
+                self._refresh_active_seasons,
                 self._refresh_youtube,
                 self._refresh_preparations,
                 self._refresh_data_protection,
                 self._refresh_statistics,
+                self._refresh_health_status,
             )
             loaded = 0
             errors: list[str] = []
@@ -1792,6 +1982,39 @@ def _run(args: argparse.Namespace) -> int:
                     activity.addItem(f"一部の表示更新に失敗しました: {errors[0]}")
                 else:
                     activity.addItem(f"既存データを{loaded}領域で読み込みました")
+
+        def _refresh_active_seasons(self) -> None:
+            label = self.widgets.get("active_season_status")
+            if not isinstance(label, QLabel):
+                return
+            try:
+                summaries = self.service.active_season_summaries()
+            except Exception as exc:
+                label.setText(f"開催中のシーズンを確認できません: {exc}")
+                return
+            if not summaries:
+                label.setText("開催中のシーズン: なし")
+                return
+            names = " / ".join(summary.season.name for summary in summaries)
+            label.setText(f"開催中のシーズン: {names}")
+
+        def _refresh_health_status(self) -> None:
+            label = self.widgets.get("nav_health_status")
+            if not isinstance(label, QLabel):
+                return
+            try:
+                report = self.service.diagnose()
+            except Exception as exc:
+                label.setText(f"△ 状態確認失敗: {exc}")
+                return
+            errors = [check for check in report.checks if getattr(check.status, "value", "") == "error"]
+            warnings = [check for check in report.checks if getattr(check.status, "value", "") == "warning"]
+            if errors:
+                label.setText(f"△ 要確認: {errors[0].label}")
+            elif warnings:
+                label.setText(f"△ 注意: {warnings[0].label}")
+            else:
+                label.setText("✓ 利用可能")
 
         def _start_recording(self) -> None:
             self._run_action("録画開始", self.service.start_recording)
@@ -1962,12 +2185,107 @@ def _run(args: argparse.Namespace) -> int:
             if not recording_id:
                 self._show_information("YouTube", "録画がある行を選択してください。")
                 return
+            if self.youtube_upload_running:
+                self._show_information(
+                    "YouTube", "YouTube投稿をバックグラウンドで実行中です。"
+                )
+                return
             try:
                 status = self.service.youtube_preparation_status(recording_id)
+                dialog = self.service.get_youtube_upload_dialog_data(recording_id)
             except Exception as exc:
                 self._show_warning("YouTube投稿を確認できません", str(exc))
                 return
-            self._show_information("YouTube", status.message)
+            if dialog.youtube_watch_url:
+                self._show_information(
+                    "YouTube",
+                    f"投稿済みです。\n{dialog.youtube_watch_url}",
+                )
+                return
+            if QMessageBox.question(
+                self,
+                "YouTube投稿",
+                f"{status.message}\n\n{dialog.title}をバックグラウンドで投稿しますか？",
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            self._start_youtube_upload(dialog)
+
+        def _start_youtube_upload(self, dialog: object) -> None:
+            self.youtube_upload_running = True
+            self._set_youtube_background_status(
+                True, f"YouTube投稿中: {getattr(dialog, 'title')}"
+            )
+
+            def operation() -> object:
+                return self.service.upload_history_to_youtube(
+                    recording_id=str(getattr(dialog, "recording_id")),
+                    title=str(getattr(dialog, "title")),
+                    description=str(getattr(dialog, "description")),
+                    tags=tuple(getattr(dialog, "tags")),
+                    privacy=str(getattr(dialog, "privacy")),
+                )
+
+            self._submit_background_task(
+                "YouTube投稿",
+                operation,
+                self._youtube_upload_completed,
+            )
+
+        def _youtube_upload_completed(self, result: object) -> None:
+            upload = getattr(result, "upload", None)
+            url = getattr(upload, "watch_url", None)
+            message = getattr(result, "message", "YouTube投稿が完了しました")
+            self.youtube_upload_running = False
+            self._set_youtube_background_status(
+                False,
+                f"YouTube投稿完了: {url or message}",
+            )
+            self._refresh_history()
+            self._refresh_youtube()
+
+        def _submit_background_task(
+            self, label: str, operation: Any, on_success: Any | None = None
+        ) -> None:
+            future = self.background_executor.submit(operation)
+            self.background_tasks.append((label, future, on_success))
+            if not self.background_timer.isActive():
+                self.background_timer.start()
+
+        def _poll_background_tasks(self) -> None:
+            remaining: list[tuple[str, concurrent.futures.Future[object], Any]] = []
+            for label, future, on_success in self.background_tasks:
+                if not future.done():
+                    remaining.append((label, future, on_success))
+                    continue
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    if label == "YouTube投稿":
+                        self.youtube_upload_running = False
+                        self._set_youtube_background_status(
+                            False, f"YouTube投稿に失敗しました: {exc}"
+                        )
+                    self._append_activity(f"{label}に失敗しました")
+                    continue
+                if on_success is not None:
+                    on_success(result)
+                else:
+                    self._append_activity(f"{label}が完了しました")
+            self.background_tasks = remaining
+            if not self.background_tasks:
+                self.background_timer.stop()
+
+        def _set_youtube_background_status(self, busy: bool, message: str) -> None:
+            status = self.widgets.get("youtube_background_status")
+            if isinstance(status, QLabel):
+                status.setText(message)
+            progress = self.widgets.get("youtube_upload_progress")
+            if isinstance(progress, QProgressBar):
+                progress.setVisible(busy)
+            button = self.widgets.get("history_youtube")
+            if isinstance(button, QPushButton):
+                button.setEnabled(not busy)
+            self._append_activity(message)
 
         def _refresh_history(self) -> None:
             dashboard = self.service.get_history_dashboard(query=self._history_query())
@@ -1998,6 +2316,11 @@ def _run(args: argparse.Namespace) -> int:
             tag_table = self.widgets["tag_catalog_table"]
             assert isinstance(deck_table, QTableWidget)
             assert isinstance(tag_table, QTableWidget)
+            decks = self.service.list_decks()
+            tags = self.service.list_tags()
+            self.catalog_entries_by_id = {
+                entry.entry_id: entry for entry in (*decks, *tags)
+            }
             self._set_table_rows(
                 deck_table,
                 tuple(
@@ -2008,8 +2331,15 @@ def _run(args: argparse.Namespace) -> int:
                         deck.usage_count,
                         "非表示" if deck.hidden_from_history_statistics else "表示",
                     )
-                    for deck in self.service.list_decks()
+                    for deck in decks
                 ),
+            )
+            for row_index, deck in enumerate(decks):
+                item = deck_table.item(row_index, 0)
+                if item is not None:
+                    item.setData(Qt.ItemDataRole.UserRole, deck.entry_id)
+            self._select_row_by_identifier(
+                deck_table, self.selected_catalog_entry_ids.get("decks")
             )
             self._set_table_rows(
                 tag_table,
@@ -2020,13 +2350,24 @@ def _run(args: argparse.Namespace) -> int:
                         tag.description,
                         "デッキ専用" if tag.deck_only else "通常",
                     )
-                    for tag in self.service.list_tags()
+                    for tag in tags
                 ),
             )
+            for row_index, tag in enumerate(tags):
+                item = tag_table.item(row_index, 0)
+                if item is not None:
+                    item.setData(Qt.ItemDataRole.UserRole, tag.entry_id)
+            self._select_row_by_identifier(
+                tag_table, self.selected_catalog_entry_ids.get("tags")
+            )
+            self._catalog_selection_changed("decks")
+            self._catalog_selection_changed("tags")
 
         def _refresh_seasons(self) -> None:
             table = self.widgets["season_table"]
             assert isinstance(table, QTableWidget)
+            seasons = self.service.list_seasons(include_archived=True)
+            self.seasons_by_id = {season.season_id: season for season in seasons}
             self._set_table_rows(
                 table,
                 tuple(
@@ -2036,15 +2377,335 @@ def _run(args: argparse.Namespace) -> int:
                         f"{season.start_date} - {season.end_date}",
                         "アーカイブ" if season.is_archived else "有効",
                     )
-                    for season in self.service.list_seasons(include_archived=True)
+                    for season in seasons
                 ),
+            )
+            for row_index, season in enumerate(seasons):
+                item = table.item(row_index, 0)
+                if item is not None:
+                    item.setData(Qt.ItemDataRole.UserRole, season.season_id)
+            self._select_row_by_identifier(table, self.selected_season_id)
+            self._season_selection_changed()
+
+        def _select_row_by_identifier(
+            self, table: QTableWidget, identifier: int | None
+        ) -> None:
+            if identifier is None:
+                table.clearSelection()
+                return
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item is not None and item.data(Qt.ItemDataRole.UserRole) == identifier:
+                    table.selectRow(row)
+                    return
+            table.clearSelection()
+
+        def _selected_table_identifier(self, table_key: str) -> int | None:
+            table = self.widgets.get(table_key)
+            if not isinstance(table, QTableWidget):
+                return None
+            row = table.currentRow()
+            if row < 0:
+                return None
+            item = table.item(row, 0)
+            if item is None:
+                return None
+            value = item.data(Qt.ItemDataRole.UserRole)
+            return int(value) if value is not None else None
+
+        def _catalog_selection_changed(self, key: str) -> None:
+            table_key = "deck_catalog_table" if key == "decks" else "tag_catalog_table"
+            selected_id = self._selected_table_identifier(table_key)
+            self.selected_catalog_entry_ids[key] = selected_id
+            entry = self.catalog_entries_by_id.get(selected_id) if selected_id else None
+            self._fill_catalog_form(key, entry)
+
+        def _fill_catalog_form(self, key: str, entry: object | None) -> None:
+            prefix = "deck" if key == "decks" else "tag"
+            name = self.widgets.get(f"{prefix}_name_input")
+            description = self.widgets.get(f"{prefix}_description_input")
+            color_button = self.widgets.get(f"{prefix}_color_button")
+            if isinstance(name, QLineEdit):
+                name.setText(str(getattr(entry, "name", "")) if entry is not None else "")
+            if isinstance(description, QLineEdit):
+                description.setText(
+                    str(getattr(entry, "description", "")) if entry is not None else ""
+                )
+            color = str(
+                getattr(entry, "color", "#2F6B5F" if key == "decks" else "#4F6F8F")
+                or ("#2F6B5F" if key == "decks" else "#4F6F8F")
+            )
+            if isinstance(color_button, QPushButton):
+                self._set_color_button(color_button, color)
+            if key == "decks":
+                opponent = self.widgets.get("deck_opponent_only")
+                hidden = self.widgets.get("deck_hidden_from_history")
+                if isinstance(opponent, QCheckBox):
+                    opponent.setChecked(bool(getattr(entry, "opponent_only", False)))
+                if isinstance(hidden, QCheckBox):
+                    hidden.setChecked(
+                        bool(getattr(entry, "hidden_from_history_statistics", False))
+                    )
+            else:
+                deck_only = self.widgets.get("tag_deck_only")
+                if isinstance(deck_only, QCheckBox):
+                    deck_only.setChecked(bool(getattr(entry, "deck_only", False)))
+
+        def _catalog_values(self, key: str) -> dict[str, object]:
+            prefix = "deck" if key == "decks" else "tag"
+            name = self.widgets.get(f"{prefix}_name_input")
+            description = self.widgets.get(f"{prefix}_description_input")
+            color_button = self.widgets.get(f"{prefix}_color_button")
+            values: dict[str, object] = {
+                "name": name.text().strip() if isinstance(name, QLineEdit) else "",
+                "description": description.text().strip()
+                if isinstance(description, QLineEdit)
+                else "",
+                "color": color_button.property("catalogColor")
+                if isinstance(color_button, QPushButton)
+                else ("#2F6B5F" if key == "decks" else "#4F6F8F"),
+            }
+            if key == "decks":
+                opponent = self.widgets.get("deck_opponent_only")
+                hidden = self.widgets.get("deck_hidden_from_history")
+                values["opponent_only"] = (
+                    opponent.isChecked() if isinstance(opponent, QCheckBox) else False
+                )
+                values["hidden_from_history_statistics"] = (
+                    hidden.isChecked() if isinstance(hidden, QCheckBox) else False
+                )
+            else:
+                deck_only = self.widgets.get("tag_deck_only")
+                values["deck_only"] = (
+                    deck_only.isChecked() if isinstance(deck_only, QCheckBox) else False
+                )
+            return values
+
+        def _add_catalog_entry(self, key: str) -> None:
+            values = self._catalog_values(key)
+            try:
+                if key == "decks":
+                    saved = self.service.add_deck(
+                        str(values["name"]),
+                        description=str(values["description"]),
+                        color=str(values["color"]),
+                    )
+                    saved = self.service.update_deck(saved.entry_id, **values)
+                else:
+                    saved = self.service.add_tag(
+                        str(values["name"]),
+                        description=str(values["description"]),
+                        color=str(values["color"]),
+                        deck_only=bool(values["deck_only"]),
+                    )
+            except Exception as exc:
+                self._show_warning("追加できません", str(exc))
+                return
+            self.selected_catalog_entry_ids[key] = saved.entry_id
+            self._append_activity(f"{saved.name}を追加しました")
+            self._refresh_catalogs()
+
+        def _save_catalog_entry(self, key: str) -> None:
+            entry_id = self.selected_catalog_entry_ids.get(key)
+            if entry_id is None:
+                self._show_information("保存", "保存する行を選択してください。")
+                return
+            values = self._catalog_values(key)
+            try:
+                if key == "decks":
+                    saved = self.service.update_deck(entry_id, **values)
+                else:
+                    saved = self.service.update_tag(entry_id, **values)
+            except Exception as exc:
+                self._show_warning("保存できません", str(exc))
+                return
+            self.selected_catalog_entry_ids[key] = saved.entry_id
+            self._append_activity(f"{saved.name}を保存しました")
+            self._refresh_catalogs()
+
+        def _delete_catalog_entry(self, key: str) -> None:
+            entry_id = self.selected_catalog_entry_ids.get(key)
+            if entry_id is None:
+                self._show_information("削除", "削除する行を選択してください。")
+                return
+            entry = self.catalog_entries_by_id.get(entry_id)
+            name = getattr(entry, "name", str(entry_id))
+            if QMessageBox.question(
+                self,
+                "削除",
+                f"{name}を削除またはアーカイブします。参照中の戦績は保持します。",
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                removed = self.service.delete_duel_catalog_entry(entry_id)
+            except Exception as exc:
+                self._show_warning("削除できません", str(exc))
+                return
+            self.selected_catalog_entry_ids[key] = None
+            self._append_activity(f"{removed.name}を削除しました")
+            self._refresh_catalogs()
+
+        def _choose_catalog_color(self, key: str) -> None:
+            prefix = "deck" if key == "decks" else "tag"
+            button = self.widgets.get(f"{prefix}_color_button")
+            if not isinstance(button, QPushButton):
+                return
+            current = QColor(str(button.property("catalogColor") or "#2F6B5F"))
+            selected = QColorDialog.getColor(current, self, "色を選択")
+            if selected.isValid():
+                self._set_color_button(button, selected.name().upper())
+
+        def _set_color_button(self, button: QPushButton, color: str) -> None:
+            qcolor = QColor(color)
+            if not qcolor.isValid():
+                qcolor = QColor("#2F6B5F")
+            button.setProperty("catalogColor", qcolor.name().upper())
+            button.setText("色を選択")
+            button.setToolTip("現在の色をスウォッチで表示しています")
+            button.setStyleSheet(
+                "QPushButton {"
+                f"border-left: 28px solid {qcolor.name()};"
+                "text-align: center;"
+                "}"
+            )
+
+        def _season_selection_changed(self) -> None:
+            selected_id = self._selected_table_identifier("season_table")
+            self.selected_season_id = selected_id
+            season = self.seasons_by_id.get(selected_id) if selected_id else None
+            name = self.widgets.get("season_name_input")
+            type_box = self.widgets.get("season_type_select")
+            start = self.widgets.get("season_start_date_picker")
+            end = self.widgets.get("season_end_date_picker")
+            description = self.widgets.get("season_description_input")
+            if isinstance(name, QLineEdit):
+                name.setText(str(getattr(season, "name", "")) if season else "")
+            if isinstance(type_box, QComboBox):
+                label = {
+                    "ranked": "ランク戦",
+                    "event": "イベント",
+                    "custom": "カスタム",
+                }.get(str(getattr(season, "season_type", "ranked")), "ランク戦")
+                type_box.setCurrentText(label)
+            if isinstance(start, QDateEdit):
+                value = getattr(season, "start_date", date.today())
+                start.setDate(self._date_to_qdate(value))
+            if isinstance(end, QDateEdit):
+                value = getattr(season, "end_date", date.today())
+                end.setDate(self._date_to_qdate(value))
+            if isinstance(description, QLineEdit):
+                description.setText(
+                    str(getattr(season, "description", "")) if season else ""
+                )
+
+        def _season_values(self) -> dict[str, object]:
+            name = self.widgets.get("season_name_input")
+            type_box = self.widgets.get("season_type_select")
+            start = self.widgets.get("season_start_date_picker")
+            end = self.widgets.get("season_end_date_picker")
+            description = self.widgets.get("season_description_input")
+            season_type = {
+                "ランク戦": "ranked",
+                "イベント": "event",
+                "カスタム": "custom",
+            }.get(type_box.currentText() if isinstance(type_box, QComboBox) else "", "ranked")
+            return {
+                "name": name.text().strip() if isinstance(name, QLineEdit) else "",
+                "season_type": season_type,
+                "duel_type": {
+                    "ranked": "ranked",
+                    "event": "event",
+                    "custom": "other",
+                }[season_type],
+                "start_date": start.date().toPython()
+                if isinstance(start, QDateEdit)
+                else date.today(),
+                "end_date": end.date().toPython()
+                if isinstance(end, QDateEdit)
+                else date.today(),
+                "description": description.text().strip()
+                if isinstance(description, QLineEdit)
+                else "",
+                "report_notes": str(
+                    getattr(
+                        self.seasons_by_id.get(self.selected_season_id or 0),
+                        "report_notes",
+                        "",
+                    )
+                ),
+            }
+
+        def _add_season(self, *_args: object) -> None:
+            try:
+                saved = self.service.add_season(**self._season_values())
+            except Exception as exc:
+                self._show_warning("シーズンを追加できません", str(exc))
+                return
+            self.selected_season_id = saved.season_id
+            self._append_activity(f"{saved.name}を追加しました")
+            self._refresh_seasons()
+            self._refresh_active_seasons()
+
+        def _save_selected_season(self, *_args: object) -> None:
+            if self.selected_season_id is None:
+                self._show_information("保存", "保存するシーズンを選択してください。")
+                return
+            try:
+                saved = self.service.update_season(
+                    self.selected_season_id, **self._season_values()
+                )
+            except Exception as exc:
+                self._show_warning("シーズンを保存できません", str(exc))
+                return
+            self.selected_season_id = saved.season_id
+            self._append_activity(f"{saved.name}を保存しました")
+            self._refresh_seasons()
+            self._refresh_active_seasons()
+
+        def _archive_selected_season(self, *_args: object) -> None:
+            if self.selected_season_id is None:
+                self._show_information("アーカイブ", "シーズンを選択してください。")
+                return
+            season = self.seasons_by_id.get(self.selected_season_id)
+            name = getattr(season, "name", str(self.selected_season_id))
+            if QMessageBox.question(
+                self,
+                "シーズンをアーカイブ",
+                f"{name}をアーカイブします。戦績データは保持します。",
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                saved = self.service.archive_season_report(self.selected_season_id)
+            except Exception as exc:
+                self._show_warning("シーズンをアーカイブできません", str(exc))
+                return
+            self._append_activity(f"{saved.name}をアーカイブしました")
+            self._refresh_seasons()
+            self._refresh_active_seasons()
+
+        def _show_selected_season_report(self, *_args: object) -> None:
+            if self.selected_season_id is None:
+                self._show_information("レポート", "シーズンを選択してください。")
+                return
+            try:
+                report = self.service.get_season_report(self.selected_season_id)
+            except Exception as exc:
+                self._show_warning("シーズンレポートを表示できません", str(exc))
+                return
+            metric = report.summary.filtered
+            self._show_information(
+                "シーズンレポート",
+                f"{report.season.name}\n"
+                f"{metric.matches}戦 {metric.wins}勝 / 勝率 {self._format_rate(metric.win_rate)}",
             )
 
         def _refresh_youtube(self) -> None:
             status = self.service.youtube_connection_status()
             status_label = self.widgets["youtube_status"]
             assert isinstance(status_label, QLabel)
-            status_label.setText(f"YouTube: {status.message}")
+            status_label.setText(
+                f"YouTube連携: {status.message}。接続管理は設定画面で行います。"
+            )
             settings_status = self.widgets.get("settings_youtube_status")
             if isinstance(settings_status, QLabel):
                 settings_status.setText(f"YouTube: {status.message}")
@@ -2053,18 +2714,34 @@ def _run(args: argparse.Namespace) -> int:
                 settings_scope.setText(f"scope: {status.scope or '未接続'}")
             template = self.service.get_youtube_posting_template()
             editor = self.widgets["youtube_template"]
+            title = self.widgets.get("youtube_template_title")
+            tags = self.widgets.get("youtube_template_tags")
             assert isinstance(editor, QTextEdit)
-            editor.setPlainText(
-                "\n".join(
-                    (
-                        f"タイトル: {template.title}",
-                        "説明:",
-                        template.description,
-                        f"タグ: {template.tags}",
-                        "公開範囲: private",
-                    )
+            if isinstance(title, QLineEdit):
+                title.setText(template.title)
+            editor.setPlainText(template.description)
+            if isinstance(tags, QLineEdit):
+                tags.setText(template.tags)
+
+        def _save_youtube_template(self, *_args: object) -> None:
+            title = self.widgets.get("youtube_template_title")
+            description = self.widgets.get("youtube_template")
+            tags = self.widgets.get("youtube_template_tags")
+            try:
+                template = self.service.save_youtube_posting_template(
+                    title=title.text().strip() if isinstance(title, QLineEdit) else "",
+                    description=description.toPlainText()
+                    if isinstance(description, QTextEdit)
+                    else "",
+                    tags=tags.text().strip() if isinstance(tags, QLineEdit) else "",
                 )
-            )
+            except Exception as exc:
+                self._show_warning("テンプレートを保存できません", str(exc))
+                return
+            self._append_activity("YouTube投稿テンプレートを保存しました")
+            status = self.widgets.get("youtube_status")
+            if isinstance(status, QLabel):
+                status.setText(f"テンプレートを保存しました: {template.title}")
 
         def _refresh_preparations(self) -> None:
             table = self.widgets["prepare_table"]
@@ -2324,6 +3001,48 @@ def _run(args: argparse.Namespace) -> int:
                 "最新録画のprivateテスト投稿は、戦績管理またはテンプレート画面の投稿導線から実行します。",
             )
 
+        def refresh_reliability_status(self, *_args: object) -> None:
+            status = self.widgets.get("reliability_status")
+            if isinstance(status, QLabel):
+                status.setText("事前チェックを実行しています")
+            try:
+                report = self.service.diagnose()
+            except Exception as exc:
+                if isinstance(status, QLabel):
+                    status.setText(f"信頼性チェックに失敗しました: {exc}")
+                return
+            errors = [
+                check for check in report.checks if getattr(check.status, "value", "") == "error"
+            ]
+            warnings = [
+                check
+                for check in report.checks
+                if getattr(check.status, "value", "") == "warning"
+            ]
+            if errors:
+                summary = f"要確認: {errors[0].label} - {errors[0].message}"
+            elif warnings:
+                summary = f"注意: {warnings[0].label} - {warnings[0].message}"
+            else:
+                summary = "利用可能: 録画前チェックに重大な問題はありません"
+            if isinstance(status, QLabel):
+                status.setText(summary)
+            self._refresh_health_status()
+
+        def show_initial_setup_status(self, *_args: object) -> None:
+            try:
+                report = self.service.diagnose()
+            except Exception as exc:
+                self._show_warning("初回導入を確認できません", str(exc))
+                return
+            messages = "\n".join(
+                f"- {check.label}: {check.message}" for check in report.checks[:6]
+            )
+            self._show_information(
+                "初回導入の確認",
+                "録画前に必要な設定と保存先を確認しました。\n" + messages,
+            )
+
         def export_managed_data(self, *_args: object) -> None:
             path, _filter = QFileDialog.getSaveFileName(
                 self, "管理データを書き出し", "", "JSON (*.json)"
@@ -2532,10 +3251,9 @@ def _run(args: argparse.Namespace) -> int:
                     if header_text == "カラー":
                         color = QColor(str(value))
                         if color.isValid():
-                            item.setText(color.name().upper())
-                            item.setBackground(color)
-                            item.setForeground(MainWindow._contrast_text_color(color))
-                            item.setToolTip(f"カラー: {color.name().upper()}")
+                            item.setText("色")
+                            item.setData(Qt.ItemDataRole.DecorationRole, color)
+                            item.setToolTip("登録色")
                     table.setItem(row_index, column, item)
             table.resizeRowsToContents()
 
@@ -2659,10 +3377,10 @@ def _style_sheet() -> str:
     }
     #metricValue { color: #007c7a; font-size: 24px; font-weight: 700; }
     QPushButton {
-        min-height: 30px;
-        padding: 4px 12px;
+        min-height: 36px;
+        padding: 6px 14px;
         border: 1px solid #b8c1cc;
-        border-radius: 0;
+        border-radius: 6px;
         background: #f9fafb;
         color: #111827;
     }
@@ -2678,8 +3396,8 @@ def _style_sheet() -> str:
         border-color: #aeb9c4;
     }
     QPushButton[variant="icon"] {
-        min-width: 38px;
-        padding: 4px 8px;
+        min-width: 40px;
+        padding: 6px 8px;
         font-weight: 700;
     }
     QPushButton[variant="danger"] {
@@ -2700,10 +3418,11 @@ def _style_sheet() -> str:
         border-color: #d0d7de;
     }
     QComboBox, QLineEdit, QDateEdit, QSpinBox {
-        min-height: 28px;
+        min-height: 36px;
         border: 1px solid #c8d0d8;
+        border-radius: 4px;
         background: #ffffff;
-        padding: 2px 6px;
+        padding: 4px 8px;
     }
     QTableWidget, QListWidget, QTextEdit {
         background: #ffffff;
