@@ -119,7 +119,11 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertTrue(contract["reliability_action_contract"]["navigation_removed"])
         self.assertEqual(
             contract["reliability_action_contract"]["settings_tab"],
-            "録画診断・信頼性",
+            "録画設定②",
+        )
+        self.assertEqual(
+            contract["reliability_action_contract"]["recording_tabs"],
+            ["録画設定①", "録画設定②"],
         )
         self.assertEqual(
             contract["reliability_action_contract"]["record_page_entry"],
@@ -158,9 +162,27 @@ class PySideGuiContractTest(unittest.TestCase):
         )
         self.assertEqual(contract["review_video_contract"]["fallback"], "external_player")
         self.assertEqual(
+            contract["review_video_contract"]["marker_edit_source"],
+            "RecorderApplicationService.update_review_marker_label",
+        )
+        self.assertEqual(
             contract["review_video_contract"]["timeline_columns"],
             ["経過", "種別", "状態", "ラベル", "由来"],
         )
+        self.assertIn("history_duel", contract["duel_editor_contract"]["entry_button"])
+        self.assertEqual(
+            contract["duel_editor_contract"]["save_source"],
+            "RecorderApplicationService.update_duel_record",
+        )
+        self.assertEqual(
+            contract["settings_input_contract"]["visual_language_widget"],
+            "QComboBox",
+        )
+        self.assertEqual(
+            contract["settings_input_contract"]["visual_language_choices"],
+            ["auto", "ja", "en"],
+        )
+        self.assertIn("history_duel", contract["icon_button_contract"]["buttons"])
         for widget in REVIEW_WIDGETS:
             self.assertIn(widget, contract["review_video_contract"]["widgets"])
         self.assertNotIn("youtube_connect", contract["widgets"])

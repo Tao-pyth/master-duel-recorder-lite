@@ -1613,6 +1613,11 @@ class RecorderApplicationService:
             label=request.label,
         )
 
+    def update_review_marker_label(self, event_id: str, label: str) -> DuelEvent:
+        return DuelTimelineRepository.from_runtime_paths(self.paths).update_marker_label(
+            event_id, label
+        )
+
     def export_review_clip(self, request: ReviewClipExportRequest) -> ClipExportResult:
         self._require_data_management_idle()
         discovery = discover_ffmpeg(self.load_config().config.ffmpeg_path)

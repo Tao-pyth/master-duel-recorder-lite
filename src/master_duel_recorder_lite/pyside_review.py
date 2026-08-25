@@ -31,6 +31,7 @@ REVIEW_WIDGETS: tuple[str, ...] = (
     "review_play_pause",
     "review_external_player",
     "review_marker_add",
+    "review_marker_edit",
     "review_clip_export",
     "review_position_slider",
     "review_position_label",
@@ -102,6 +103,7 @@ def create_review_window(
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QHBoxLayout,
+            QInputDialog,
             QLabel,
             QMainWindow,
             QMessageBox,
@@ -154,11 +156,14 @@ def create_review_window(
     open_external_button.setObjectName("review_external_player")
     marker_button = QPushButton("現在位置にマーカー")
     marker_button.setObjectName("review_marker_add")
+    marker_edit_button = QPushButton("マーカー編集")
+    marker_edit_button.setObjectName("review_marker_edit")
     clip_button = QPushButton("選択位置をクリップ出力")
     clip_button.setObjectName("review_clip_export")
     controls.addWidget(play_button)
     controls.addWidget(open_external_button)
     controls.addWidget(marker_button)
+    controls.addWidget(marker_edit_button)
     controls.addWidget(clip_button)
     layout.addLayout(controls)
 
@@ -178,6 +183,7 @@ def create_review_window(
     timeline.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     timeline.verticalHeader().setVisible(False)
     timeline.horizontalHeader().setStretchLastSection(True)
+    event_id_role = Qt.ItemDataRole.UserRole + 1
 
     def reload_timeline() -> None:
         refreshed = service.get_review_view_model(recording_id)
@@ -189,6 +195,7 @@ def create_review_window(
                 item = QTableWidgetItem(value)
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, event.elapsed_ms)
+                    item.setData(event_id_role, event.event_id)
                 timeline.setItem(row, column, item)
 
     reload_timeline()
@@ -226,6 +233,33 @@ def create_review_window(
             return
         reload_timeline()
 
+    def edit_marker() -> None:
+        row = timeline.currentRow()
+        type_item = timeline.item(row, 1)
+        label_item = timeline.item(row, 3)
+        elapsed_item = timeline.item(row, 0)
+        if type_item is None or label_item is None or elapsed_item is None:
+            report_error("編集するマーカーを選択してください。")
+            return
+        if type_item.text() != "marker":
+            report_error("marker行だけを編集できます。")
+            return
+        event_id = elapsed_item.data(event_id_role)
+        label, accepted = QInputDialog.getText(
+            window,
+            "マーカー編集",
+            "ラベル",
+            text=label_item.text(),
+        )
+        if not accepted:
+            return
+        try:
+            service.update_review_marker_label(str(event_id), label)
+        except Exception as exc:
+            report_error(str(exc))
+            return
+        reload_timeline()
+
     def export_clip() -> None:
         try:
             result = service.export_review_clip(
@@ -258,6 +292,7 @@ def create_review_window(
     play_button.clicked.connect(toggle_play_pause)
     open_external_button.clicked.connect(lambda: service.play_recording(recording_id))
     marker_button.clicked.connect(add_marker)
+    marker_edit_button.clicked.connect(edit_marker)
     clip_button.clicked.connect(export_clip)
     timeline.cellClicked.connect(lambda row, _column: seek_to_timeline_row(row))
     slider.sliderMoved.connect(player.setPosition)

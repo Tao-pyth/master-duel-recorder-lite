@@ -131,6 +131,30 @@ class DuelTimelineRepositoryTest(unittest.TestCase):
         self.assertEqual(self.repository.get(event.event_id), rejected)
         self.assertFalse(hasattr(self.repository, "delete"))
 
+    def test_marker_label_can_be_updated(self) -> None:
+        event = self.repository.add(
+            "recording",
+            elapsed_ms=1000,
+            event_type="marker",
+            label="修正前",
+        )
+
+        updated = self.repository.update_marker_label(event.event_id, "修正後")
+
+        self.assertEqual(updated.label, "修正後")
+        self.assertEqual(updated.event_type, "marker")
+        self.assertGreater(updated.updated_at, event.updated_at)
+
+    def test_only_marker_label_can_be_updated(self) -> None:
+        event = self.repository.add(
+            "recording",
+            elapsed_ms=1000,
+            event_type="duel_start",
+        )
+
+        with self.assertRaisesRegex(DuelTimelineError, "marker"):
+            self.repository.update_marker_label(event.event_id, "変更")
+
     def test_event_cannot_exceed_recording_duration(self) -> None:
         with self.assertRaisesRegex(DuelTimelineError, "録画時間"):
             self.repository.add(

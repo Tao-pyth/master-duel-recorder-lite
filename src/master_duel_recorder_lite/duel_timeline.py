@@ -222,6 +222,30 @@ class DuelTimelineRepository:
     def reject(self, event_id: str) -> DuelEvent:
         return self._transition(event_id, "rejected")
 
+    def update_marker_label(self, event_id: str, label: str) -> DuelEvent:
+        normalized_id = _text(event_id, 100, "event_id", required=True)
+        normalized_label = _text(label, 200, "label", required=True)
+        now = datetime.now(timezone.utc)
+        with (
+            closing(connect_history_database(self.database_path)) as connection,
+            connection,
+        ):
+            row = connection.execute(
+                "SELECT event_type FROM duel_events WHERE event_id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if row is None:
+                raise DuelTimelineError(f"対戦イベントが見つかりません: {event_id}")
+            if row["event_type"] != "marker":
+                raise DuelTimelineError("markerイベントだけを編集できます")
+            connection.execute(
+                "UPDATE duel_events SET label = ?, updated_at = ? WHERE event_id = ?",
+                (normalized_label, now.isoformat(), normalized_id),
+            )
+        event = self.get(normalized_id)
+        assert event is not None
+        return event
+
     def _transition(self, event_id: str, target: str) -> DuelEvent:
         now = datetime.now(timezone.utc)
         with (

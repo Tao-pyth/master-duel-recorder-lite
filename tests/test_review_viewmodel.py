@@ -131,6 +131,45 @@ class ReviewViewModelTest(unittest.TestCase):
         self.assertEqual(event.label, "レビュー確認")
         self.assertEqual(event.source, "manual")
 
+    def test_review_marker_label_can_be_updated_through_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(user_data_dir=Path(tmp_dir) / "user_data")
+            recording_id = "review-marker-edit"
+            output = service.paths.recordings / "review-marker-edit.mkv"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"video")
+            now = datetime.now(timezone.utc)
+            history = RecordingHistoryRepository.from_runtime_paths(service.paths)
+            history.register_starting(
+                recording_id=recording_id,
+                output_path=output,
+                container="mkv",
+                source="manual",
+                created_at=now,
+            )
+            history.finalize(
+                recording_id,
+                RecordingResult(
+                    RecordingState.COMPLETED,
+                    output,
+                    0,
+                    now,
+                    now + timedelta(seconds=10),
+                    output.stat().st_size,
+                    None,
+                    (),
+                ),
+            )
+            event = service.add_review_marker(
+                ReviewMarkerRequest(recording_id, 5000, "修正前")
+            )
+
+            updated = service.update_review_marker_label(event.event_id, "修正後")
+            model = service.get_review_view_model(recording_id)
+
+        self.assertEqual(updated.label, "修正後")
+        self.assertEqual(model.timeline[0].label, "修正後")
+
     def test_review_view_model_does_not_persist_oauth_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = MemoryCredentialStore()
