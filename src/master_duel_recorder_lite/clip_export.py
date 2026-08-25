@@ -104,7 +104,7 @@ class ClipExportService:
         output = output_dir / (
             f"{identifier}-{int(center_seconds * 1000):010d}-{uuid.uuid4().hex[:8]}.mp4"
         )
-        partial = output.with_name(f".{output.name}.partial")
+        partial = output.with_name(f".{output.stem}.partial{output.suffix}")
         source_stat = source.stat()
         command = (
             str(self.ffmpeg_executable),
