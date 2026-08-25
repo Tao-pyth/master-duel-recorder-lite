@@ -31,7 +31,7 @@
 ## バージョン運用
 
 - バージョンは `メジャー.マイナー.Fix` の3整数、コード上では `X.Y.Z` 形式で管理する
-- 現在の正式版は `V1.0.1` とする。正式版の修正は対応バージョンのGitHub IssueとMilestoneに従って管理する
+- 現在の正式版は、`pyproject.toml` の `project.version`、`master_duel_recorder_lite.__version__`、最新のGitタグ、GitHub Release、`docs/release-notes.md` を照合して確認する。正式版の修正は対応バージョンのGitHub IssueとMilestoneに従って管理する
 - 中核機能を1つ完了するごとにマイナーバージョンを更新し、Fixを `0` に戻す
 - `main` への通常pushは、直前の `main` からFixを1つ増やしたバージョンを含める
 - 中核機能の完了を反映するpushでは、Fix更新よりマイナー更新を優先して `X.Y+1.0` とする
