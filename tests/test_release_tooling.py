@@ -24,6 +24,7 @@ from scripts.verify_release_tag import (
 )
 from scripts.verify_release_assets import (
     ReleaseAssetVerificationError,
+    _request_headers,
     verify_release_assets,
 )
 
@@ -339,6 +340,20 @@ class ReleaseToolingTest(unittest.TestCase):
         with patch("scripts.verify_release_assets._read_bytes", read_bytes):
             with self.assertRaisesRegex(ReleaseAssetVerificationError, "一致しません"):
                 verify_release_assets("v1.4.1")
+
+    def test_release_asset_verification_uses_github_token_for_github_requests(self) -> None:
+        with patch.dict("os.environ", {"GITHUB_TOKEN": "token"}, clear=True):
+            headers = _request_headers(
+                "https://api.github.com/repos/Tao-pyth/master-duel-recorder-lite/releases/tags/v2.4.4"
+            )
+            download_headers = _request_headers(
+                "https://github.com/Tao-pyth/master-duel-recorder-lite/releases/download/v2.4.4/file.sha256"
+            )
+            external_headers = _request_headers("https://example.invalid/file.sha256")
+
+        self.assertEqual(headers["Authorization"], "Bearer token")
+        self.assertEqual(download_headers["Authorization"], "Bearer token")
+        self.assertNotIn("Authorization", external_headers)
 
 
 if __name__ == "__main__":

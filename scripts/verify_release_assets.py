@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import os
 import re
 import sys
 from urllib.error import HTTPError, URLError
@@ -114,13 +115,7 @@ def _read_json(url: str) -> object:
 
 
 def _read_bytes(url: str, maximum: int) -> bytes:
-    request = Request(
-        url,
-        headers={
-            "User-Agent": "master-duel-recorder-lite-release-check",
-            "Cache-Control": "no-cache",
-        },
-    )
+    request = Request(url, headers=_request_headers(url))
     try:
         with urlopen(request, timeout=20) as response:  # noqa: S310 - 固定GitHub URLのみを検証対象にする
             data = response.read(maximum + 1)
@@ -129,6 +124,20 @@ def _read_bytes(url: str, maximum: int) -> bytes:
     if len(data) > maximum:
         raise ReleaseAssetVerificationError("Release情報が安全上限を超えています")
     return data
+
+
+def _request_headers(url: str) -> dict[str, str]:
+    headers = {
+        "User-Agent": "master-duel-recorder-lite-release-check",
+        "Cache-Control": "no-cache",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    host = urlsplit(url).netloc.lower()
+    if token and host in {"api.github.com", "github.com"}:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Accept"] = "application/vnd.github+json"
+        headers["X-GitHub-Api-Version"] = "2022-11-28"
+    return headers
 
 
 def main(argv: list[str] | None = None) -> int:

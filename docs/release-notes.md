@@ -1,7 +1,16 @@
 # リリースノート
 
+## V2.4.4: レビュークリップ出力とRelease検証Hotfix - 2026-08-26
+
+- レビュー画面の「選択位置をクリップ出力」で、FFmpegが一時出力ファイルの形式を判定できず失敗する問題を修正した
+- クリップ出力の一時ファイル名を `.partial.mp4` 形式にし、FFmpegへ渡す出力パスが `.mp4` 末尾になるようにした
+- Release asset検証スクリプトがGitHub Actionsの `GITHUB_TOKEN` / `GH_TOKEN` を使うようにし、無認証rate limitでRelease workflowが失敗しないようにした
+- 最終出力ファイル名、元録画非破壊、原子的な一時出力からの置換は従来どおり維持した
+- SQLite schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+
 ## V2.4.3: レビュークリップ出力Hotfix - 2026-08-26
 
+- 注記: GitHub Release作成後、公開asset検証がGitHub APIの無認証rate limitで失敗したため、正式な完了版としてはV2.4.4で置き換えた
 - レビュー画面の「選択位置をクリップ出力」で、FFmpegが一時出力ファイルの形式を判定できず失敗する問題を修正した
 - クリップ出力の一時ファイル名を `.partial.mp4` 形式にし、FFmpegへ渡す出力パスが `.mp4` 末尾になるようにした
 - 最終出力ファイル名、元録画非破壊、原子的な一時出力からの置換は従来どおり維持した
