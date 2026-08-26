@@ -10,7 +10,8 @@
 - プリロールを含む録画では、開始候補 `duel_start` を録画ファイル先頭からの経過として保存するようにした
 - 手動録画、長時間バックグラウンド録画、任意クリップ保存、SQLite schema、既存録画、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
 - Ruff、全607 pytest、全608 unittest、PySide6 GUI smoke、CLI/GUI/updater EXEビルド、3 EXE smokeに合格した
-- GitHub Actions、GitHub Release `v2.6.0`、公開asset検証、ダウンロード後EXE smokeは外部変更承認後に追記する
+- GitHub Actions run `32986621376` でWindows EXE release workflow、Lint/Test、3 EXEスモーク、公開用artifact生成に合格し、GitHub Release `v2.6.0` として公開した
+- `python scripts/verify_release_assets.py v2.6.0` と、公開Releaseから再ダウンロードした3 EXE smokeに合格した
 
 ## V2.5.0: PySide6全画面の実操作品質監査 - 2026-08-26
 
