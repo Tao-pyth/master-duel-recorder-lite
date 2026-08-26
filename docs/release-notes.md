@@ -14,7 +14,7 @@
 - `docs/architecture/pyside-operational-quality-2.5.0.md` と `docs/validation/2.5.0.md` に操作棚卸しと検証結果を記録した
 - SQLite schema、設定形式、録画ファイル、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
 - Ruff、全599テスト、PySide6 GUI smoke、CLI/GUI/updater EXEビルド、3 EXE smokeに合格した
-- GitHub Actions、Windows EXE release workflow、公開asset検証、ダウンロード後EXE smokeはRelease時に追記する
+- GitHub Actions run `32940361847` でWindows EXE release workflow、3 EXE smoke、公開asset検証、ダウンロード後EXE smokeに合格し、GitHub Release `v2.5.0` として公開した
 
 ## V2.4.4: レビュークリップ出力とRelease検証Hotfix - 2026-08-26
 
