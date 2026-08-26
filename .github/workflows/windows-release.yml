@@ -126,6 +126,8 @@ jobs:
             --notes-file $notes
       - name: Verify published release assets
         if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python scripts/verify_release_assets.py "${{ github.ref_name }}"
       - name: Smoke downloaded release assets
         if: github.event_name == 'push'
