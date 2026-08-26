@@ -38,6 +38,31 @@ REVIEW_WIDGETS: tuple[str, ...] = (
     "review_timeline_table",
 )
 
+REVIEW_EVENT_TYPE_LABELS: dict[str, str] = {
+    "marker": "マーカー",
+    "duel_start": "対戦開始",
+    "duel_end": "対戦終了",
+    "duel_result": "対戦結果",
+    "turn_change": "ターン切替",
+    "recording_start": "録画開始",
+    "recording_end": "録画終了",
+}
+
+REVIEW_EVENT_STATUS_LABELS: dict[str, str] = {
+    "candidate": "候補",
+    "confirmed": "確定",
+    "rejected": "除外",
+    "manual": "手動",
+}
+
+REVIEW_EVENT_SOURCE_LABELS: dict[str, str] = {
+    "manual": "手動",
+    "visual": "自動判定",
+    "auto": "自動判定",
+    "import": "取込",
+    "system": "システム",
+}
+
 
 def check_pyside6_review_available() -> PySideReviewAvailability:
     if importlib.util.find_spec("PySide6") is None:
@@ -82,11 +107,26 @@ def _review_application() -> object:
 def review_timeline_display_row(event: ReviewTimelineEvent) -> tuple[str, str, str, str, str]:
     return (
         event.elapsed_label,
-        event.event_type,
-        event.status,
+        REVIEW_EVENT_TYPE_LABELS.get(event.event_type, event.event_type or "-"),
+        REVIEW_EVENT_STATUS_LABELS.get(event.status, event.status or "-"),
         event.label,
-        event.source,
+        REVIEW_EVENT_SOURCE_LABELS.get(event.source, event.source or "-"),
     )
+
+
+def review_operation_error_message(operation: str, error: Exception) -> str:
+    detail = str(error).strip()
+    if "Unable to choose an output format" in detail or "Invalid argument" in detail:
+        return (
+            f"{operation}に失敗しました。出力ファイル名または保存形式を確認できませんでした。"
+            "アプリを最新版に更新し、もう一度実行してください。"
+        )
+    if not detail:
+        return f"{operation}に失敗しました。"
+    compact = " ".join(detail.split())
+    if len(compact) > 240:
+        compact = compact[:237] + "..."
+    return f"{operation}に失敗しました。\n{compact}"
 
 
 def create_review_window(
@@ -184,6 +224,7 @@ def create_review_window(
     timeline.verticalHeader().setVisible(False)
     timeline.horizontalHeader().setStretchLastSection(True)
     event_id_role = Qt.ItemDataRole.UserRole + 1
+    event_type_role = Qt.ItemDataRole.UserRole + 2
 
     def reload_timeline() -> None:
         refreshed = service.get_review_view_model(recording_id)
@@ -196,6 +237,8 @@ def create_review_window(
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, event.elapsed_ms)
                     item.setData(event_id_role, event.event_id)
+                if column == 1:
+                    item.setData(event_type_role, event.event_type)
                 timeline.setItem(row, column, item)
 
     reload_timeline()
@@ -229,7 +272,7 @@ def create_review_window(
                 )
             )
         except Exception as exc:
-            report_error(str(exc))
+            report_error(review_operation_error_message("マーカー追加", exc))
             return
         reload_timeline()
 
@@ -241,8 +284,8 @@ def create_review_window(
         if type_item is None or label_item is None or elapsed_item is None:
             report_error("編集するマーカーを選択してください。")
             return
-        if type_item.text() != "marker":
-            report_error("marker行だけを編集できます。")
+        if type_item.data(event_type_role) != "marker":
+            report_error("マーカー行だけを編集できます。")
             return
         event_id = elapsed_item.data(event_id_role)
         label, accepted = QInputDialog.getText(
@@ -256,7 +299,7 @@ def create_review_window(
         try:
             service.update_review_marker_label(str(event_id), label)
         except Exception as exc:
-            report_error(str(exc))
+            report_error(review_operation_error_message("マーカー編集", exc))
             return
         reload_timeline()
 
@@ -269,9 +312,15 @@ def create_review_window(
                 )
             )
         except Exception as exc:
-            report_error(str(exc))
+            report_error(review_operation_error_message("クリップ出力", exc))
             return
         QMessageBox.information(window, "クリップ出力", f"出力しました:\n{result.output_path}")
+
+    def open_external_player_window() -> None:
+        try:
+            service.play_recording(recording_id)
+        except Exception as exc:
+            report_error(review_operation_error_message("外部プレイヤー起動", exc))
 
     def toggle_play_pause() -> None:
         if player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -290,7 +339,7 @@ def create_review_window(
         player.setPosition(int(item.data(Qt.ItemDataRole.UserRole)))
 
     play_button.clicked.connect(toggle_play_pause)
-    open_external_button.clicked.connect(lambda: service.play_recording(recording_id))
+    open_external_button.clicked.connect(open_external_player_window)
     marker_button.clicked.connect(add_marker)
     marker_edit_button.clicked.connect(edit_marker)
     clip_button.clicked.connect(export_clip)

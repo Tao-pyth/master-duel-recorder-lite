@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import importlib.util
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +21,15 @@ from .gui_feature_parity import (
     required_standard_widget_keys,
     satisfied_standard_feature_keys,
 )
+from .operation_state import OperationAction
 from .pyside_review import REVIEW_WIDGETS
 from .ui_preferences import load_ui_preferences, save_ui_preferences
-from .uninstall import run_cleanup_manifest
+from .uninstall import (
+    CONFIRMATION_TEXT,
+    create_uninstall_plan,
+    launch_cleanup_worker,
+    run_cleanup_manifest,
+)
 
 
 class PySideGuiError(RuntimeError):
@@ -88,6 +95,10 @@ RICH_UI_SECTION_WIDGETS: tuple[str, ...] = (
 UI_USABILITY_WIDGETS: tuple[str, ...] = (
     "nav_health_status",
     "active_season_status",
+    "record_target_refresh",
+    "record_target_save",
+    "record_manual_duel_add",
+    "record_diagnostics_export",
     "history_table",
     "history_date_from_picker",
     "history_date_to_picker",
@@ -110,6 +121,92 @@ UI_USABILITY_WIDGETS: tuple[str, ...] = (
     "history_coin_filter",
     "history_origin_filter",
 )
+
+OPERATIONAL_AUDIT_SCREENS: tuple[str, ...] = (
+    "録画",
+    "戦績管理",
+    "統計",
+    "デッキ名",
+    "タグ",
+    "シーズン",
+    "テンプレート",
+    "設定",
+    "レビュー",
+)
+
+OPERATIONAL_ACTION_WIDGETS: dict[str, tuple[str, ...]] = {
+    "record": (
+        "record_target_refresh",
+        "record_target_save",
+        "record_start",
+        "record_stop",
+        "watch_toggle",
+        "record_manual_duel_add",
+        "record_diagnostics_export",
+        "visual_diagnostics_folder",
+        "record_reliability_check",
+    ),
+    "history": (
+        "history_incomplete",
+        "history_bulk",
+        "manual_duel_add",
+        "history_add",
+        "history_play",
+        "history_duel",
+        "history_delete",
+        "history_duplicates",
+        "history_refresh",
+        "history_columns",
+        "history_youtube",
+    ),
+    "catalog": (
+        "deck_add",
+        "deck_save",
+        "deck_delete",
+        "tag_add",
+        "tag_save",
+        "tag_delete",
+    ),
+    "season": (
+        "season_add",
+        "season_save",
+        "season_archive",
+        "season_report",
+    ),
+    "template": ("youtube_template_save",),
+    "settings": (
+        "settings_ffmpeg_select",
+        "settings_audio_refresh",
+        "settings_audio_test",
+        "settings_runtime_change",
+        "settings_reload",
+        "settings_save",
+        "settings_reliability_refresh",
+        "settings_reliability_setup_check",
+        "settings_youtube_connect",
+        "settings_youtube_disconnect",
+        "settings_youtube_refresh",
+        "settings_youtube_test_upload",
+        "settings_managed_export",
+        "settings_managed_import",
+        "settings_data_backup",
+        "settings_data_restore",
+        "settings_data_diagnosis",
+        "settings_csv_export",
+        "settings_csv_import",
+        "settings_csv_sample",
+        "app_update",
+        "app_update_download",
+        "clean_uninstall",
+    ),
+    "internal": (
+        "prepare_recording",
+        "internal_prepare_run",
+        "internal_improve_refresh",
+        "internal_improve_manual_duel_add",
+    ),
+    "review": REVIEW_WIDGETS,
+}
 
 SETTINGS_PARITY_WIDGETS: tuple[str, ...] = (
     "settings_ffmpeg_path",
@@ -176,6 +273,7 @@ SMOKE_WIDGETS: tuple[str, ...] = tuple(
         | set(RICH_UI_SECTION_WIDGETS)
         | set(UI_USABILITY_WIDGETS)
         | set(SETTINGS_PARITY_WIDGETS)
+        | {widget for widgets in OPERATIONAL_ACTION_WIDGETS.values() for widget in widgets}
         | {
             "incomplete_duel_count",
         }
@@ -455,6 +553,7 @@ def smoke_contract(
             ],
             "save_source": "RecorderApplicationService.update_duel_record",
             "recording_save_source": "RecorderApplicationService.save_duel_record",
+            "manual_create_source": "RecorderApplicationService.create_manual_duel_record",
         },
         "review_video_contract": {
             "entry_button": "history_play",
@@ -465,13 +564,43 @@ def smoke_contract(
             "marker_source": "RecorderApplicationService.add_review_marker",
             "marker_edit_source": "RecorderApplicationService.update_review_marker_label",
             "clip_export_source": "RecorderApplicationService.export_review_clip",
+            "timeline_user_labels": True,
+        },
+        "operational_quality_audit_contract": {
+            "target_version": "2.5.0",
+            "screens": list(OPERATIONAL_AUDIT_SCREENS),
+            "action_widgets": {
+                screen: list(actions)
+                for screen, actions in OPERATIONAL_ACTION_WIDGETS.items()
+            },
+            "missing_action_widgets": [
+                widget
+                for actions in OPERATIONAL_ACTION_WIDGETS.values()
+                for widget in actions
+                if widget not in widget_keys and widget not in REVIEW_WIDGETS
+            ],
+            "placeholder_only_actions": [],
+            "primary_internal_values_hidden": True,
+            "danger_actions_guarded": ["history_delete", "clean_uninstall"],
+            "selection_guarded_actions": [
+                "history_play",
+                "history_duel",
+                "history_delete",
+                "history_youtube",
+            ],
+            "review_timeline_localized": True,
         },
         "icon_button_contract": {
             "priority": "major_actions",
             "buttons": [
+                "record_target_refresh",
+                "record_target_save",
                 "record_start",
                 "record_stop",
                 "watch_toggle",
+                "record_manual_duel_add",
+                "record_diagnostics_export",
+                "visual_diagnostics_folder",
                 "manual_duel_add",
                 "history_play",
                 "history_duel",
@@ -651,6 +780,7 @@ def _run(args: argparse.Namespace) -> int:
             QGroupBox,
             QHBoxLayout,
             QHeaderView,
+            QInputDialog,
             QLabel,
             QLineEdit,
             QListWidget,
@@ -785,6 +915,7 @@ def _run(args: argparse.Namespace) -> int:
             self.history_views_by_row_id: dict[str, object] = {}
             self.catalog_entries_by_id: dict[int, object] = {}
             self.seasons_by_id: dict[int, object] = {}
+            self.capture_targets_by_label: dict[str, object] = {}
             self.selected_catalog_entry_ids: dict[str, int | None] = {
                 "decks": None,
                 "tags": None,
@@ -971,9 +1102,14 @@ def _run(args: argparse.Namespace) -> int:
 
         def _apply_button_icon(self, key: str, button: QPushButton) -> None:
             icon_key = {
+                "record_target_refresh": QStyle.StandardPixmap.SP_BrowserReload,
+                "record_target_save": QStyle.StandardPixmap.SP_DialogSaveButton,
                 "record_start": QStyle.StandardPixmap.SP_MediaPlay,
                 "record_stop": QStyle.StandardPixmap.SP_MediaStop,
                 "watch_toggle": QStyle.StandardPixmap.SP_BrowserReload,
+                "record_manual_duel_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
+                "record_diagnostics_export": QStyle.StandardPixmap.SP_DialogSaveButton,
+                "visual_diagnostics_folder": QStyle.StandardPixmap.SP_DirOpenIcon,
                 "manual_duel_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
                 "history_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
                 "history_play": QStyle.StandardPixmap.SP_MediaPlay,
@@ -992,11 +1128,36 @@ def _run(args: argparse.Namespace) -> int:
                 "season_save": QStyle.StandardPixmap.SP_DialogSaveButton,
                 "season_archive": QStyle.StandardPixmap.SP_DialogCloseButton,
                 "season_report": QStyle.StandardPixmap.SP_FileDialogDetailedView,
+                "prepare_recording": QStyle.StandardPixmap.SP_ArrowForward,
+                "internal_prepare_run": QStyle.StandardPixmap.SP_MediaPlay,
+                "internal_improve_refresh": QStyle.StandardPixmap.SP_BrowserReload,
+                "internal_improve_manual_duel_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
+                "settings_ffmpeg_select": QStyle.StandardPixmap.SP_DialogOpenButton,
                 "settings_audio_refresh": QStyle.StandardPixmap.SP_BrowserReload,
                 "settings_audio_test": QStyle.StandardPixmap.SP_MediaPlay,
+                "settings_runtime_change": QStyle.StandardPixmap.SP_DirOpenIcon,
                 "settings_reload": QStyle.StandardPixmap.SP_BrowserReload,
                 "settings_save": QStyle.StandardPixmap.SP_DialogSaveButton,
+                "settings_youtube_connect": QStyle.StandardPixmap.SP_DialogApplyButton,
+                "settings_youtube_disconnect": QStyle.StandardPixmap.SP_DialogCloseButton,
+                "settings_youtube_refresh": QStyle.StandardPixmap.SP_BrowserReload,
+                "settings_youtube_test_upload": QStyle.StandardPixmap.SP_ArrowForward,
+                "settings_managed_export": QStyle.StandardPixmap.SP_DialogSaveButton,
+                "settings_managed_import": QStyle.StandardPixmap.SP_DialogOpenButton,
+                "settings_reset_history": QStyle.StandardPixmap.SP_TrashIcon,
+                "settings_reset_decks": QStyle.StandardPixmap.SP_TrashIcon,
+                "settings_reset_tags": QStyle.StandardPixmap.SP_TrashIcon,
+                "settings_reset_seasons": QStyle.StandardPixmap.SP_TrashIcon,
+                "settings_data_backup": QStyle.StandardPixmap.SP_DialogSaveButton,
+                "settings_data_restore": QStyle.StandardPixmap.SP_DialogOpenButton,
+                "settings_data_diagnosis": QStyle.StandardPixmap.SP_FileDialogDetailedView,
+                "settings_csv_export": QStyle.StandardPixmap.SP_DialogSaveButton,
+                "settings_csv_import": QStyle.StandardPixmap.SP_DialogOpenButton,
+                "settings_csv_sample": QStyle.StandardPixmap.SP_FileIcon,
                 "youtube_template_save": QStyle.StandardPixmap.SP_DialogSaveButton,
+                "app_update": QStyle.StandardPixmap.SP_BrowserReload,
+                "app_update_download": QStyle.StandardPixmap.SP_ArrowDown,
+                "clean_uninstall": QStyle.StandardPixmap.SP_TrashIcon,
                 "record_reliability_check": QStyle.StandardPixmap.SP_MessageBoxInformation,
             }.get(key)
             if icon_key is None:
@@ -1086,8 +1247,14 @@ def _run(args: argparse.Namespace) -> int:
             assert isinstance(target, QComboBox)
             target.addItems(("Master Duelウィンドウ", "モニター全体", "デスクトップ"))
             target_row.addWidget(target, stretch=1)
-            target_row.addWidget(QPushButton("更新"))
-            target_row.addWidget(QPushButton("選択を保存"))
+            target_refresh = self._button("record_target_refresh", "更新")
+            target_refresh.setToolTip("録画対象候補を再読み込みします")
+            target_refresh.clicked.connect(self.refresh_recording_targets)
+            target_save = self._button("record_target_save", "選択を保存")
+            target_save.setToolTip("選択中の録画対象を設定へ保存します")
+            target_save.clicked.connect(self.save_recording_target_selection)
+            target_row.addWidget(target_refresh)
+            target_row.addWidget(target_save)
             target_layout.addLayout(target_row)
             layout.addWidget(target_section)
 
@@ -1128,7 +1295,10 @@ def _run(args: argparse.Namespace) -> int:
 
             manual_section, manual_layout = self._section("record_manual_section", "")
             manual_row = QHBoxLayout()
-            manual_row.addWidget(self._button("manual_duel_add", "戦績を追加（録画なし）"))
+            manual_add = self._button("record_manual_duel_add", "戦績を追加（録画なし）")
+            manual_add.setToolTip("録画なしの戦績入力を開きます")
+            manual_add.clicked.connect(self._show_manual_duel_entry)
+            manual_row.addWidget(manual_add)
             season_frame = QFrame()
             season_frame.setObjectName("activeSeasonPanel")
             season_layout = QVBoxLayout(season_frame)
@@ -1155,8 +1325,14 @@ def _run(args: argparse.Namespace) -> int:
             )
             diag_actions = QHBoxLayout()
             diag_actions.addStretch(1)
-            diag_actions.addWidget(QPushButton("保存"))
-            diag_actions.addWidget(self._register("visual_diagnostics_folder", QPushButton("開く")))
+            diag_export = self._button("record_diagnostics_export", "保存")
+            diag_export.setToolTip("自動監視診断ログをZIPで保存します")
+            diag_export.clicked.connect(self.export_visual_diagnostics)
+            diag_actions.addWidget(diag_export)
+            diag_folder = self._button("visual_diagnostics_folder", "開く")
+            diag_folder.setToolTip("自動監視診断ログの保存先フォルダを開きます")
+            diag_folder.clicked.connect(self.open_visual_diagnostics)
+            diag_actions.addWidget(diag_folder)
             diag_button = self._button("record_reliability_check", "診断を確認")
             diag_button.setToolTip("設定の録画診断・信頼性タブを開きます")
             diag_button.clicked.connect(self._show_reliability_settings)
@@ -1917,8 +2093,7 @@ def _run(args: argparse.Namespace) -> int:
                     self.open_latest_youtube_test_upload,
                 ),
             ):
-                button = self._register(key, QPushButton(text))
-                assert isinstance(button, QPushButton)
+                button = self._button(key, text)
                 button.clicked.connect(action)
                 row.addWidget(button)
             row.addStretch(1)
@@ -1938,8 +2113,7 @@ def _run(args: argparse.Namespace) -> int:
                 ("settings_managed_export", "管理データを書き出し", self.export_managed_data),
                 ("settings_managed_import", "管理データを読み込み", self.import_managed_data),
             ):
-                button = self._register(key, QPushButton(text))
-                assert isinstance(button, QPushButton)
+                button = self._button(key, text)
                 button.clicked.connect(action)
                 managed.addWidget(button)
             managed.addStretch(1)
@@ -1951,8 +2125,7 @@ def _run(args: argparse.Namespace) -> int:
                 ("settings_reset_tags", "tags", "タグを初期化"),
                 ("settings_reset_seasons", "seasons", "シーズンを初期化"),
             ):
-                button = self._register(key, QPushButton(text))
-                assert isinstance(button, QPushButton)
+                button = self._button(key, text, "danger")
                 button.clicked.connect(
                     lambda _checked=False, selected=scope_name, label=text: self.reset_managed_data(
                         selected, label
@@ -1982,11 +2155,13 @@ def _run(args: argparse.Namespace) -> int:
                 ("settings_data_restore", "復元", self.restore_data_backup),
                 ("settings_data_diagnosis", "整合性診断", self.run_data_integrity_diagnosis),
             ):
-                button = self._register(key, QPushButton(text))
-                assert isinstance(button, QPushButton)
+                button = self._button(key, text)
                 button.clicked.connect(action)
                 actions.addWidget(button)
-            actions.addWidget(self._button("clean_uninstall", "クリーンアンインストール", "danger"))
+            clean_uninstall = self._button("clean_uninstall", "クリーンアンインストール", "danger")
+            clean_uninstall.setToolTip("保存領域を確認語入力つきで削除し、アプリを終了します")
+            clean_uninstall.clicked.connect(self.prepare_clean_uninstall)
+            actions.addWidget(clean_uninstall)
             actions.addStretch(1)
             layout.addLayout(actions)
             layout.addWidget(
@@ -2020,8 +2195,7 @@ def _run(args: argparse.Namespace) -> int:
                 ("settings_csv_import", "CSVを取り込み", self.import_duel_csv),
                 ("settings_csv_sample", "サンプルCSVを保存", self.export_duel_csv_sample),
             ):
-                button = self._register(key, QPushButton(text))
-                assert isinstance(button, QPushButton)
+                button = self._button(key, text)
                 button.clicked.connect(action)
                 row.addWidget(button)
             row.addStretch(1)
@@ -2103,10 +2277,8 @@ def _run(args: argparse.Namespace) -> int:
             status.setWordWrap(True)
             layout.addWidget(status)
             row = QHBoxLayout()
-            check = self._register("app_update", QPushButton("更新を確認"))
-            download = self._register("app_update_download", QPushButton("ダウンロードして更新"))
-            assert isinstance(check, QPushButton)
-            assert isinstance(download, QPushButton)
+            check = self._button("app_update", "更新を確認")
+            download = self._button("app_update_download", "ダウンロードして更新")
             check.clicked.connect(self.check_for_updates)
             download.clicked.connect(self.download_and_apply_update)
             download.setEnabled(False)
@@ -2130,8 +2302,14 @@ def _run(args: argparse.Namespace) -> int:
             target.addItems(("2026-08-19 sample-rec", "最新録画"))
             row.addWidget(target, stretch=1)
             row.addWidget(QLineEdit("投稿タイトル"))
-            row.addWidget(self._button("prepare_recording", "キューへ追加"))
-            row.addWidget(QPushButton("待機中を実行"))
+            prepare_add = self._button("prepare_recording", "キューへ追加")
+            prepare_add.setToolTip("MP4変換はYouTube投稿時の内部処理として扱います")
+            prepare_add.clicked.connect(self._show_mp4_preparation_guidance)
+            prepare_run = self._button("internal_prepare_run", "待機中を実行")
+            prepare_run.setToolTip("MP4変換キューは通常機能として提供しません")
+            prepare_run.clicked.connect(self._show_mp4_preparation_guidance)
+            row.addWidget(prepare_add)
+            row.addWidget(prepare_run)
             panel_layout.addLayout(row)
             panel_layout.addWidget(
                 self._table(
@@ -2147,8 +2325,14 @@ def _run(args: argparse.Namespace) -> int:
             panel, panel_layout = self._section("improve_internal_page", "入力削減と運用管理")
             panel_layout.addWidget(QLabel("録画なし戦績追加、デッキ改善、タグ、保存候補を確認します。"))
             row = QHBoxLayout()
-            row.addWidget(QPushButton("状態を更新"))
-            row.addWidget(QPushButton("録画なし戦績を追加"))
+            refresh = self._button("internal_improve_refresh", "状態を更新")
+            refresh.setToolTip("戦績管理、デッキ名、タグ、シーズンの表示を再読み込みします")
+            refresh.clicked.connect(self._load_runtime_dashboard)
+            manual_add = self._button("internal_improve_manual_duel_add", "録画なし戦績を追加")
+            manual_add.setToolTip("録画なしの戦績入力を開きます")
+            manual_add.clicked.connect(self._show_manual_duel_entry)
+            row.addWidget(refresh)
+            row.addWidget(manual_add)
             row.addStretch(1)
             panel_layout.addLayout(row)
             layout.addWidget(panel)
@@ -2186,6 +2370,7 @@ def _run(args: argparse.Namespace) -> int:
 
         def _load_runtime_dashboard(self) -> None:
             loaders = (
+                self.refresh_recording_targets,
                 self._populate_history_filter_choices,
                 self._refresh_history,
                 self._refresh_catalogs,
@@ -2253,7 +2438,15 @@ def _run(args: argparse.Namespace) -> int:
                 label.setToolTip("録画前チェックに重大な問題はありません")
 
         def _start_recording(self) -> None:
-            self._run_action("録画開始", self.service.start_recording)
+            target = self._selected_capture_target()
+            if target is not None and not bool(getattr(target, "available", True)):
+                detail = getattr(target, "detail", "") or getattr(target, "label", "")
+                self._show_information(
+                    "録画対象を利用できません",
+                    f"別の録画対象を選択してください。\n{detail}",
+                )
+                return
+            self._run_action("録画開始", lambda: self.service.start_recording(target))
 
         def _stop_recording(self) -> None:
             self._run_action("録画停止", self.service.stop_recording)
@@ -2263,6 +2456,121 @@ def _run(args: argparse.Namespace) -> int:
                 self._run_action("自動監視停止", self.service.stop_watch)
             else:
                 self._run_action("自動監視開始", self.service.start_watch)
+
+        def refresh_recording_targets(self, *_args: object) -> None:
+            try:
+                targets = self.service.list_capture_targets()
+            except Exception as exc:
+                self._show_warning("録画対象を更新できません", str(exc))
+                self._append_activity("録画対象の更新に失敗しました")
+                return
+            self._recording_targets_loaded(targets)
+
+        def _recording_targets_loaded(self, targets: tuple[object, ...]) -> None:
+            selector = self.widgets.get("target_selector")
+            if not isinstance(selector, QComboBox):
+                return
+            self.capture_targets_by_label = {
+                str(getattr(target, "label")): target for target in targets
+            }
+            selector.clear()
+            for target in targets:
+                label = str(getattr(target, "label", "録画対象"))
+                if not bool(getattr(target, "available", True)):
+                    label = f"{label}（利用不可）"
+                selector.addItem(label, target)
+                detail = str(getattr(target, "detail", ""))
+                if detail:
+                    selector.setItemData(
+                        selector.count() - 1,
+                        detail,
+                        Qt.ItemDataRole.ToolTipRole,
+                    )
+            self._select_configured_capture_target(selector)
+            self._append_activity(f"録画対象を{len(targets)}件検出しました")
+
+        def _select_configured_capture_target(self, selector: QComboBox) -> None:
+            try:
+                config = self.service.load_config().config
+            except Exception:
+                return
+            selected_index = -1
+            for index in range(selector.count()):
+                target = selector.itemData(index)
+                mode = getattr(getattr(target, "mode", None), "value", "")
+                identifier = str(getattr(target, "identifier", ""))
+                configured_identifier = str(getattr(config, "capture_target_id", ""))
+                if mode != getattr(config, "capture_mode", ""):
+                    continue
+                if not configured_identifier or identifier == configured_identifier:
+                    selected_index = index
+                    break
+            if selected_index >= 0:
+                selector.setCurrentIndex(selected_index)
+
+        def _selected_capture_target(self) -> object | None:
+            selector = self.widgets.get("target_selector")
+            if not isinstance(selector, QComboBox):
+                return None
+            target = selector.currentData()
+            if target is not None and hasattr(target, "label"):
+                return target
+            return self.capture_targets_by_label.get(selector.currentText())
+
+        def save_recording_target_selection(self, *_args: object) -> None:
+            target = self._selected_capture_target()
+            if target is None:
+                self._show_information(
+                    "録画対象を保存できません",
+                    "更新で録画対象候補を取得してから選択してください。",
+                )
+                return
+            if not bool(getattr(target, "available", True)):
+                self._show_information(
+                    "録画対象を保存できません",
+                    f"利用できる録画対象を選択してください。\n{getattr(target, 'detail', '')}",
+                )
+                return
+            try:
+                self.service.select_capture_target(target)
+            except Exception as exc:
+                self._show_warning("録画対象を保存できません", str(exc))
+                self._append_activity("録画対象の保存に失敗しました")
+                return
+            self._append_activity(f"録画対象を保存しました: {getattr(target, 'label', '')}")
+
+        def open_visual_diagnostics(self, *_args: object) -> None:
+            directory = self.service.paths.logs / "visual-monitor"
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                if not hasattr(os, "startfile"):
+                    self._show_information(
+                        "環境診断",
+                        f"診断フォルダ:\n{directory.resolve()}",
+                    )
+                    return
+                os.startfile(str(directory.resolve()))  # type: ignore[attr-defined]
+            except Exception as exc:
+                self._show_warning("診断フォルダを開けません", str(exc))
+                return
+            self._append_activity("診断フォルダを開きました")
+
+        def export_visual_diagnostics(self, *_args: object) -> None:
+            destination, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "自動監視診断を保存",
+                str(self.service.paths.data / "visual-diagnostics.zip"),
+                "ZIP (*.zip)",
+            )
+            if not destination:
+                return
+            try:
+                exported = self.service.export_visual_diagnostics(Path(destination))
+            except Exception as exc:
+                self._show_warning("自動監視診断を保存できません", str(exc))
+                self._append_activity("自動監視診断の保存に失敗しました")
+                return
+            self._append_activity(f"自動監視診断を保存しました: {exported}")
 
         def _connect_history_button(self, key: str, button: QPushButton) -> None:
             actions = {
@@ -2503,15 +2811,32 @@ def _run(args: argparse.Namespace) -> int:
         def _show_bulk_duel_editor(self) -> None:
             self._show_information(
                 "一括編集",
-                "一括編集は対象行の複数選択と適用前確認を前提にします。"
-                "この画面では操作入口を確認できます。",
+                "一括編集はこの版では提供していません。複数の戦績を変更する場合は、"
+                "戦績管理で対象行を1件ずつ開いて編集してください。",
             )
 
         def _show_manual_duel_entry(self) -> None:
+            block_reason = self.service.duel_write_block_reason()
+            if block_reason is not None:
+                self._show_warning("手動戦績を追加できません", block_reason)
+                return
+            try:
+                data = self.service.get_duel_editor_data(None)
+            except Exception as exc:
+                self._show_warning("手動戦績を追加できません", str(exc))
+                return
+            self._open_duel_editor_dialog(
+                record=None,
+                recording_id=None,
+                values=data.values,
+                seasons=data.seasons,
+            )
+
+        def _show_mp4_preparation_guidance(self, *_args: object) -> None:
             self._show_information(
-                "手動追加",
-                "録画なし戦績の追加は、保存前確認つきの入力画面として扱います。"
-                "既存データはこの案内だけでは変更しません。",
+                "MP4準備",
+                "MP4変換は通常操作として提供せず、YouTube投稿時に必要な場合だけ"
+                "アプリ内部で実行します。投稿は戦績管理のYouTube導線から開始してください。",
             )
 
         def _play_selected_history(self) -> None:
@@ -2700,7 +3025,10 @@ def _run(args: argparse.Namespace) -> int:
                             expected_revision=0,
                         )
                     else:
-                        raise RuntimeError("保存対象の戦績を確認できません。")
+                        self.service.create_manual_duel_record(
+                            updated,
+                            occurred_at=datetime.now().astimezone(),
+                        )
                 except Exception as exc:
                     self._show_warning("戦績を保存できません", str(exc))
                     return
@@ -3356,6 +3684,67 @@ def _run(args: argparse.Namespace) -> int:
                 ),
             )
 
+        def prepare_clean_uninstall(self, *_args: object) -> None:
+            try:
+                snapshot = self.service.operation_snapshot()
+            except Exception as exc:
+                self._show_warning("アンインストールを開始できません", str(exc))
+                return
+            if not snapshot.allows(OperationAction.MANAGE_DATA):
+                self._show_information(
+                    "アンインストールを開始できません",
+                    "録画または自動監視を停止してから実行してください。",
+                )
+                return
+            try:
+                plan = create_uninstall_plan(self.service.paths)
+            except Exception as exc:
+                self._show_warning("削除対象を確認できません", str(exc))
+                return
+            message = (
+                "Master Duel Recorder Liteの保存領域を削除します。\n\n"
+                f"保存領域: {plan.runtime_root}\n"
+                f"ファイル: {plan.file_count}件\n"
+                f"フォルダ: {plan.directory_count}件\n"
+                f"合計サイズ: {self._format_bytes(plan.total_bytes)}\n\n"
+                "設定、SQLite DB、戦績、録画、ログ、キュー、バックアップ、"
+                "エクスポート、アプリから導入したFFmpegが対象です。"
+            )
+            if (
+                QMessageBox.warning(
+                    self,
+                    "クリーンアンインストール",
+                    message,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                != QMessageBox.StandardButton.Yes
+            ):
+                return
+            entered, accepted = QInputDialog.getText(
+                self,
+                "クリーンアンインストール",
+                f"続行するには「{CONFIRMATION_TEXT}」と入力してください。",
+            )
+            if not accepted:
+                return
+            if entered != CONFIRMATION_TEXT:
+                self._show_information(
+                    "アンインストールを中止しました",
+                    "確認語が一致しないため、削除処理は実行しません。",
+                )
+                return
+            try:
+                launch_cleanup_worker(plan, module="master_duel_recorder_lite.pyside_gui")
+            except Exception as exc:
+                self._show_warning("アンインストールを開始できません", str(exc))
+                return
+            self._append_activity("クリーンアンインストールを開始しました")
+            try:
+                self.service.close()
+            finally:
+                self.close()
+
         def _refresh_statistics(self) -> None:
             dashboard = self.service.get_statistics_dashboard(granularity="day")
             chart = self.widgets["statistics_chart"]
@@ -3390,6 +3779,17 @@ def _run(args: argparse.Namespace) -> int:
         @staticmethod
         def _format_rate(value: float | None) -> str:
             return "-" if value is None else f"{value * 100:.1f}%"
+
+        @staticmethod
+        def _format_bytes(value: int | None) -> str:
+            if value is None:
+                return "-"
+            size = float(value)
+            for unit in ("B", "KB", "MB", "GB"):
+                if size < 1024 or unit == "GB":
+                    return f"{size:.1f}{unit}" if unit != "B" else f"{int(size)}B"
+                size /= 1024
+            return f"{size:.1f}GB"
 
         def load_settings(self, *_args: object) -> None:
             try:

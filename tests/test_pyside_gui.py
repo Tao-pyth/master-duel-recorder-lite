@@ -16,6 +16,7 @@ from master_duel_recorder_lite.pyside_gui import (
 )
 from master_duel_recorder_lite.pyside_review import (
     REVIEW_WIDGETS,
+    review_operation_error_message,
     review_timeline_display_row,
 )
 
@@ -169,10 +170,42 @@ class PySideGuiContractTest(unittest.TestCase):
             contract["review_video_contract"]["timeline_columns"],
             ["経過", "種別", "状態", "ラベル", "由来"],
         )
+        self.assertTrue(contract["review_video_contract"]["timeline_user_labels"])
+        self.assertEqual(
+            contract["operational_quality_audit_contract"]["target_version"],
+            "2.5.0",
+        )
+        self.assertEqual(
+            contract["operational_quality_audit_contract"]["missing_action_widgets"],
+            [],
+        )
+        self.assertEqual(
+            contract["operational_quality_audit_contract"]["placeholder_only_actions"],
+            [],
+        )
+        self.assertIn(
+            "録画",
+            contract["operational_quality_audit_contract"]["screens"],
+        )
+        self.assertIn(
+            "record_target_refresh",
+            contract["operational_quality_audit_contract"]["action_widgets"]["record"],
+        )
+        self.assertIn(
+            "clean_uninstall",
+            contract["operational_quality_audit_contract"]["danger_actions_guarded"],
+        )
+        self.assertTrue(
+            contract["operational_quality_audit_contract"]["review_timeline_localized"]
+        )
         self.assertIn("history_duel", contract["duel_editor_contract"]["entry_button"])
         self.assertEqual(
             contract["duel_editor_contract"]["save_source"],
             "RecorderApplicationService.update_duel_record",
+        )
+        self.assertEqual(
+            contract["duel_editor_contract"]["manual_create_source"],
+            "RecorderApplicationService.create_manual_duel_record",
         )
         self.assertEqual(
             contract["settings_input_contract"]["visual_language_widget"],
@@ -252,8 +285,21 @@ class PySideGuiContractTest(unittest.TestCase):
 
         self.assertEqual(
             row,
-            ("01:23.456", "marker", "confirmed", "レビューで追加", "manual"),
+            ("01:23.456", "マーカー", "確定", "レビューで追加", "手動"),
         )
+
+    def test_review_error_message_summarizes_ffmpeg_output_format_error(self) -> None:
+        message = review_operation_error_message(
+            "クリップ出力",
+            RuntimeError(
+                "Unable to choose an output format for 'C:/tmp/clip'; "
+                "Invalid argument"
+            ),
+        )
+
+        self.assertIn("クリップ出力に失敗しました", message)
+        self.assertIn("保存形式", message)
+        self.assertNotIn("Unable to choose", message)
 
 
 if __name__ == "__main__":
