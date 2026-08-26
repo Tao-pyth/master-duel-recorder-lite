@@ -1,5 +1,17 @@
 # リリースノート
 
+## V2.6.0: 自動録画プリロールMVP - 2026-08-27
+
+- 自動録画だけを対象に、明示的に有効化した場合だけ短いプリロール映像を録画へ含めるMVPを追加した
+- `[detection]`設定へ `preroll_enabled`、`preroll_seconds`、`preroll_max_megabytes` を追加し、既存設定では既定無効で補完するようにした
+- PySide6設定画面の録画設定②とCLI設定管理から、プリロールの有効化、秒数、保存上限を確認・変更できるようにした
+- 自動監視中だけ `user_data/data/preroll/` 配下へ短い一時segmentを保持し、録画開始時に凍結したsegmentを本録画停止後に結合するようにした
+- プリロール結合に失敗した場合も本録画だけを保存し、失敗理由を録画診断へ残すfallbackを追加した
+- プリロールを含む録画では、開始候補 `duel_start` を録画ファイル先頭からの経過として保存するようにした
+- 手動録画、長時間バックグラウンド録画、任意クリップ保存、SQLite schema、既存録画、YouTube投稿履歴、OAuth資格情報、prepare queue、manifestは変更しない
+- Ruff、全607 pytest、全608 unittest、PySide6 GUI smoke、CLI/GUI/updater EXEビルド、3 EXE smokeに合格した
+- GitHub Actions、GitHub Release `v2.6.0`、公開asset検証、ダウンロード後EXE smokeは外部変更承認後に追記する
+
 ## V2.5.0: PySide6全画面の実操作品質監査 - 2026-08-26
 
 - PySide6通常GUIの主要画面について、表示操作を実処理、状態依存の無効化、明確な案内、非表示/削除へ分類する操作契約を追加した

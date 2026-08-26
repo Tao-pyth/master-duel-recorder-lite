@@ -83,6 +83,11 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
         "detection.visual_minimum_confidence": ConfigField(
             "visual_detection_minimum_confidence", _number
         ),
+        "detection.preroll_enabled": ConfigField("preroll_enabled", _boolean),
+        "detection.preroll_seconds": ConfigField("preroll_seconds", _integer),
+        "detection.preroll_max_megabytes": ConfigField(
+            "preroll_max_megabytes", _integer
+        ),
         "detection.windows_notifications_enabled": ConfigField(
             "windows_notifications_enabled", _boolean
         ),

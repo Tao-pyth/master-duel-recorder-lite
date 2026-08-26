@@ -28,6 +28,7 @@ from .recording_profile import RecordingProfile, RecordingProfileError
 from .recording_session import RecordingResult, RecordingSession, RecordingState
 from .recording_state_store import RecordingStateStore, RecordingStateStoreError
 from .runtime_paths import RuntimePaths
+from .preroll import FrozenPreroll, PrerollRecordingSession
 from .upload_media import UploadMediaValidator, find_ffprobe
 from .visual_detection import (
     DetectionCandidate,
@@ -107,6 +108,7 @@ class PreparedRecording:
     state_store: RecordingStateStore
     visual_worker_builder: VisualWorkerBuilder | None = None
     visual_lifecycle: RecordingVisualLifecycle = field(default_factory=RecordingVisualLifecycle)
+    timeline_offset_ms: int = 0
     _history_started: bool = field(default=False, init=False)
     _history_finalized: bool = field(default=False, init=False)
     _source: str | None = field(default=None, init=False)
@@ -333,6 +335,7 @@ def prepare_recording(
     visual_frame_generation: Callable[[], int] | None = None,
     audio_process_id: int | None = None,
     reserved_process_audio: ProcessLoopbackController | None = None,
+    frozen_preroll: FrozenPreroll | None = None,
 ) -> PreparedRecording:
     discovery = discover_ffmpeg(config.ffmpeg_path)
     if not discovery.found or discovery.executable is None:
@@ -346,6 +349,11 @@ def prepare_recording(
             master_duel_window_title=master_duel_window_title,
         )
         target = create_recording_target(paths, profile)
+        main_output_path = (
+            target.path.with_name(f"{target.path.stem}.main{target.path.suffix}")
+            if frozen_preroll is not None
+            else target.path
+        )
         auxiliary_audio = None
         fallback_command = None
         initial_audio_warning = None
@@ -376,7 +384,7 @@ def prepare_recording(
                     executable=discovery.executable,
                     profile=replace(profile, audio_mode="none", audio_input=""),
                     capture_input=selected_input,
-                    output_path=target.path,
+                    output_path=main_output_path,
                     recordings_root=paths.recordings,
                 )
             else:
@@ -391,7 +399,7 @@ def prepare_recording(
             executable=discovery.executable,
             profile=effective_profile,
             capture_input=selected_input,
-            output_path=target.path,
+            output_path=main_output_path,
             recordings_root=paths.recordings,
             process_audio_pipe=process_audio_pipe,
         )
@@ -425,27 +433,42 @@ def prepare_recording(
                 source=visual_source,
                 restart_counter=visual_restart_counter,
                 frame_generation=visual_frame_generation,
+                timeline_offset_ms=frozen_preroll.offset_ms if frozen_preroll else 0,
             )
             if enable_visual_detection
             else None
+        )
+        main_session = RecordingSession(
+            command=command,
+            output_path=main_output_path,
+            auxiliary_audio=auxiliary_audio,
+            fallback_command=fallback_command,
+            initial_audio_warning=initial_audio_warning,
+        )
+        session = (
+            PrerollRecordingSession(
+                main_session=main_session,
+                main_output_path=main_output_path,
+                final_output_path=target.path,
+                frozen_preroll=frozen_preroll,
+                executable=discovery.executable,
+                recording_format=profile.recording_format,
+            )
+            if frozen_preroll is not None
+            else main_session
         )
         return PreparedRecording(
             target=target,
             executable=discovery.executable,
             profile=profile,
             command=command,
-            session=RecordingSession(
-                command=command,
-                output_path=target.path,
-                auxiliary_audio=auxiliary_audio,
-                fallback_command=fallback_command,
-                initial_audio_warning=initial_audio_warning,
-            ),
+            session=session,
             lock=recording_lock,
             history=history,
             state_store=RecordingStateStore(paths),
             visual_worker_builder=visual_worker_builder,
             visual_lifecycle=visual_lifecycle,
+            timeline_offset_ms=frozen_preroll.offset_ms if frozen_preroll else 0,
         )
     except (OSError, RecordingHistoryError) as exc:
         recording_lock.release()
@@ -465,6 +488,7 @@ def _visual_worker_builder(
     source: str = "",
     restart_counter: Callable[[], int] | None = None,
     frame_generation: Callable[[], int] | None = None,
+    timeline_offset_ms: int = 0,
 ) -> VisualWorkerBuilder | None:
     if not config.visual_detection_enabled or config.capture_mode != "master_duel":
         return None
@@ -503,7 +527,7 @@ def _visual_worker_builder(
             if current_generation != generation:
                 generation = current_generation
                 pipeline = new_pipeline()
-            return pipeline.analyze_frame(frame, elapsed_ms)
+            return pipeline.analyze_frame(frame, elapsed_ms + timeline_offset_ms)
 
         def save_candidate(candidate: DetectionCandidate) -> None:
             lifecycle.handle(candidate)

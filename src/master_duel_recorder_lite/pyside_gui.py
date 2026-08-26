@@ -230,6 +230,9 @@ SETTINGS_PARITY_WIDGETS: tuple[str, ...] = (
     "settings_visual_fps",
     "settings_visual_language",
     "settings_visual_confidence",
+    "settings_preroll_enabled",
+    "settings_preroll_seconds",
+    "settings_preroll_max_megabytes",
     "settings_runtime_path",
     "settings_runtime_change",
     "settings_reload",
@@ -567,7 +570,7 @@ def smoke_contract(
             "timeline_user_labels": True,
         },
         "operational_quality_audit_contract": {
-            "target_version": "2.5.0",
+            "target_version": "2.6.0",
             "screens": list(OPERATIONAL_AUDIT_SCREENS),
             "action_widgets": {
                 screen: list(actions)
@@ -2015,17 +2018,52 @@ def _run(args: argparse.Namespace) -> int:
                 3,
                 1,
             )
-            grid.addWidget(QLabel("データ保存先"), 4, 0)
+            grid.addWidget(
+                self._settings_check(
+                    "settings_preroll_enabled",
+                    "detection.preroll_enabled",
+                    "自動録画プリロールを有効化",
+                    False,
+                ),
+                4,
+                0,
+                1,
+                3,
+            )
+            grid.addWidget(QLabel("プリロール秒数(1-30)"), 5, 0)
+            grid.addWidget(
+                self._settings_field(
+                    "settings_preroll_seconds",
+                    "detection.preroll_seconds",
+                    5,
+                ),
+                6,
+                0,
+            )
+            grid.addWidget(QLabel("プリロール上限(MB)"), 5, 1)
+            grid.addWidget(
+                self._settings_field(
+                    "settings_preroll_max_megabytes",
+                    "detection.preroll_max_megabytes",
+                    512,
+                ),
+                6,
+                1,
+            )
+            preroll_help = QLabel("有効化した場合だけ、対戦開始前の短い一時映像を自動録画へ含めます。")
+            preroll_help.setWordWrap(True)
+            grid.addWidget(preroll_help, 6, 2)
+            grid.addWidget(QLabel("データ保存先"), 7, 0)
             runtime = self._register(
                 "settings_runtime_path", QLabel(str(self.service.runtime_data_directory()))
             )
             assert isinstance(runtime, QLabel)
             runtime.setWordWrap(True)
-            grid.addWidget(runtime, 5, 0, 1, 2)
+            grid.addWidget(runtime, 8, 0, 1, 2)
             runtime_change = self._button("settings_runtime_change", "保存先を変更")
             assert isinstance(runtime_change, QPushButton)
             runtime_change.clicked.connect(self.change_runtime_data_directory)
-            grid.addWidget(runtime_change, 5, 2)
+            grid.addWidget(runtime_change, 8, 2)
             grid_layout.addLayout(grid)
             layout.addWidget(grid_panel)
 

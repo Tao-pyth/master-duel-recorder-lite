@@ -36,6 +36,7 @@ class AutoRecordingEvent:
     decision: DetectionDecision | None
     recording_id: str | None = None
     result: RecordingResult | None = None
+    preroll_offset_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -205,6 +206,7 @@ class AutoRecordingController:
             observation,
             decision,
             recording_id=prepared.target.recording_id,
+            preroll_offset_ms=getattr(prepared, "timeline_offset_ms", 0),
         )
 
     def _stop(

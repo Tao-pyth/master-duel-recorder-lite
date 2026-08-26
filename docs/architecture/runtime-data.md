@@ -17,6 +17,7 @@ user_data/
       history.sqlite3
       history.vN.*.backup.sqlite3
     recordings/
+    preroll/
     screenshots/
     exports/
     queue/
@@ -47,6 +48,8 @@ V0.16.0以前のEXE隣接`user_data/`は自動移行しません。録画、DB�
 `recording-state.json` は直前の録画状態をチェックサム付きで保持します。書込みは同じフォルダの一時ファイルを同期してから原子的に置換し、直前の有効状態を `.previous` に1世代保持します。不完全な一時ファイルやチェックサム不一致は有効状態として読みません。
 
 `app.toml`も検証後に原子的に置換し、直前の内容を`app.toml.previous`へ1世代保持します。初期化は既存設定を上書きせず、リセットには明示的な`--yes`が必要です。
+
+V2.6.0のプリロール一時segmentは `user_data/data/preroll/` 配下に保存します。このフォルダは正式な録画保存先ではなく、短い上限付きバッファです。録画へ取り込み済みまたはfallback済みのsegmentは削除します。削除に失敗しても既存録画やDBは変更せず、次回の上限管理と診断で扱います。
 
 V0.19.0のv7移行では、旧`recovery_artifacts`が参照する成果物だけを録画保存先内で検証して退避し、DB移行成功後に削除します。通常録画と同じパスは削除せず、移行失敗時は退避ファイルとDBを復元します。移行バックアップは自動削除しません。
 

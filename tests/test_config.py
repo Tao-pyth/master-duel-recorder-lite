@@ -28,6 +28,9 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.visual_detection_maximum_fps, 2.0)
         self.assertEqual(loaded.config.visual_detection_language, "auto")
         self.assertEqual(loaded.config.visual_detection_minimum_confidence, 0.70)
+        self.assertFalse(loaded.config.preroll_enabled)
+        self.assertEqual(loaded.config.preroll_seconds, 5)
+        self.assertEqual(loaded.config.preroll_max_megabytes, 512)
         self.assertEqual(loaded.config.upload_privacy_status, "private")
 
     def test_save_and_load_config(self) -> None:
@@ -65,6 +68,9 @@ class AppConfigTest(unittest.TestCase):
                     visual_detection_maximum_fps=1.5,
                     visual_detection_language="ja",
                     visual_detection_minimum_confidence=0.8,
+                    preroll_enabled=True,
+                    preroll_seconds=8,
+                    preroll_max_megabytes=256,
                     upload_privacy_status="unlisted",
                     auto_create_user_data=False,
                 ),
@@ -97,6 +103,9 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.visual_detection_maximum_fps, 1.5)
         self.assertEqual(loaded.config.visual_detection_language, "ja")
         self.assertEqual(loaded.config.visual_detection_minimum_confidence, 0.8)
+        self.assertTrue(loaded.config.preroll_enabled)
+        self.assertEqual(loaded.config.preroll_seconds, 8)
+        self.assertEqual(loaded.config.preroll_max_megabytes, 256)
         self.assertEqual(loaded.config.upload_privacy_status, "unlisted")
         self.assertFalse(loaded.config.auto_create_user_data)
 
@@ -212,6 +221,19 @@ class AppConfigTest(unittest.TestCase):
             config_path = paths.config / "app.toml"
             config_path.write_text(
                 '[detection]\nvisual_maximum_fps = 2.1\nvisual_minimum_confidence = 0.69\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_preroll_limits_fail_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text(
+                "[detection]\npreroll_enabled = true\npreroll_seconds = 31\npreroll_max_megabytes = 32\n",
                 encoding="utf-8",
             )
 

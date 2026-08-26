@@ -974,6 +974,30 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertEqual(keyword["status"], "candidate")
         self.assertEqual(keyword["confidence"], 0.9)
 
+    def test_automatic_start_candidate_uses_preroll_offset(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        candidate = DetectionCandidate(
+            "duel_start",
+            2500,
+            0.9,
+            "3フレーム合意",
+            "detector",
+            "1",
+        )
+        repository = SimpleNamespace(add=lambda *args, **kwargs: (args, kwargs))
+
+        with patch(
+            "master_duel_recorder_lite.application.DuelTimelineRepository.from_runtime_paths",
+            return_value=repository,
+        ):
+            with patch.object(repository, "add", wraps=repository.add) as add:
+                service._save_automatic_start_candidate(
+                    "recording", candidate, None, elapsed_ms=5000
+                )
+
+        _, keyword = add.call_args
+        self.assertEqual(keyword["elapsed_ms"], 5000)
+
     def test_watch_reports_error_when_visual_detection_is_disabled(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))
         config = AppConfig(visual_detection_enabled=False)

@@ -104,6 +104,7 @@ from .operation_state import (
     OperationStateMachine,
 )
 from .preflight import PreflightReport, run_preflight
+from .preroll import FrozenPreroll, PrerollCaptureBuffer, new_preroll_buffer
 from .recorder import PreparedRecording, prepare_recording
 from .recording_history import (
     ConsistencyIssue,
@@ -112,6 +113,7 @@ from .recording_history import (
     RecordingHistoryEntry,
     RecordingHistoryRepository,
 )
+from .recording_profile import RecordingProfile
 from .recording_browsing import RecordingBrowser, RecordingReference
 from .recording_session import RecordingResult, RecordingState
 from .review_viewmodel import (
@@ -1750,6 +1752,8 @@ class RecorderApplicationService:
         reported_restart_count = 0
         reserved_audio: ProcessLoopbackController | None = None
         reserved_audio_reported = False
+        preroll_buffer: PrerollCaptureBuffer | None = None
+        preroll_target_key: tuple[int, int] | None = None
         try:
             loaded = self.load_config()
             config = loaded.config
@@ -1777,6 +1781,7 @@ class RecorderApplicationService:
                 raise ApplicationOperationError(
                     "対戦開始判定に使うFFmpegを再検出できません"
                 )
+            preroll_profile = RecordingProfile.from_config(watch_config)
             monitor = GameWindowMonitor(
                 process_name=watch_config.game_process_name,
                 title_contains=watch_config.game_window_title_contains,
@@ -1817,6 +1822,72 @@ class RecorderApplicationService:
                 if reserved_audio is not None:
                     reserved_audio.stop()
                     reserved_audio = None
+
+            def discard_frozen_preroll(frozen: FrozenPreroll | None) -> None:
+                if frozen is None:
+                    return
+                for segment in frozen.segments:
+                    try:
+                        segment.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                parents = {segment.parent for segment in frozen.segments}
+                for parent in parents:
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        pass
+
+            def stop_preroll_buffer() -> None:
+                nonlocal preroll_buffer, preroll_target_key
+                if preroll_buffer is not None:
+                    preroll_buffer.discard()
+                preroll_buffer = None
+                preroll_target_key = None
+
+            def ensure_preroll_buffer(observation: DuelObservation) -> None:
+                nonlocal preroll_buffer, preroll_target_key
+                if not watch_config.preroll_enabled or not watch_config.auto_start_recording:
+                    return
+                target_key = observation.capture_target_key
+                if target_key is None:
+                    stop_preroll_buffer()
+                    return
+                if preroll_buffer is not None:
+                    if preroll_target_key == target_key and preroll_buffer.active:
+                        preroll_buffer.poll()
+                        return
+                    stop_preroll_buffer()
+                try:
+                    preroll_buffer = new_preroll_buffer(
+                        paths=self.paths,
+                        executable=discovery.executable,
+                        profile=preroll_profile,
+                        capture_input=_automatic_capture_input(observation),
+                        seconds=watch_config.preroll_seconds,
+                        max_megabytes=watch_config.preroll_max_megabytes,
+                    )
+                    preroll_buffer.start()
+                    preroll_target_key = target_key
+                    self._emit(
+                        callback,
+                        ApplicationEvent(
+                            "preroll",
+                            "プリロール用の短い一時バッファを開始しました",
+                            state="ready",
+                        ),
+                    )
+                except Exception as exc:
+                    preroll_buffer = None
+                    preroll_target_key = None
+                    self._emit(
+                        callback,
+                        ApplicationEvent(
+                            "preroll",
+                            f"プリロール一時バッファを開始できません: {exc}。通常の自動録画を継続します",
+                            state="degraded",
+                        ),
+                    )
 
             def reserve_process_audio(observation: DuelObservation) -> None:
                 nonlocal reserved_audio, reserved_audio_reported
@@ -1868,8 +1939,17 @@ class RecorderApplicationService:
             def prepare_automatic_recording(
                 observation: DuelObservation,
             ) -> PreparedRecording:
-                nonlocal reserved_audio
+                nonlocal reserved_audio, preroll_buffer, preroll_target_key
                 reservation = reserved_audio
+                frozen_preroll: FrozenPreroll | None = None
+                if (
+                    watch_config.preroll_enabled
+                    and preroll_buffer is not None
+                    and preroll_target_key == observation.capture_target_key
+                ):
+                    frozen_preroll = preroll_buffer.freeze()
+                    preroll_buffer = None
+                    preroll_target_key = None
                 try:
                     prepared = prepare_recording(
                         paths=self.paths,
@@ -1882,8 +1962,10 @@ class RecorderApplicationService:
                         visual_frame_generation=lambda: frame_stream.generation,
                         audio_process_id=observation.capture_process_id,
                         reserved_process_audio=reservation,
+                        frozen_preroll=frozen_preroll,
                     )
                 except Exception:
+                    discard_frozen_preroll(frozen_preroll)
                     if reservation is not None:
                         reservation.stop()
                         reserved_audio = None
@@ -1920,6 +2002,7 @@ class RecorderApplicationService:
                 if self._watch_stop.is_set():
                     break
                 if controller.current is None:
+                    ensure_preroll_buffer(observation)
                     reserve_process_audio(observation)
                 event = controller.process(observation)
                 if event.action is AutoRecordingEventAction.STARTED:
@@ -1931,6 +2014,7 @@ class RecorderApplicationService:
                         event.recording_id,
                         start_monitor.start_candidate,
                         callback,
+                        elapsed_ms=event.preroll_offset_ms,
                     )
                     self._notify(
                         "candidate_started",
@@ -2000,6 +2084,7 @@ class RecorderApplicationService:
                                 event.recording_id,
                                 boundary_candidate,
                                 callback,
+                                elapsed_ms=event.preroll_offset_ms,
                             )
                             self._notify(
                                 "boundary_handoff_started",
@@ -2097,6 +2182,8 @@ class RecorderApplicationService:
                 self._emit(callback, _application_event(event))
             if reserved_audio is not None:
                 reserved_audio.stop()
+            if preroll_buffer is not None:
+                preroll_buffer.discard()
             self._clear_automatic_snapshot()
             if frame_stream is not None:
                 frame_stream.stop()
@@ -2179,13 +2266,15 @@ class RecorderApplicationService:
         recording_id: str | None,
         candidate: DetectionCandidate | None,
         callback: EventCallback | None,
+        *,
+        elapsed_ms: int = 0,
     ) -> None:
         if recording_id is None or candidate is None:
             return
         try:
             DuelTimelineRepository.from_runtime_paths(self.paths).add(
                 recording_id,
-                elapsed_ms=0,
+                elapsed_ms=max(0, elapsed_ms),
                 event_type="duel_start",
                 label=f"録画開始前に検出: {candidate.reason}",
                 source="detected",

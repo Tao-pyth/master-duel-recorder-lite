@@ -173,7 +173,7 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertTrue(contract["review_video_contract"]["timeline_user_labels"])
         self.assertEqual(
             contract["operational_quality_audit_contract"]["target_version"],
-            "2.5.0",
+            "2.6.0",
         )
         self.assertEqual(
             contract["operational_quality_audit_contract"]["missing_action_widgets"],

@@ -35,7 +35,7 @@ try {
         "activity", "app_update", "catalog_table", "clean_uninstall", "csv_status", "data_backup_table", "data_protection_scope", "data_protection_status", "deck_catalog_table", "ffmpeg_setup",
         "history_add", "history_bulk", "history_coin_filter", "history_columns", "history_delete", "history_duel", "history_duplicates", "history_incomplete", "history_origin_filter", "history_own_deck_filter", "history_play", "history_refresh", "history_saved_filter", "history_season_filter", "history_table", "history_tag_filter", "history_youtube",
         "improvement_status", "incomplete_duel_count", "internal_improve_manual_duel_add", "internal_improve_refresh", "internal_prepare_run", "manual_duel_add", "prepare_recording", "prepare_table", "record_diagnostics_export", "record_manual_duel_add", "record_reliability_check", "record_start", "record_status", "record_stop", "record_target_refresh", "record_target_save",
-        "season_table", "settings_audio_input", "settings_audio_mode", "settings_audio_test", "settings_csv_export", "settings_data_backup", "settings_display_color_table", "settings_display_colors", "settings_double_click_help", "settings_ffmpeg_path", "settings_form", "settings_managed_export", "settings_reliability_refresh", "settings_reliability_setup_check", "settings_reliability_status", "settings_runtime_path", "settings_save", "settings_youtube_connect", "settings_youtube_disconnect", "settings_youtube_refresh", "settings_youtube_status", "settings_youtube_test_upload", "statistics_chart", "statistics_coin_table", "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "statistics_season_table",
+        "season_table", "settings_audio_input", "settings_audio_mode", "settings_audio_test", "settings_csv_export", "settings_data_backup", "settings_display_color_table", "settings_display_colors", "settings_double_click_help", "settings_ffmpeg_path", "settings_form", "settings_managed_export", "settings_preroll_enabled", "settings_preroll_max_megabytes", "settings_preroll_seconds", "settings_reliability_refresh", "settings_reliability_setup_check", "settings_reliability_status", "settings_runtime_path", "settings_save", "settings_youtube_connect", "settings_youtube_disconnect", "settings_youtube_refresh", "settings_youtube_status", "settings_youtube_test_upload", "statistics_chart", "statistics_coin_table", "statistics_date_from_picker", "statistics_date_to_picker", "statistics_deck_table", "statistics_filters", "statistics_order_table", "statistics_season_table",
         "tag_catalog_table", "target_selector", "visual_details_toggle", "visual_diagnostics_folder", "visual_status", "watch_toggle",
         "youtube_status", "youtube_template", "youtube_template_save", "youtube_template_tags", "youtube_template_title"
     )
@@ -75,7 +75,7 @@ try {
     if (-not $result.reliability_action_contract.click_updates_status -or -not $result.reliability_action_contract.navigation_removed) {
         throw "GUI smoke reliability action contract is invalid"
     }
-    if ($result.operational_quality_audit_contract.target_version -ne "2.5.0") {
+    if ($result.operational_quality_audit_contract.target_version -ne "2.6.0") {
         throw "GUI smoke operational quality target is invalid"
     }
     if ($result.operational_quality_audit_contract.missing_action_widgets.Count -ne 0 -or $result.operational_quality_audit_contract.placeholder_only_actions.Count -ne 0) {

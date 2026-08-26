@@ -61,6 +61,9 @@ class AppConfig:
     visual_detection_maximum_fps: float = 2.0
     visual_detection_language: str = "auto"
     visual_detection_minimum_confidence: float = 0.70
+    preroll_enabled: bool = False
+    preroll_seconds: int = 5
+    preroll_max_megabytes: int = 512
     windows_notifications_enabled: bool = True
     upload_privacy_status: str = "private"
     readiness_check_seconds: int = 30
@@ -217,6 +220,17 @@ def load_app_config(
                 detection_table,
                 "visual_minimum_confidence",
                 AppConfig.visual_detection_minimum_confidence,
+            ),
+            preroll_enabled=_bool_value(
+                detection_table, "preroll_enabled", AppConfig.preroll_enabled
+            ),
+            preroll_seconds=_int_value(
+                detection_table, "preroll_seconds", AppConfig.preroll_seconds
+            ),
+            preroll_max_megabytes=_int_value(
+                detection_table,
+                "preroll_max_megabytes",
+                AppConfig.preroll_max_megabytes,
             ),
             windows_notifications_enabled=_bool_value(
                 detection_table,
@@ -376,6 +390,9 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"visual_maximum_fps = {config.visual_detection_maximum_fps}",
                 f"visual_language = {_toml_string(config.visual_detection_language)}",
                 f"visual_minimum_confidence = {config.visual_detection_minimum_confidence}",
+                f"preroll_enabled = {_toml_bool(config.preroll_enabled)}",
+                f"preroll_seconds = {config.preroll_seconds}",
+                f"preroll_max_megabytes = {config.preroll_max_megabytes}",
                 f"windows_notifications_enabled = {_toml_bool(config.windows_notifications_enabled)}",
                 "",
                 "[upload]",
@@ -616,6 +633,16 @@ def _detection_values(config: AppConfig) -> None:
         raise ValueError("visual_maximum_fps は0より大きく2.0以下である必要があります")
     if not 0.70 <= config.visual_detection_minimum_confidence <= 1.0:
         raise ValueError("visual_minimum_confidence は0.70から1.0である必要があります")
+    if not isinstance(config.preroll_enabled, bool):
+        raise ValueError("preroll_enabled はtrueまたはfalseである必要があります")
+    if isinstance(config.preroll_seconds, bool) or not isinstance(config.preroll_seconds, int):
+        raise ValueError("preroll_seconds は整数である必要があります")
+    if not 1 <= config.preroll_seconds <= 30:
+        raise ValueError("preroll_seconds は1から30である必要があります")
+    if isinstance(config.preroll_max_megabytes, bool) or not isinstance(config.preroll_max_megabytes, int):
+        raise ValueError("preroll_max_megabytes は整数である必要があります")
+    if not 64 <= config.preroll_max_megabytes <= 4096:
+        raise ValueError("preroll_max_megabytes は64から4096である必要があります")
 
 
 def _visual_detection_language(value: str) -> str:
