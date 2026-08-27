@@ -1,4 +1,4 @@
-# PySide6通常GUI内レビュー統合 V2.4.0
+# PySide6通常GUI内レビュー統合 V2.4.0 / 視覚タイムラインMVP V2.7.0
 
 ## 目的
 
@@ -11,6 +11,8 @@ V2.4.0では、戦績管理で選択した録画を通常GUIの外へ出さず�
 - 再生/一時停止、シーク、現在位置表示を提供する。
 - タイムライン一覧に経過、種別、状態、ラベル、由来を表示する。
 - タイムラインイベント選択で動画位置を`elapsed_ms`へ移動する。
+- V2.7.0以降、視覚タイムラインバーで現在位置、選択位置、タイムラインイベント位置を表示する。
+- 視覚タイムラインのイベント選択と表形式タイムラインの選択を同期し、既存の動画シークへ接続する。
 - 現在位置を`RecorderApplicationService.add_review_marker`でマーカー化する。
 - 選択イベントまたは現在位置を中心に`RecorderApplicationService.export_review_clip`でクリップを出力する。
 - Qt Multimedia不可、未対応形式、再生エラー時は`RecorderApplicationService.play_recording`で外部プレイヤーへfallbackする。
@@ -27,7 +29,7 @@ V2.4.0では、戦績管理で選択した録画を通常GUIの外へ出さず�
 
 通常GUIは`pyside_gui.py`の`history_play`操作で録画IDを解決し、`pyside_review.create_review_window()`を呼び出す。レビューウィンドウは親GUIと同じQt event loopで表示し、`app.exec()`を再実行しない。親GUIはウィンドウ参照を保持し、閉じた後に参照を破棄する。
 
-レビュー画面は`RecorderApplicationService.get_review_view_model()`から録画概要、動画参照、戦績概要、タイムラインを受け取る。GUIはSQLiteへ直接SQLを発行せず、マーカー追加とクリップ出力もApplication Service経由に限定する。
+レビュー画面は`RecorderApplicationService.get_review_view_model()`から録画概要、動画参照、戦績概要、タイムライン、視覚タイムライン用の派生表示データを受け取る。GUIはSQLiteへ直接SQLを発行せず、マーカー追加とクリップ出力もApplication Service経由に限定する。V2.7.0の視覚タイムラインはViewModel上の`visual_timeline`を描画するだけで、DBや録画ファイルを直接変更しない。
 
 ## 失敗時の扱い
 
@@ -36,6 +38,8 @@ V2.4.0では、戦績管理で選択した録画を通常GUIの外へ出さず�
 ## 検証方針
 
 - `smoke_contract`でレビュー導線、レビューウィジェット、対応拡張子、fallback、タイムライン列を検出可能にする。
+- V2.7.0以降、`smoke_contract`で視覚タイムラインWidget、表示種別、同期契約、fallback安全性を検出可能にする。
 - `review_timeline_display_row`でタイムライン列の欠落を単体テストする。
+- `build_visual_timeline_items`で録画長に対する割合、種別分類、範囲外イベント、録画長不明を単体テストする。
 - PySide6 GUI smokeで戦績管理画面が崩れず、レビュー導線契約がJSONへ出力されることを確認する。
 - 全体テストとRuffで既存機能への回帰を確認する。

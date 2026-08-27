@@ -21,7 +21,7 @@ V1.5.0では、Tkinter GUIを正式導線として維持したまま、将来の
 ## 層ごとの責務
 
 - GUI層: 画面表示、入力値の受け取り、ユーザー操作の発火だけを行う。
-- Review ViewModel: 録画概要、動画参照、タイムライン、戦績概要、クリップ候補をGUI非依存のdataclassとして表現する。
+- Review ViewModel: 録画概要、動画参照、タイムライン、視覚タイムライン用の派生表示データ、戦績概要、クリップ候補をGUI非依存のdataclassとして表現する。
 - Application層: `RecorderApplicationService`がRepository、`RecordingBrowser`、`ClipExportService`、YouTube投稿履歴を束ねる。
 - Repository層: SQLiteの読み書き、制約、schema互換を担当する。
 - RuntimePaths: Tkinter、CLI、PySide6が同じ`user_data`を解決するための唯一の入口にする。
@@ -54,6 +54,8 @@ PySide6レビューは`pyside_review.py`へ隔離し、PySide6 importは同モ�
 Tkinter GUIからは別プロセスで`mdrl review launch RECORDING_ID --fallback-external`を起動する。これにより、TkinterとQtのevent loop競合を避け、PySide6起動失敗が既存GUIの状態や管理データへ影響しないようにする。
 
 V2.4.0以降、PySide6通常GUIからは同一Qt event loop内で`pyside_review.create_review_window()`を呼び出す。レビューウィンドウは`app.exec()`を再実行せず、親GUIがウィンドウ参照を保持して寿命を管理する。Qt Multimediaの読み込み失敗、未対応拡張子、再生エラーでは`RecorderApplicationService.play_recording`による外部プレイヤーfallbackへ戻す。
+
+V2.7.0以降、レビュー画面は`ReviewViewModel.visual_timeline`を使って録画長に対するイベント位置を描画する。視覚タイムラインの選択は既存の動画シークと表形式タイムライン選択へ接続するだけで、SQLite、録画ファイル、FFmpeg、設定ファイルを直接操作しない。録画長不明、イベントなし、範囲外イベント、Qt Multimedia fallback時も保存データを変更しない。
 
 ## DB / 設定migrationを行わない理由
 

@@ -163,6 +163,21 @@ class PySideGuiContractTest(unittest.TestCase):
         )
         self.assertEqual(contract["review_video_contract"]["fallback"], "external_player")
         self.assertEqual(
+            contract["review_video_contract"]["visual_timeline"]["widget"],
+            "review_visual_timeline",
+        )
+        self.assertEqual(
+            contract["review_video_contract"]["visual_timeline"]["source"],
+            "ReviewViewModel.visual_timeline",
+        )
+        self.assertIn(
+            "manual_marker",
+            contract["review_video_contract"]["visual_timeline"]["kinds"],
+        )
+        self.assertTrue(
+            contract["review_video_contract"]["visual_timeline"]["fallback_safe"]
+        )
+        self.assertEqual(
             contract["review_video_contract"]["marker_edit_source"],
             "RecorderApplicationService.update_review_marker_label",
         )

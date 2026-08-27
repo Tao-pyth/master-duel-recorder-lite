@@ -10,6 +10,7 @@ from .review_viewmodel import (
     ReviewClipExportRequest,
     ReviewMarkerRequest,
     ReviewTimelineEvent,
+    ReviewVisualTimelineItem,
 )
 
 
@@ -35,6 +36,7 @@ REVIEW_WIDGETS: tuple[str, ...] = (
     "review_clip_export",
     "review_position_slider",
     "review_position_label",
+    "review_visual_timeline",
     "review_timeline_table",
 )
 
@@ -114,6 +116,16 @@ def review_timeline_display_row(event: ReviewTimelineEvent) -> tuple[str, str, s
     )
 
 
+def review_visual_timeline_contract() -> dict[str, object]:
+    return {
+        "widget": "review_visual_timeline",
+        "source": "ReviewViewModel.visual_timeline",
+        "kinds": ["duel_start", "manual_marker", "clip_candidate", "timeline_event"],
+        "sync": ["current_position", "selected_event", "timeline_table"],
+        "fallback_safe": True,
+    }
+
+
 def review_operation_error_message(operation: str, error: Exception) -> str:
     detail = str(error).strip()
     if "Unable to choose an output format" in detail or "Invalid argument" in detail:
@@ -136,8 +148,9 @@ def create_review_window(
     parent: object | None = None,
 ) -> object:
     try:
-        from PySide6.QtCore import QUrl
+        from PySide6.QtCore import QSize, QUrl
         from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QPainter, QPen
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
         from PySide6.QtMultimediaWidgets import QVideoWidget
         from PySide6.QtWidgets import (
@@ -189,6 +202,97 @@ def create_review_window(
     player.setVideoOutput(video)
     player.setSource(QUrl.fromLocalFile(str(model.video.path)))
 
+    class ReviewVisualTimelineWidget(QWidget):
+        def __init__(self, items: tuple[ReviewVisualTimelineItem, ...]) -> None:
+            super().__init__()
+            self.setObjectName("review_visual_timeline")
+            self.setMinimumHeight(54)
+            self.setToolTip("録画内のイベント位置")
+            self._items = items
+            self._current_ms = 0
+            self._selected_event_id: str | None = None
+            self._on_item_selected: object | None = None
+
+        def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+            return QSize(760, 54)
+
+        def set_items(self, items: tuple[ReviewVisualTimelineItem, ...]) -> None:
+            self._items = items
+            if self._selected_event_id not in {item.event_id for item in items}:
+                self._selected_event_id = None
+            self.update()
+
+        def set_current_position(self, position_ms: int) -> None:
+            self._current_ms = max(0, int(position_ms))
+            self.update()
+
+        def set_selected_event(self, event_id: str | None) -> None:
+            self._selected_event_id = event_id
+            self.update()
+
+        def set_item_selected_callback(self, callback: object) -> None:
+            self._on_item_selected = callback
+
+        def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt override
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            left = 16
+            right = max(left + 1, self.width() - 16)
+            y = self.height() // 2
+            painter.setPen(QPen(QColor("#9ca3af"), 3))
+            painter.drawLine(left, y, right, y)
+            current_ratio = self._current_position_ratio()
+            current_x = left + int((right - left) * current_ratio)
+            painter.setPen(QPen(QColor("#111827"), 2))
+            painter.drawLine(current_x, y - 18, current_x, y + 18)
+            for item in self._items:
+                x = left + int((right - left) * item.ratio)
+                radius = 7 if item.event_id == self._selected_event_id else 5
+                color = _visual_timeline_color(item.kind, item.in_range)
+                painter.setBrush(color)
+                painter.setPen(QPen(QColor("#111827"), 1))
+                painter.drawEllipse(x - radius, y - radius, radius * 2, radius * 2)
+            painter.end()
+
+        def mousePressEvent(self, event: object) -> None:  # noqa: N802 - Qt override
+            selected = self._nearest_item(int(event.position().x()))
+            if selected is None:
+                return
+            self._selected_event_id = selected.event_id
+            self.setToolTip(selected.tooltip)
+            self.update()
+            if callable(self._on_item_selected):
+                self._on_item_selected(selected)
+
+        def _nearest_item(self, x_position: int) -> ReviewVisualTimelineItem | None:
+            if not self._items:
+                return None
+            left = 16
+            right = max(left + 1, self.width() - 16)
+            positioned = (
+                (abs(x_position - (left + int((right - left) * item.ratio))), item)
+                for item in self._items
+            )
+            distance, item = min(positioned, key=lambda pair: pair[0])
+            return item if distance <= 14 else None
+
+        def _current_position_ratio(self) -> float:
+            maximum = max(0, int(slider.maximum()))
+            if maximum <= 0:
+                return 0.0
+            return min(1.0, max(0.0, self._current_ms / maximum))
+
+    def _visual_timeline_color(kind: str, in_range: bool) -> QColor:
+        if not in_range:
+            return QColor("#9ca3af")
+        colors = {
+            "duel_start": QColor("#16a34a"),
+            "manual_marker": QColor("#2563eb"),
+            "clip_candidate": QColor("#f59e0b"),
+            "timeline_event": QColor("#6b7280"),
+        }
+        return colors.get(kind, QColor("#6b7280"))
+
     controls = QHBoxLayout()
     play_button = QPushButton("再生/一時停止")
     play_button.setObjectName("review_play_pause")
@@ -214,6 +318,8 @@ def create_review_window(
     position_label = QLabel("00:00.000 / --:--.---")
     position_label.setObjectName("review_position_label")
     layout.addWidget(position_label)
+    visual_timeline = ReviewVisualTimelineWidget(model.visual_timeline)
+    layout.addWidget(visual_timeline)
 
     timeline = QTableWidget(0, 5)
     timeline.setObjectName("review_timeline_table")
@@ -228,6 +334,7 @@ def create_review_window(
 
     def reload_timeline() -> None:
         refreshed = service.get_review_view_model(recording_id)
+        visual_timeline.set_items(refreshed.visual_timeline)
         timeline.setRowCount(0)
         for event in refreshed.timeline:
             row = timeline.rowCount()
@@ -331,12 +438,24 @@ def create_review_window(
     def update_position_label(position_ms: int) -> None:
         duration_ms = max(slider.maximum(), int(player.duration()))
         position_label.setText(f"{_position_label(position_ms)} / {_position_label(duration_ms)}")
+        visual_timeline.set_current_position(position_ms)
 
     def seek_to_timeline_row(row: int) -> None:
         item = timeline.item(row, 0)
         if item is None:
             return
+        visual_timeline.set_selected_event(str(item.data(event_id_role)))
         player.setPosition(int(item.data(Qt.ItemDataRole.UserRole)))
+
+    def select_timeline_event(item: ReviewVisualTimelineItem) -> None:
+        for row in range(timeline.rowCount()):
+            event_id_item = timeline.item(row, 0)
+            if event_id_item is None:
+                continue
+            if event_id_item.data(event_id_role) == item.event_id:
+                timeline.selectRow(row)
+                break
+        player.setPosition(item.elapsed_ms)
 
     play_button.clicked.connect(toggle_play_pause)
     open_external_button.clicked.connect(open_external_player_window)
@@ -344,6 +463,7 @@ def create_review_window(
     marker_edit_button.clicked.connect(edit_marker)
     clip_button.clicked.connect(export_clip)
     timeline.cellClicked.connect(lambda row, _column: seek_to_timeline_row(row))
+    visual_timeline.set_item_selected_callback(select_timeline_event)
     slider.sliderMoved.connect(player.setPosition)
     player.positionChanged.connect(slider.setValue)
     player.positionChanged.connect(update_position_label)

@@ -82,6 +82,28 @@ class ReviewTimelineEvent:
 
 
 @dataclass(frozen=True)
+class ReviewVisualTimelineItem:
+    event_id: str
+    elapsed_ms: int
+    ratio: float
+    kind: str
+    label: str
+    tooltip: str
+    in_range: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "event_id": self.event_id,
+            "elapsed_ms": self.elapsed_ms,
+            "ratio": self.ratio,
+            "kind": self.kind,
+            "label": self.label,
+            "tooltip": self.tooltip,
+            "in_range": self.in_range,
+        }
+
+
+@dataclass(frozen=True)
 class ReviewDuelSummary:
     duel_id: str | None
     status: str
@@ -134,6 +156,7 @@ class ReviewViewModel:
     video: ReviewVideoReference
     duel: ReviewDuelSummary
     timeline: tuple[ReviewTimelineEvent, ...]
+    visual_timeline: tuple[ReviewVisualTimelineItem, ...]
     clip_candidates: tuple[ReviewClipCandidate, ...]
 
     def to_dict(self) -> dict[str, object]:
@@ -142,6 +165,7 @@ class ReviewViewModel:
             "video": self.video.to_dict(),
             "duel": self.duel.to_dict(),
             "timeline": [event.to_dict() for event in self.timeline],
+            "visual_timeline": [item.to_dict() for item in self.visual_timeline],
             "clip_candidates": [
                 candidate.to_dict() for candidate in self.clip_candidates
             ],
@@ -200,6 +224,7 @@ def build_review_view_model(
     youtube_watch_url: str | None,
 ) -> ReviewViewModel:
     duration = history.duration_seconds
+    review_timeline = tuple(_timeline_event(event) for event in timeline)
     return ReviewViewModel(
         recording=ReviewRecordingSummary(
             recording_id=history.recording_id,
@@ -219,10 +244,26 @@ def build_review_view_model(
             can_play_in_app=reference.path.suffix.lower() in {".mp4", ".mkv"},
         ),
         duel=_duel_summary(duel_record, youtube_watch_url),
-        timeline=tuple(_timeline_event(event) for event in timeline),
+        timeline=review_timeline,
+        visual_timeline=build_visual_timeline_items(
+            review_timeline,
+            duration_seconds=duration,
+        ),
         clip_candidates=tuple(
             _clip_candidate(event, duration_seconds=duration) for event in timeline
         ),
+    )
+
+
+def build_visual_timeline_items(
+    timeline: tuple[ReviewTimelineEvent, ...],
+    *,
+    duration_seconds: float | None,
+) -> tuple[ReviewVisualTimelineItem, ...]:
+    duration_ms = int(duration_seconds * 1000) if duration_seconds and duration_seconds > 0 else 0
+    return tuple(
+        _visual_timeline_item(event, duration_ms=duration_ms)
+        for event in timeline
     )
 
 
@@ -286,6 +327,41 @@ def _clip_candidate(
         ),
         label=event.label or event.event_type,
     )
+
+
+def _visual_timeline_item(
+    event: ReviewTimelineEvent,
+    *,
+    duration_ms: int,
+) -> ReviewVisualTimelineItem:
+    in_range = duration_ms > 0 and 0 <= event.elapsed_ms <= duration_ms
+    ratio = _timeline_ratio(event.elapsed_ms, duration_ms=duration_ms)
+    kind = _visual_timeline_kind(event)
+    return ReviewVisualTimelineItem(
+        event_id=event.event_id,
+        elapsed_ms=max(0, event.elapsed_ms),
+        ratio=ratio,
+        kind=kind,
+        label=event.label,
+        tooltip=f"{event.elapsed_label} / {event.label} / {kind}",
+        in_range=in_range,
+    )
+
+
+def _timeline_ratio(elapsed_ms: int, *, duration_ms: int) -> float:
+    if duration_ms <= 0:
+        return 0.0
+    return round(min(1.0, max(0.0, elapsed_ms / duration_ms)), 6)
+
+
+def _visual_timeline_kind(event: ReviewTimelineEvent) -> str:
+    if event.event_type == "duel_start":
+        return "duel_start"
+    if event.event_type == "marker" and event.source == "manual":
+        return "manual_marker"
+    if event.status == "candidate":
+        return "clip_candidate"
+    return "timeline_event"
 
 
 def _elapsed_label(elapsed_ms: int) -> str:

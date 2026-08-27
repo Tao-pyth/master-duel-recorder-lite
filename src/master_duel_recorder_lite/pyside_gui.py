@@ -22,7 +22,7 @@ from .gui_feature_parity import (
     satisfied_standard_feature_keys,
 )
 from .operation_state import OperationAction
-from .pyside_review import REVIEW_WIDGETS
+from .pyside_review import REVIEW_WIDGETS, review_visual_timeline_contract
 from .ui_preferences import load_ui_preferences, save_ui_preferences
 from .uninstall import (
     CONFIRMATION_TEXT,
@@ -563,6 +563,7 @@ def smoke_contract(
             "widgets": list(REVIEW_WIDGETS),
             "supported_extensions": [".mp4", ".mkv"],
             "fallback": "external_player",
+            "visual_timeline": review_visual_timeline_contract(),
             "timeline_columns": ["経過", "種別", "状態", "ラベル", "由来"],
             "marker_source": "RecorderApplicationService.add_review_marker",
             "marker_edit_source": "RecorderApplicationService.update_review_marker_label",
