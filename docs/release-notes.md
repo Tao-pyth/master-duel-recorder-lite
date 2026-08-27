@@ -9,6 +9,8 @@
 - PySide6 smoke contractへ、視覚タイムラインWidget、表示種別、選択同期、fallback安全性の契約を追加した
 - クリップ範囲エディタ、波形/サムネイル、実録画codec差異の網羅検証、DB schema、設定形式、長時間バックグラウンド録画、任意クリップ保存、OAuth、queue、manifestは変更しない
 - Ruff、全609 pytest、全610 unittest、PySide6 GUI smoke、CLI/GUI/updater EXEビルド、3 EXE smokeに合格した
+- GitHub Actions run `33088497995` でmain CIに合格し、run `33088520685` でWindows EXE release workflow、3 EXE smoke、公開asset検証、ダウンロード後EXE smokeに合格した
+- GitHub Release `v2.7.0` として公開し、Issue #608-#611 とMilestone `V2.7.0` を完了として閉じた
 
 ## V2.6.0: 自動録画プリロールMVP - 2026-08-27
 
