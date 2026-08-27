@@ -12,6 +12,8 @@ from master_duel_recorder_lite.pyside_gui import (
     build_gui_parser,
     history_color_target_label,
     history_table_display_row,
+    season_table_display_row,
+    season_type_label,
     smoke_contract,
 )
 from master_duel_recorder_lite.pyside_review import (
@@ -78,14 +80,24 @@ class PySideGuiContractTest(unittest.TestCase):
             contract["statistics_chart_contract"]["visual_type"],
             "bar_and_line",
         )
+        self.assertTrue(contract["statistics_chart_contract"]["separate_label_regions"])
         self.assertTrue(contract["table_readability_contract"]["horizontal_scroll"])
         self.assertTrue(contract["table_readability_contract"]["stable_catalog_table_height"])
+        self.assertEqual(contract["table_readability_contract"]["fixed_row_height"], 38)
+        self.assertTrue(
+            contract["table_readability_contract"]["selection_does_not_resize_rows"]
+        )
         self.assertTrue(contract["color_swatch_contract"]["history_deck_decoration"])
         self.assertTrue(contract["color_swatch_contract"]["catalog_color_codes_hidden"])
         self.assertTrue(contract["color_swatch_contract"]["color_text_hidden"])
         self.assertEqual(
             contract["color_swatch_contract"]["settings_table"],
             "settings_display_color_table",
+        )
+        self.assertEqual(contract["color_swatch_contract"]["settings_change_column"], "変更")
+        self.assertEqual(
+            contract["color_swatch_contract"]["settings_change_source"],
+            "QColorDialog",
         )
         self.assertEqual(
             contract["control_height_contract"],
@@ -105,7 +117,13 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertIn("deck_save", contract["catalog_edit_contract"]["deck_widgets"])
         self.assertIn("tag_save", contract["catalog_edit_contract"]["tag_widgets"])
         self.assertIn("season_save", contract["season_edit_contract"]["widgets"])
+        self.assertIn("season_type_select", contract["season_edit_contract"]["widgets"])
         self.assertTrue(contract["season_edit_contract"]["date_picker"])
+        self.assertEqual(
+            contract["season_edit_contract"]["layout"],
+            "name_row_then_equal_type_start_end_row",
+        )
+        self.assertEqual(contract["season_edit_contract"]["table_type_labels"], "japanese")
         self.assertTrue(contract["template_screen_contract"]["connection_buttons_removed"])
         self.assertTrue(contract["template_screen_contract"]["mp4_preparation_hidden"])
         self.assertTrue(contract["template_screen_contract"]["background_status_hidden"])
@@ -231,6 +249,11 @@ class PySideGuiContractTest(unittest.TestCase):
             ["auto", "ja", "en"],
         )
         self.assertIn("history_duel", contract["icon_button_contract"]["buttons"])
+        self.assertEqual(
+            contract["icon_button_contract"]["provider"],
+            "app-drawn line icons",
+        )
+        self.assertFalse(contract["icon_button_contract"]["uses_qt_standard_icons"])
         for widget in REVIEW_WIDGETS:
             self.assertIn(widget, contract["review_video_contract"]["widgets"])
         self.assertNotIn("youtube_connect", contract["widgets"])
@@ -286,6 +309,22 @@ class PySideGuiContractTest(unittest.TestCase):
             "登録元: 録画",
         )
         self.assertEqual(history_color_target_label("custom.key"), "custom.key")
+
+    def test_season_table_display_row_uses_japanese_type_labels(self) -> None:
+        season = SimpleNamespace(
+            name="レジェンドアンソロジー",
+            season_type="event",
+            start_date="2026-08-17",
+            end_date="2026-08-28",
+            is_archived=False,
+        )
+
+        row = season_table_display_row(season)
+
+        self.assertEqual(row[1], "イベント")
+        self.assertNotIn("event", row)
+        self.assertEqual(season_type_label("ranked"), "ランク戦")
+        self.assertEqual(season_type_label("custom"), "カスタム")
 
     def test_review_timeline_display_row_keeps_timeline_support_columns(self) -> None:
         event = SimpleNamespace(

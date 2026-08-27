@@ -72,6 +72,8 @@ RICH_BASELINE_ASSETS: tuple[str, ...] = (
     "docs/assets/tkinter-ui-baseline-1.5.2-rich/11-improve-internal-rich.png",
 )
 
+TABLE_FIXED_ROW_HEIGHT = 38
+
 RICH_UI_SECTION_WIDGETS: tuple[str, ...] = (
     "record_target_section",
     "record_state_section",
@@ -387,6 +389,26 @@ def history_table_display_row(view: object) -> tuple[str, str, str, str, str, st
     )
 
 
+SEASON_TYPE_LABELS: dict[str, str] = {
+    "ranked": "ランク戦",
+    "event": "イベント",
+    "custom": "カスタム",
+}
+
+
+def season_type_label(value: str) -> str:
+    return SEASON_TYPE_LABELS.get(value, value or "-")
+
+
+def season_table_display_row(season: object) -> tuple[str, str, str, str]:
+    return (
+        str(getattr(season, "name", "")),
+        season_type_label(str(getattr(season, "season_type", ""))),
+        f"{getattr(season, 'start_date')} - {getattr(season, 'end_date')}",
+        "アーカイブ" if getattr(season, "is_archived", False) else "有効",
+    )
+
+
 def check_pyside6_gui_available() -> PySideGuiAvailability:
     if importlib.util.find_spec("PySide6") is None:
         return PySideGuiAvailability(
@@ -459,16 +481,21 @@ def smoke_contract(
             "visual_type": "bar_and_line",
             "bar_metric": "period_wins",
             "line_metric": "cumulative_win_rate",
+            "separate_label_regions": True,
         },
         "table_readability_contract": {
             "selection": "soft-row-selection",
             "horizontal_scroll": True,
             "explicit_column_widths": True,
             "stable_catalog_table_height": True,
+            "fixed_row_height": TABLE_FIXED_ROW_HEIGHT,
+            "selection_does_not_resize_rows": True,
         },
         "color_swatch_contract": {
             "catalog_tables": ["deck_catalog_table", "tag_catalog_table"],
             "settings_table": "settings_display_color_table",
+            "settings_change_column": "変更",
+            "settings_change_source": "QColorDialog",
             "history_deck_decoration": True,
             "catalog_color_codes_hidden": True,
             "color_text_hidden": True,
@@ -596,6 +623,8 @@ def smoke_contract(
         },
         "icon_button_contract": {
             "priority": "major_actions",
+            "provider": "app-drawn line icons",
+            "uses_qt_standard_icons": False,
             "buttons": [
                 "record_target_refresh",
                 "record_target_save",
@@ -614,7 +643,6 @@ def smoke_contract(
                 "settings_save",
                 "youtube_template_save",
             ],
-            "provider": "Qt standard icons",
         },
         "settings_parity_widgets": list(SETTINGS_PARITY_WIDGETS),
         "settings_parity_contract": all(
@@ -662,6 +690,7 @@ def smoke_contract(
         "season_edit_contract": {
             "widgets": [
                 "season_name_input",
+                "season_type_select",
                 "season_add",
                 "season_save",
                 "season_archive",
@@ -670,6 +699,8 @@ def smoke_contract(
                 "season_end_date_picker",
             ],
             "date_picker": True,
+            "layout": "name_row_then_equal_type_start_end_row",
+            "table_type_labels": "japanese",
         },
         "template_screen_contract": {
             "editor_widgets": [
@@ -767,8 +798,8 @@ def _run(args: argparse.Namespace) -> int:
     if not availability.available:
         raise PySideGuiError(availability.message)
     try:
-        from PySide6.QtCore import QDate, QPointF, Qt, QTimer
-        from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+        from PySide6.QtCore import QDate, QPointF, QSize, Qt, QTimer
+        from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QApplication,
@@ -794,7 +825,6 @@ def _run(args: argparse.Namespace) -> int:
             QScrollArea,
             QSizePolicy,
             QStackedWidget,
-            QStyle,
             QTabWidget,
             QTableWidget,
             QTableWidgetItem,
@@ -809,7 +839,7 @@ def _run(args: argparse.Namespace) -> int:
         def __init__(self) -> None:
             super().__init__()
             self.points: tuple[object, ...] = ()
-            self.setMinimumHeight(230)
+            self.setMinimumHeight(260)
             self.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
@@ -826,7 +856,7 @@ def _run(args: argparse.Namespace) -> int:
             painter.setPen(QPen(QColor("#c8d0d8"), 1))
             painter.drawRect(rect)
 
-            plot = rect.adjusted(44, 18, -22, -34)
+            plot = rect.adjusted(44, 28, -22, -58)
             painter.setPen(QColor("#4b5563"))
             painter.drawText(rect.left() + 10, rect.top() + 18, "勝利数")
             painter.drawText(rect.right() - 72, rect.top() + 18, "累積勝率")
@@ -870,7 +900,7 @@ def _run(args: argparse.Namespace) -> int:
                     painter.setPen(QColor("#4b5563"))
                     painter.drawText(
                         int(center_x - step / 2),
-                        plot.bottom() + 18,
+                        plot.bottom() + 8,
                         int(step),
                         18,
                         int(Qt.AlignmentFlag.AlignCenter),
@@ -889,7 +919,7 @@ def _run(args: argparse.Namespace) -> int:
             painter.setPen(QColor("#111827"))
             painter.drawText(
                 rect.left() + 12,
-                rect.bottom() - 8,
+                rect.bottom() - 12,
                 "棒: 期間ごとの勝利数 / 線: 累積勝率",
             )
 
@@ -1105,68 +1135,145 @@ def _run(args: argparse.Namespace) -> int:
             return button
 
         def _apply_button_icon(self, key: str, button: QPushButton) -> None:
-            icon_key = {
-                "record_target_refresh": QStyle.StandardPixmap.SP_BrowserReload,
-                "record_target_save": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "record_start": QStyle.StandardPixmap.SP_MediaPlay,
-                "record_stop": QStyle.StandardPixmap.SP_MediaStop,
-                "watch_toggle": QStyle.StandardPixmap.SP_BrowserReload,
-                "record_manual_duel_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
-                "record_diagnostics_export": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "visual_diagnostics_folder": QStyle.StandardPixmap.SP_DirOpenIcon,
-                "manual_duel_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
-                "history_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
-                "history_play": QStyle.StandardPixmap.SP_MediaPlay,
-                "history_duel": QStyle.StandardPixmap.SP_FileDialogDetailedView,
-                "history_delete": QStyle.StandardPixmap.SP_TrashIcon,
-                "history_refresh": QStyle.StandardPixmap.SP_BrowserReload,
-                "history_filter_apply": QStyle.StandardPixmap.SP_DialogApplyButton,
-                "history_filter_clear": QStyle.StandardPixmap.SP_DialogResetButton,
-                "deck_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
-                "deck_save": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "deck_delete": QStyle.StandardPixmap.SP_TrashIcon,
-                "tag_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
-                "tag_save": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "tag_delete": QStyle.StandardPixmap.SP_TrashIcon,
-                "season_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
-                "season_save": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "season_archive": QStyle.StandardPixmap.SP_DialogCloseButton,
-                "season_report": QStyle.StandardPixmap.SP_FileDialogDetailedView,
-                "prepare_recording": QStyle.StandardPixmap.SP_ArrowForward,
-                "internal_prepare_run": QStyle.StandardPixmap.SP_MediaPlay,
-                "internal_improve_refresh": QStyle.StandardPixmap.SP_BrowserReload,
-                "internal_improve_manual_duel_add": QStyle.StandardPixmap.SP_FileDialogNewFolder,
-                "settings_ffmpeg_select": QStyle.StandardPixmap.SP_DialogOpenButton,
-                "settings_audio_refresh": QStyle.StandardPixmap.SP_BrowserReload,
-                "settings_audio_test": QStyle.StandardPixmap.SP_MediaPlay,
-                "settings_runtime_change": QStyle.StandardPixmap.SP_DirOpenIcon,
-                "settings_reload": QStyle.StandardPixmap.SP_BrowserReload,
-                "settings_save": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "settings_youtube_connect": QStyle.StandardPixmap.SP_DialogApplyButton,
-                "settings_youtube_disconnect": QStyle.StandardPixmap.SP_DialogCloseButton,
-                "settings_youtube_refresh": QStyle.StandardPixmap.SP_BrowserReload,
-                "settings_youtube_test_upload": QStyle.StandardPixmap.SP_ArrowForward,
-                "settings_managed_export": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "settings_managed_import": QStyle.StandardPixmap.SP_DialogOpenButton,
-                "settings_reset_history": QStyle.StandardPixmap.SP_TrashIcon,
-                "settings_reset_decks": QStyle.StandardPixmap.SP_TrashIcon,
-                "settings_reset_tags": QStyle.StandardPixmap.SP_TrashIcon,
-                "settings_reset_seasons": QStyle.StandardPixmap.SP_TrashIcon,
-                "settings_data_backup": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "settings_data_restore": QStyle.StandardPixmap.SP_DialogOpenButton,
-                "settings_data_diagnosis": QStyle.StandardPixmap.SP_FileDialogDetailedView,
-                "settings_csv_export": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "settings_csv_import": QStyle.StandardPixmap.SP_DialogOpenButton,
-                "settings_csv_sample": QStyle.StandardPixmap.SP_FileIcon,
-                "youtube_template_save": QStyle.StandardPixmap.SP_DialogSaveButton,
-                "app_update": QStyle.StandardPixmap.SP_BrowserReload,
-                "app_update_download": QStyle.StandardPixmap.SP_ArrowDown,
-                "clean_uninstall": QStyle.StandardPixmap.SP_TrashIcon,
-                "record_reliability_check": QStyle.StandardPixmap.SP_MessageBoxInformation,
+            icon_name = {
+                "record_target_refresh": "refresh",
+                "record_target_save": "save",
+                "record_start": "play",
+                "record_stop": "stop",
+                "watch_toggle": "refresh",
+                "record_manual_duel_add": "add",
+                "record_diagnostics_export": "download",
+                "visual_diagnostics_folder": "folder",
+                "manual_duel_add": "add",
+                "history_add": "add",
+                "history_play": "play",
+                "history_duel": "edit",
+                "history_delete": "delete",
+                "history_refresh": "refresh",
+                "history_filter_apply": "check",
+                "history_filter_clear": "clear",
+                "deck_add": "add",
+                "deck_save": "save",
+                "deck_delete": "delete",
+                "tag_add": "add",
+                "tag_save": "save",
+                "tag_delete": "delete",
+                "season_add": "add",
+                "season_save": "save",
+                "season_archive": "archive",
+                "season_report": "file",
+                "prepare_recording": "arrow-right",
+                "internal_prepare_run": "play",
+                "internal_improve_refresh": "refresh",
+                "internal_improve_manual_duel_add": "add",
+                "settings_ffmpeg_select": "folder",
+                "settings_audio_refresh": "refresh",
+                "settings_audio_test": "play",
+                "settings_runtime_change": "folder",
+                "settings_reload": "refresh",
+                "settings_save": "save",
+                "settings_youtube_connect": "check",
+                "settings_youtube_disconnect": "clear",
+                "settings_youtube_refresh": "refresh",
+                "settings_youtube_test_upload": "arrow-right",
+                "settings_managed_export": "download",
+                "settings_managed_import": "upload",
+                "settings_reset_history": "delete",
+                "settings_reset_decks": "delete",
+                "settings_reset_tags": "delete",
+                "settings_reset_seasons": "delete",
+                "settings_data_backup": "save",
+                "settings_data_restore": "upload",
+                "settings_data_diagnosis": "file",
+                "settings_csv_export": "download",
+                "settings_csv_import": "upload",
+                "settings_csv_sample": "file",
+                "youtube_template_save": "save",
+                "app_update": "refresh",
+                "app_update_download": "download",
+                "clean_uninstall": "delete",
+                "record_reliability_check": "info",
             }.get(key)
-            if icon_key is None:
+            if icon_name is None:
                 return
-            button.setIcon(self.style().standardIcon(icon_key))
+            button.setIcon(self._line_icon(icon_name, button))
+            button.setIconSize(QSize(18, 18))
+
+        def _line_icon(self, name: str, button: QPushButton) -> QIcon:
+            pixmap = QPixmap(20, 20)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            color = QColor("#9A3412" if button.property("variant") == "danger" else "#007F78")
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(color, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            if name == "add":
+                painter.drawRect(4, 5, 12, 10)
+                painter.drawLine(10, 3, 10, 17)
+                painter.drawLine(3, 10, 17, 10)
+            elif name == "save":
+                painter.drawRoundedRect(4, 3, 12, 14, 2, 2)
+                painter.drawLine(7, 4, 13, 4)
+                painter.drawLine(7, 14, 13, 14)
+            elif name == "delete":
+                painter.drawLine(6, 7, 14, 7)
+                painter.drawLine(8, 4, 12, 4)
+                painter.drawRect(7, 7, 6, 10)
+            elif name == "refresh":
+                painter.drawArc(4, 4, 12, 12, 30 * 16, 290 * 16)
+                painter.drawLine(14, 4, 16, 8)
+                painter.drawLine(14, 4, 10, 4)
+            elif name == "play":
+                painter.setBrush(color)
+                painter.drawPolygon(
+                    QPolygonF([QPointF(7, 5), QPointF(15, 10), QPointF(7, 15)])
+                )
+            elif name == "stop":
+                painter.setBrush(color)
+                painter.drawRect(6, 6, 8, 8)
+            elif name == "edit":
+                painter.drawLine(6, 14, 14, 6)
+                painter.drawLine(5, 15, 9, 14)
+                painter.drawLine(13, 5, 15, 7)
+            elif name == "check":
+                painter.drawLine(4, 10, 8, 14)
+                painter.drawLine(8, 14, 16, 5)
+            elif name == "clear":
+                painter.drawLine(5, 5, 15, 15)
+                painter.drawLine(15, 5, 5, 15)
+            elif name == "folder":
+                painter.drawLine(3, 7, 8, 7)
+                painter.drawLine(8, 7, 10, 5)
+                painter.drawLine(10, 5, 17, 5)
+                painter.drawRect(3, 7, 14, 9)
+            elif name == "arrow-right":
+                painter.drawLine(4, 10, 15, 10)
+                painter.drawLine(11, 6, 15, 10)
+                painter.drawLine(11, 14, 15, 10)
+            elif name == "download":
+                painter.drawLine(10, 4, 10, 13)
+                painter.drawLine(6, 9, 10, 13)
+                painter.drawLine(14, 9, 10, 13)
+                painter.drawLine(5, 16, 15, 16)
+            elif name == "upload":
+                painter.drawLine(10, 16, 10, 7)
+                painter.drawLine(6, 11, 10, 7)
+                painter.drawLine(14, 11, 10, 7)
+                painter.drawLine(5, 4, 15, 4)
+            elif name == "file":
+                painter.drawRect(5, 3, 10, 14)
+                painter.drawLine(8, 8, 13, 8)
+                painter.drawLine(8, 12, 13, 12)
+            elif name == "archive":
+                painter.drawRect(4, 6, 12, 10)
+                painter.drawLine(4, 8, 16, 8)
+                painter.drawLine(8, 11, 12, 11)
+            elif name == "info":
+                painter.drawEllipse(4, 4, 12, 12)
+                painter.drawPoint(10, 8)
+                painter.drawLine(10, 10, 10, 14)
+            painter.end()
+            return QIcon(pixmap)
 
         def _date_picker(self, key: str) -> QDateEdit:
             picker = self._register(key, QDateEdit())
@@ -1202,8 +1309,11 @@ def _run(args: argparse.Namespace) -> int:
             table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             table.setWordWrap(False)
             table.setShowGrid(True)
-            table.verticalHeader().setVisible(False)
-            table.verticalHeader().setDefaultSectionSize(34)
+            vertical = table.verticalHeader()
+            vertical.setVisible(False)
+            vertical.setDefaultSectionSize(TABLE_FIXED_ROW_HEIGHT)
+            vertical.setMinimumSectionSize(TABLE_FIXED_ROW_HEIGHT)
+            vertical.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
             header = table.horizontalHeader()
             header.setStretchLastSection(stretch_last)
             if column_widths is None:
@@ -1651,23 +1761,34 @@ def _run(args: argparse.Namespace) -> int:
         def _season_page(self, layout: QVBoxLayout) -> None:
             editor, editor_layout = self._section("season_editor", "シーズン管理")
             grid = QGridLayout()
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(3, 1)
+            grid.setColumnStretch(5, 1)
             grid.addWidget(QLabel("名前"), 0, 0)
             name = self._register("season_name_input", QLineEdit())
             assert isinstance(name, QLineEdit)
-            grid.addWidget(name, 0, 1)
-            grid.addWidget(QLabel("種別"), 0, 2)
+            grid.addWidget(name, 0, 1, 1, 5)
+            grid.addWidget(QLabel("種別"), 1, 0)
             type_box = self._register("season_type_select", QComboBox())
             assert isinstance(type_box, QComboBox)
             type_box.addItems(("ランク戦", "イベント", "カスタム"))
-            grid.addWidget(type_box, 0, 3)
-            grid.addWidget(QLabel("開始日"), 1, 0)
-            grid.addWidget(self._date_picker("season_start_date_picker"), 1, 1)
-            grid.addWidget(QLabel("終了日"), 1, 2)
-            grid.addWidget(self._date_picker("season_end_date_picker"), 1, 3)
+            start_picker = self._date_picker("season_start_date_picker")
+            end_picker = self._date_picker("season_end_date_picker")
+            for field in (type_box, start_picker, end_picker):
+                field.setMinimumWidth(168)
+                field.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Fixed,
+                )
+            grid.addWidget(type_box, 1, 1)
+            grid.addWidget(QLabel("開始日"), 1, 2)
+            grid.addWidget(start_picker, 1, 3)
+            grid.addWidget(QLabel("終了日"), 1, 4)
+            grid.addWidget(end_picker, 1, 5)
             grid.addWidget(QLabel("説明"), 2, 0)
             description = self._register("season_description_input", QLineEdit())
             assert isinstance(description, QLineEdit)
-            grid.addWidget(description, 2, 1, 1, 3)
+            grid.addWidget(description, 2, 1, 1, 5)
             editor_layout.addLayout(grid)
             actions = QHBoxLayout()
             actions.addStretch(1)
@@ -2255,23 +2376,17 @@ def _run(args: argparse.Namespace) -> int:
             assert isinstance(colors, QLabel)
             colors.setWordWrap(True)
             layout.addWidget(colors)
-            color_table = self._register("settings_display_color_table", QTableWidget(0, 2))
+            color_table = self._register("settings_display_color_table", QTableWidget(0, 3))
             assert isinstance(color_table, QTableWidget)
-            color_table.setHorizontalHeaderLabels(("対象", "カラー"))
+            color_table.setHorizontalHeaderLabels(("対象", "現在色", "操作"))
             self._configure_table(
                 color_table,
-                column_widths=(240, 120),
+                column_widths=(240, 120, 96),
                 minimum_height=220,
                 maximum_height=260,
             )
-            rows = tuple(
-                (
-                    history_color_target_label(key),
-                    self.ui_preferences.history_cell_colors.get(key, "#FFFFFF"),
-                )
-                for key in self.ui_preferences.history_cell_colors
-            )
-            self._set_table_rows(color_table, rows)
+            color_table.cellClicked.connect(self._settings_color_cell_clicked)
+            self._refresh_display_color_table()
             layout.addWidget(color_table)
             layout.addWidget(self._setting_label("戦績管理のダブルクリック"))
             help_label = self._register(
@@ -3312,15 +3427,7 @@ def _run(args: argparse.Namespace) -> int:
             self.seasons_by_id = {season.season_id: season for season in seasons}
             self._set_table_rows(
                 table,
-                tuple(
-                    (
-                        season.name,
-                        season.season_type,
-                        f"{season.start_date} - {season.end_date}",
-                        "アーカイブ" if season.is_archived else "有効",
-                    )
-                    for season in seasons
-                ),
+                tuple(season_table_display_row(season) for season in seasons),
             )
             for row_index, season in enumerate(seasons):
                 item = table.item(row_index, 0)
@@ -3525,12 +3632,9 @@ def _run(args: argparse.Namespace) -> int:
             if isinstance(name, QLineEdit):
                 name.setText(str(getattr(season, "name", "")) if season else "")
             if isinstance(type_box, QComboBox):
-                label = {
-                    "ranked": "ランク戦",
-                    "event": "イベント",
-                    "custom": "カスタム",
-                }.get(str(getattr(season, "season_type", "ranked")), "ランク戦")
-                type_box.setCurrentText(label)
+                type_box.setCurrentText(
+                    season_type_label(str(getattr(season, "season_type", "ranked")))
+                )
             if isinstance(start, QDateEdit):
                 value = getattr(season, "start_date", date.today())
                 start.setDate(self._date_to_qdate(value))
@@ -4165,6 +4269,54 @@ def _run(args: argparse.Namespace) -> int:
             if isinstance(status, QLabel):
                 status.setText(str(result))
 
+        def _refresh_display_color_table(self) -> None:
+            table = self.widgets.get("settings_display_color_table")
+            if not isinstance(table, QTableWidget):
+                return
+            keys = tuple(self.ui_preferences.history_cell_colors)
+            rows = tuple(
+                (
+                    history_color_target_label(key),
+                    self.ui_preferences.history_cell_colors.get(key, "#FFFFFF"),
+                    "変更",
+                )
+                for key in keys
+            )
+            self._set_table_rows(table, rows)
+            for row_index, key in enumerate(keys):
+                for column in range(table.columnCount()):
+                    item = table.item(row_index, column)
+                    if item is not None:
+                        item.setData(Qt.ItemDataRole.UserRole, key)
+
+        def _settings_color_cell_clicked(self, row: int, _column: int) -> None:
+            table = self.widgets.get("settings_display_color_table")
+            if row < 0 or not isinstance(table, QTableWidget):
+                return
+            item = table.item(row, 0)
+            key = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+            if not isinstance(key, str):
+                return
+            current = QColor(self.ui_preferences.history_cell_colors.get(key, "#FFFFFF"))
+            selected = QColorDialog.getColor(
+                current,
+                self,
+                f"{history_color_target_label(key)}の色を変更",
+            )
+            if not selected.isValid():
+                return
+            colors = dict(self.ui_preferences.history_cell_colors)
+            colors[key] = selected.name().upper()
+            self.ui_preferences = self.ui_preferences.__class__(
+                self.ui_preferences.history_visible_columns,
+                colors,
+                self.ui_preferences.automatic_update_check,
+                self.ui_preferences.history_double_click_action,
+            ).normalized()
+            save_ui_preferences(self.service.paths.config, self.ui_preferences)
+            self._refresh_display_color_table()
+            self._refresh_history()
+
         def _set_history_double_click_action(self, action: str) -> None:
             play = self.widgets.get("settings_double_click_play")
             edit = self.widgets.get("settings_double_click_edit")
@@ -4275,7 +4427,7 @@ def _run(args: argparse.Namespace) -> int:
                     item = QTableWidgetItem(str(value))
                     header_item = table.horizontalHeaderItem(column)
                     header_text = header_item.text() if header_item is not None else ""
-                    if header_text == "カラー":
+                    if header_text in {"カラー", "現在色"}:
                         color = QColor(str(value))
                         if color.isValid():
                             item.setText("")
@@ -4285,7 +4437,7 @@ def _run(args: argparse.Namespace) -> int:
                             )
                             item.setToolTip(f"登録カラー: {color.name().upper()}")
                     table.setItem(row_index, column, item)
-            table.resizeRowsToContents()
+                table.setRowHeight(row_index, TABLE_FIXED_ROW_HEIGHT)
 
         @staticmethod
         def _color_swatch_pixmap(color: QColor) -> QPixmap:
