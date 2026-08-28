@@ -1,6 +1,6 @@
 # リリースノート
 
-## V2.7.1: PySide6実操作UI Hotfix - 2026-08-28
+## V2.7.1: PySide6実操作UI Hotfix - 2026-08-29
 
 - 主要操作ボタンのQt標準アイコンを、アプリ内で描画する線画アイコンへ置き換え、画面全体のアイコン表現を統一した
 - 統計画面の勝利数・勝率推移グラフで、上部ラベル、日付ラベル、凡例が重ならないように描画領域を分けた
@@ -9,6 +9,9 @@
 - シーズン入力を、名前1行、種別・開始日・終了日1行に整理し、3入力の幅を揃えた
 - シーズン一覧の種別を `ranked` / `event` ではなく「ランク戦」「イベント」「カスタム」で表示するようにした
 - SQLite schema、設定schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
+- Ruff、全610 pytest、PySide6 GUI smoke、CLI/GUI/updater EXEビルド、3 EXE smokeに合格した
+- GitHub Actions run `33184768276` でmain CIに合格し、run `33184921790` でWindows EXE release workflow、公開asset検証、ダウンロード後EXE smokeに合格した
+- GitHub Release `v2.7.1` として公開した。V2.7.1用の外部Issue/Milestoneは存在しなかったため、Issue/Milestone closureは該当なし
 
 ## V2.7.0: 視覚タイムラインMVP - 2026-08-27
 
