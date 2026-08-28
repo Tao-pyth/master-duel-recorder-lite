@@ -8,6 +8,8 @@
 - 録画状態詳細で `recording` などの内部値を表示せず、「録画中」「停止中」などの日本語表示に統一した
 - 録画方式、FFmpegコマンド、DB schema、設定schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 - Ruff、PySide6 GUI契約テスト、録画サービス対象テスト、全612 pytest、PySide6録画画面smoke、CLI/GUI/updater EXEビルド、3 EXE smokeに合格した
+- GitHub Actions run `33188745938` でmain CIに合格し、run `33188768353` でWindows EXE release workflow、公開asset検証、ダウンロード後EXE smokeに合格した
+- GitHub Release `v2.7.2` として公開した。V2.7.2用の外部Issue/Milestoneは存在しなかったため、Issue/Milestone closureは該当なし
 
 ## V2.7.1: PySide6実操作UI Hotfix - 2026-08-29
 
