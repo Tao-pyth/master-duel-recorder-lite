@@ -12,10 +12,12 @@ from master_duel_recorder_lite.pyside_gui import (
     build_gui_parser,
     history_color_target_label,
     history_table_display_row,
+    pyside_record_ui_state,
     season_table_display_row,
     season_type_label,
     smoke_contract,
 )
+from master_duel_recorder_lite.operation_state import OperationAction
 from master_duel_recorder_lite.pyside_review import (
     REVIEW_WIDGETS,
     review_operation_error_message,
@@ -111,6 +113,24 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertEqual(
             contract["active_season_contract"]["status_widget"],
             "active_season_status",
+        )
+        self.assertEqual(
+            contract["recording_control_state_contract"]["status_widget"],
+            "record_status_band",
+        )
+        self.assertEqual(
+            contract["recording_control_state_contract"]["poll_interval_ms"],
+            500,
+        )
+        self.assertTrue(
+            contract["recording_control_state_contract"][
+                "manual_recording_disables_start"
+            ]
+        )
+        self.assertTrue(
+            contract["recording_control_state_contract"][
+                "stop_button_routes_active_operation"
+            ]
         )
         self.assertTrue(contract["health_status_contract"]["fixed_warning_removed"])
         self.assertEqual(contract["health_status_contract"]["ready_text"], "準備OK")
@@ -280,6 +300,49 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertTrue(args.smoke_test)
         self.assertEqual(args.smoke_output, Path("build/smoke.json"))
         self.assertEqual(args.smoke_screenshot, Path("build/smoke.png"))
+
+    def test_record_ui_state_switches_manual_controls_while_recording(self) -> None:
+        state = pyside_record_ui_state(
+            operation_state="manual_recording",
+            operation_message="手動録画中",
+            allowed_actions=frozenset({OperationAction.STOP_RECORDING}),
+            watch_active=False,
+            recording_active=True,
+            recording_state="recording",
+            recording_id="recording-id",
+            output_path=Path("recordings/duel.mkv"),
+            elapsed_seconds=65,
+            visual_message="この録画では自動判定を使用しません",
+        )
+
+        self.assertEqual(state.status_text, "● 手動録画中")
+        self.assertEqual(state.timer_text, "00:01:05")
+        self.assertIn("録画状態: 録画中", state.record_detail)
+        self.assertIn("録画ID: recording-id", state.record_detail)
+        self.assertFalse(state.start_enabled)
+        self.assertTrue(state.stop_enabled)
+        self.assertFalse(state.watch_enabled)
+        self.assertEqual(state.watch_text, "自動監視開始")
+
+    def test_record_ui_state_switches_watch_controls_while_monitoring(self) -> None:
+        state = pyside_record_ui_state(
+            operation_state="watch_waiting",
+            operation_message="対戦を待機しています",
+            allowed_actions=frozenset({OperationAction.STOP_WATCH}),
+            watch_active=True,
+            recording_active=False,
+            recording_state="completed",
+            recording_id=None,
+            output_path=None,
+            elapsed_seconds=0,
+            visual_message="対戦開始を待機しています",
+        )
+
+        self.assertEqual(state.status_text, "● 自動監視中")
+        self.assertFalse(state.start_enabled)
+        self.assertTrue(state.stop_enabled)
+        self.assertTrue(state.watch_enabled)
+        self.assertEqual(state.watch_text, "自動監視停止")
 
     def test_history_table_display_row_uses_japanese_labels(self) -> None:
         view = SimpleNamespace(

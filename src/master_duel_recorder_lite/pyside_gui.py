@@ -21,7 +21,7 @@ from .gui_feature_parity import (
     required_standard_widget_keys,
     satisfied_standard_feature_keys,
 )
-from .operation_state import OperationAction
+from .operation_state import OperationAction, OperationState
 from .pyside_review import REVIEW_WIDGETS, review_visual_timeline_contract
 from .ui_preferences import load_ui_preferences, save_ui_preferences
 from .uninstall import (
@@ -73,6 +73,99 @@ RICH_BASELINE_ASSETS: tuple[str, ...] = (
 )
 
 TABLE_FIXED_ROW_HEIGHT = 38
+
+
+@dataclass(frozen=True)
+class PySideRecordUiState:
+    status_text: str
+    status_key: str
+    timer_text: str
+    record_detail: str
+    visual_detail: str
+    start_enabled: bool
+    stop_enabled: bool
+    watch_enabled: bool
+    watch_text: str
+
+
+_RECORD_OPERATION_LABELS = {
+    OperationState.IDLE.value: ("停止中", "idle"),
+    OperationState.MANUAL_STARTING.value: ("録画開始中", "busy"),
+    OperationState.MANUAL_RECORDING.value: ("手動録画中", "recording"),
+    OperationState.WATCH_STARTING.value: ("自動監視開始中", "busy"),
+    OperationState.WATCH_WAITING.value: ("自動監視中", "watching"),
+    OperationState.CANDIDATE_RECORDING.value: ("候補録画中", "recording"),
+    OperationState.AUTOMATIC_RECORDING.value: ("自動録画中", "recording"),
+    OperationState.STOPPING.value: ("停止処理中", "busy"),
+    OperationState.FAILED.value: ("要確認", "failed"),
+    OperationState.CLOSING.value: ("終了処理中", "busy"),
+}
+
+_RECORDING_STATE_LABELS = {
+    "created": "準備前",
+    "starting": "開始中",
+    "recording": "録画中",
+    "stopping": "停止処理中",
+    "completed": "停止中",
+    "failed": "失敗",
+}
+
+
+def pyside_record_ui_state(
+    *,
+    operation_state: str,
+    operation_message: str,
+    allowed_actions: object,
+    watch_active: bool,
+    recording_active: bool,
+    recording_state: str,
+    recording_id: str | None,
+    output_path: Path | None,
+    elapsed_seconds: float,
+    visual_message: str,
+) -> PySideRecordUiState:
+    label, status_key = _RECORD_OPERATION_LABELS.get(
+        operation_state, ("状態不明", "failed")
+    )
+    allowed = set(allowed_actions)
+    start_enabled = OperationAction.START_MANUAL in allowed
+    stop_enabled = bool(
+        recording_active
+        or OperationAction.STOP_RECORDING in allowed
+        or OperationAction.STOP_WATCH in allowed
+    )
+    watch_stop_available = watch_active or OperationAction.STOP_WATCH in allowed
+    watch_enabled = (
+        OperationAction.START_WATCH in allowed or OperationAction.STOP_WATCH in allowed
+    )
+    watch_text = "自動監視停止" if watch_stop_available else "自動監視開始"
+
+    if recording_id:
+        destination = str(output_path) if output_path is not None else "履歴で確認"
+        state_label = _RECORDING_STATE_LABELS.get(recording_state, recording_state)
+        record_detail = f"録画状態: {state_label}\n録画ID: {recording_id}\n保存先: {destination}"
+    else:
+        message = operation_message or "待機中"
+        record_detail = f"録画状態: {message}\n録画ID: -\n保存先: -"
+
+    return PySideRecordUiState(
+        status_text=f"● {label}",
+        status_key=status_key,
+        timer_text=_format_duration(elapsed_seconds),
+        record_detail=record_detail,
+        visual_detail=f"自動監視: {visual_message}",
+        start_enabled=start_enabled,
+        stop_enabled=stop_enabled,
+        watch_enabled=watch_enabled,
+        watch_text=watch_text,
+    )
+
+
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 RICH_UI_SECTION_WIDGETS: tuple[str, ...] = (
     "record_target_section",
@@ -666,6 +759,23 @@ def smoke_contract(
             "fixed_loading_text_removed": True,
             "states": ["未確認", "なし", "開催中", "取得失敗"],
         },
+        "recording_control_state_contract": {
+            "status_widget": "record_status_band",
+            "timer_widget": "record_timer",
+            "detail_widget": "record_status",
+            "visual_widget": "visual_status",
+            "poll_interval_ms": 500,
+            "state_sources": [
+                "RecorderApplicationService.recording_snapshot",
+                "RecorderApplicationService.operation_snapshot",
+                "RecorderApplicationService.visual_detection_status",
+            ],
+            "manual_recording_disables_start": True,
+            "manual_recording_enables_stop": True,
+            "watching_switches_toggle_to_stop": True,
+            "stop_button_routes_active_operation": True,
+            "japanese_state_labels": True,
+        },
         "health_status_contract": {
             "status_widget": "nav_health_status",
             "service_method": "RecorderApplicationService.diagnose",
@@ -965,6 +1075,9 @@ def _run(args: argparse.Namespace) -> int:
             self.background_timer = QTimer(self)
             self.background_timer.setInterval(300)
             self.background_timer.timeout.connect(self._poll_background_tasks)
+            self.record_state_timer = QTimer(self)
+            self.record_state_timer.setInterval(500)
+            self.record_state_timer.timeout.connect(self._refresh_recording_state)
             self.setting_fields: dict[str, QLineEdit] = {}
             self.setting_checks: dict[str, QCheckBox] = {}
             self.setting_combos: dict[str, QComboBox] = {}
@@ -978,6 +1091,8 @@ def _run(args: argparse.Namespace) -> int:
             self.resize(1180, 760)
             self.setMinimumSize(980, 640)
             self._build()
+            self._refresh_recording_state()
+            self.record_state_timer.start()
 
         def _register(self, key: str, widget: QWidget) -> QWidget:
             self.widgets[key] = widget
@@ -985,6 +1100,7 @@ def _run(args: argparse.Namespace) -> int:
             return widget
 
         def closeEvent(self, event: object) -> None:
+            self.record_state_timer.stop()
             self.background_timer.stop()
             self.background_executor.shutdown(wait=False, cancel_futures=True)
             super().closeEvent(event)
@@ -1376,10 +1492,12 @@ def _run(args: argparse.Namespace) -> int:
             state_grid = QGridLayout()
             state_grid.setColumnStretch(0, 2)
             state_grid.setColumnStretch(1, 1)
-            status_band = QLabel("● 停止中")
+            status_band = self._register("record_status_band", QLabel("● 停止中"))
+            assert isinstance(status_band, QLabel)
             status_band.setObjectName("recordStatusBand")
             state_grid.addWidget(status_band, 0, 0, 1, 2)
-            timer = QLabel("00:00:00")
+            timer = self._register("record_timer", QLabel("00:00:00"))
+            assert isinstance(timer, QLabel)
             timer.setObjectName("recordTimer")
             state_grid.addWidget(timer, 1, 0)
             controls = QHBoxLayout()
@@ -1402,7 +1520,7 @@ def _run(args: argparse.Namespace) -> int:
             details = self._register("visual_details_toggle", QCheckBox("判定詳細"))
             state_grid.addWidget(details, 2, 1, alignment=Qt.AlignmentFlag.AlignRight)
             start.clicked.connect(self._start_recording)
-            stop.clicked.connect(self._stop_recording)
+            stop.clicked.connect(self._stop_active_operation)
             watch.clicked.connect(self._toggle_watch)
             state_layout.addLayout(state_grid)
             layout.addWidget(state_section)
@@ -2524,6 +2642,7 @@ def _run(args: argparse.Namespace) -> int:
 
         def _load_runtime_dashboard(self) -> None:
             loaders = (
+                self._refresh_recording_state,
                 self.refresh_recording_targets,
                 self._populate_history_filter_choices,
                 self._refresh_history,
@@ -2550,6 +2669,69 @@ def _run(args: argparse.Namespace) -> int:
                     activity.addItem(f"一部の表示更新に失敗しました: {errors[0]}")
                 else:
                     activity.addItem(f"既存データを{loaded}領域で読み込みました")
+
+        def _refresh_recording_state(self) -> None:
+            try:
+                recording = self.service.recording_snapshot()
+                operation = self.service.operation_snapshot()
+                visual = self.service.visual_detection_status()
+            except Exception as exc:
+                status_band = self.widgets.get("record_status_band")
+                if isinstance(status_band, QLabel):
+                    status_band.setText("● 状態取得失敗")
+                    status_band.setToolTip(str(exc))
+                return
+
+            state = pyside_record_ui_state(
+                operation_state=operation.state.value,
+                operation_message=operation.message,
+                allowed_actions=operation.allowed_actions,
+                watch_active=self.service.watch_active,
+                recording_active=recording.active,
+                recording_state=recording.state.value,
+                recording_id=recording.recording_id,
+                output_path=recording.output_path,
+                elapsed_seconds=recording.elapsed_seconds,
+                visual_message=visual.message,
+            )
+            self._set_label_text("record_status_band", state.status_text)
+            self._set_label_text("record_timer", state.timer_text)
+            self._set_label_text("record_status", state.record_detail)
+            self._set_label_text("visual_status", state.visual_detail)
+
+            status_band = self.widgets.get("record_status_band")
+            if isinstance(status_band, QLabel):
+                status_band.setToolTip(operation.message)
+                self._set_dynamic_property(status_band, "recordState", state.status_key)
+
+            self._set_button_state("record_start", state.start_enabled)
+            self._set_button_state("record_stop", state.stop_enabled)
+            self._set_button_state("watch_toggle", state.watch_enabled, text=state.watch_text)
+
+        def _set_label_text(self, key: str, text: str) -> None:
+            label = self.widgets.get(key)
+            if isinstance(label, QLabel) and label.text() != text:
+                label.setText(text)
+
+        def _set_button_state(
+            self, key: str, enabled: bool, *, text: str | None = None
+        ) -> None:
+            button = self.widgets.get(key)
+            if not isinstance(button, QPushButton):
+                return
+            if text is not None and button.text() != text:
+                button.setText(text)
+                self._apply_button_icon(key, button)
+            button.setEnabled(enabled)
+
+        @staticmethod
+        def _set_dynamic_property(widget: QWidget, name: str, value: object) -> None:
+            if widget.property(name) == value:
+                return
+            widget.setProperty(name, value)
+            style = widget.style()
+            style.unpolish(widget)
+            style.polish(widget)
 
         def _refresh_active_seasons(self) -> None:
             label = self.widgets.get("active_season_status")
@@ -2604,6 +2786,12 @@ def _run(args: argparse.Namespace) -> int:
 
         def _stop_recording(self) -> None:
             self._run_action("録画停止", self.service.stop_recording)
+
+        def _stop_active_operation(self) -> None:
+            if self.service.watch_active:
+                self._run_action("自動監視停止", self.service.stop_watch)
+                return
+            self._stop_recording()
 
         def _toggle_watch(self) -> None:
             if self.service.watch_active:
@@ -4454,13 +4642,11 @@ def _run(args: argparse.Namespace) -> int:
             try:
                 result = operation()
             except Exception as exc:
+                self._refresh_recording_state()
                 QMessageBox.warning(self, f"{label}に失敗しました", str(exc))
                 self._append_activity(f"{label}に失敗しました")
                 return
-            record_status = self.widgets.get("record_status")
-            if isinstance(record_status, QLabel) and hasattr(result, "state"):
-                recording_id = getattr(result, "recording_id", None) or "-"
-                record_status.setText(f"録画: {result.state.value}\n録画ID: {recording_id}")
+            self._refresh_recording_state()
             self._append_activity(
                 str(result) if isinstance(result, str) else f"{label}が完了しました"
             )
@@ -4577,6 +4763,22 @@ def _style_sheet() -> str:
         font-size: 16px;
         font-weight: 700;
         padding: 12px;
+    }
+    #recordStatusBand[recordState="watching"] {
+        background: #d9f0ea;
+        color: #065f46;
+    }
+    #recordStatusBand[recordState="recording"] {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+    #recordStatusBand[recordState="busy"] {
+        background: #fef3c7;
+        color: #92400e;
+    }
+    #recordStatusBand[recordState="failed"] {
+        background: #f3e8ff;
+        color: #6b21a8;
     }
     #recordTimer {
         font-family: "Consolas", "Courier New", monospace;
