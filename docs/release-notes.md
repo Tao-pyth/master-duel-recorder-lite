@@ -1,5 +1,16 @@
 # リリースノート
 
+## V2.7.5: レビュー戦績入力コンパクト化 - 2026-08-29
+
+- レビュー画面の「戦績入力」タブで、状態、勝敗、先後、コインを1行のセグメントボタン式に変更した
+- セグメントボタンの選択値を既存の戦績保存処理へ接続し、保存データ形式は変更しない
+- 戦績管理の「編集」ボタンで録画付き行を選んだ場合、レビュー画面の「戦績入力」タブを初期表示するようにした
+- 録画なし戦績は従来どおり通常の戦績編集ダイアログで編集できるようにした
+- 通常の戦績編集ダイアログも同じセグメント式へ寄せ、縦方向の最小サイズを抑えた
+- SQLite schema、設定schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
+- Py compile、Ruff、GUI contract tests、Review ViewModel regression tests、全622 pytest、Qt offscreen screen construction、CLI/GUI/updater EXE build、3 EXE smokeに合格した
+- commit、push、tag、GitHub Release、artifact公開、公開検証を実行する
+
 ## V2.7.4: 戦績編集とレビュー統合ワークフロー - 2026-08-29
 
 - 戦績管理の「一括編集」ボタンを実動作へ接続し、選択した複数戦績へチェックした項目だけを適用できるようにした

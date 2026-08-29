@@ -207,6 +207,11 @@ class PySideGuiContractTest(unittest.TestCase):
             contract["history_hub_operation_contract"]["query_filters"],
         )
         self.assertEqual(contract["review_video_contract"]["entry_button"], "history_play")
+        self.assertEqual(contract["review_video_contract"]["duel_entry_button"], "history_duel")
+        self.assertEqual(
+            contract["review_video_contract"]["history_duel_initial_tab"],
+            "戦績入力",
+        )
         self.assertEqual(
             contract["review_video_contract"]["supported_extensions"],
             [".mp4", ".mkv"],
@@ -240,11 +245,24 @@ class PySideGuiContractTest(unittest.TestCase):
             contract["review_video_contract"]["tabs"],
             ["マーカー編集", "戦績入力"],
         )
+        self.assertEqual(
+            contract["review_video_contract"]["duel_compact_segment_fields"],
+            ["status", "result", "play_order", "coin_face"],
+        )
         self.assertFalse(contract["review_video_contract"]["source_column_visible"])
         self.assertEqual(
             contract["duel_editor_contract"]["deck_inputs"],
             "editable_candidate_combo",
         )
+        self.assertEqual(
+            contract["duel_editor_contract"]["entry_target"],
+            "review_duel_tab_when_recording_exists",
+        )
+        self.assertEqual(
+            contract["duel_editor_contract"]["compact_segment_fields"],
+            ["status", "result", "play_order", "coin_face"],
+        )
+        self.assertEqual(contract["duel_editor_contract"]["dialog_minimum_size"], [720, 520])
         self.assertEqual(
             contract["bulk_duel_editor_contract"]["update_source"],
             "RecorderApplicationService.bulk_update_duel_records",

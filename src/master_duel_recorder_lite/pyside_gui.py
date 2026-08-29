@@ -663,7 +663,9 @@ def smoke_contract(
         },
         "duel_editor_contract": {
             "entry_button": ["history_duel"],
-            "dialog": "PySide6 duel editor",
+            "entry_target": "review_duel_tab_when_recording_exists",
+            "recording_dialog": "PySide6 review duel tab",
+            "manual_dialog": "PySide6 compact duel editor",
             "fields": [
                 "status",
                 "result",
@@ -680,7 +682,8 @@ def smoke_contract(
             "recording_save_source": "RecorderApplicationService.save_duel_record",
             "manual_create_source": "RecorderApplicationService.create_manual_duel_record",
             "deck_inputs": "editable_candidate_combo",
-            "dialog_minimum_size": [620, 680],
+            "compact_segment_fields": ["status", "result", "play_order", "coin_face"],
+            "dialog_minimum_size": [720, 520],
             "button_labels": ["保存", "キャンセル"],
         },
         "bulk_duel_editor_contract": {
@@ -694,6 +697,8 @@ def smoke_contract(
         },
         "review_video_contract": {
             "entry_button": "history_play",
+            "duel_entry_button": "history_duel",
+            "history_duel_initial_tab": "戦績入力",
             "widgets": list(REVIEW_WIDGETS),
             "supported_extensions": [".mp4", ".mkv"],
             "fallback": "external_player",
@@ -705,6 +710,12 @@ def smoke_contract(
             "marker_edit_source": "RecorderApplicationService.update_review_marker_label",
             "clip_export_source": "RecorderApplicationService.export_review_clip",
             "timeline_user_labels": True,
+            "duel_compact_segment_fields": [
+                "status",
+                "result",
+                "play_order",
+                "coin_face",
+            ],
         },
         "operational_quality_audit_contract": {
             "target_version": "2.6.0",
@@ -935,6 +946,7 @@ def _run(args: argparse.Namespace) -> int:
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QApplication,
+            QButtonGroup,
             QCheckBox,
             QComboBox,
             QColorDialog,
@@ -3490,6 +3502,28 @@ def _run(args: argparse.Namespace) -> int:
                 return
             values = duel_record.values if duel_record is not None else data.values
             record = duel_record or data.record
+            if recording_id:
+                try:
+                    from .pyside_review import PySideReviewError, create_review_window
+
+                    review_window = create_review_window(
+                        service=self.service,
+                        recording_id=recording_id,
+                        parent=self,
+                        initial_tab="duel",
+                    )
+                except PySideReviewError:
+                    pass
+                except Exception as exc:
+                    self._show_warning("レビュー画面を開けません", str(exc))
+                else:
+                    self.review_windows.append(review_window)
+                    review_window.destroyed.connect(
+                        lambda _object=None, window=review_window: self._forget_review_window(window)
+                    )
+                    review_window.show()
+                    self._append_activity(f"レビュー画面の戦績入力を開きました: {recording_id}")
+                    return
             self._open_duel_editor_dialog(
                 record=record,
                 recording_id=recording_id,
@@ -3524,11 +3558,39 @@ def _run(args: argparse.Namespace) -> int:
         ) -> None:
             dialog = QDialog(self)
             dialog.setWindowTitle("戦績編集")
-            dialog.setMinimumSize(620, 680)
+            dialog.setMinimumSize(720, 520)
             layout = QVBoxLayout(dialog)
+            layout.setSpacing(8)
+            compact_row = QWidget()
+            compact_layout = QHBoxLayout(compact_row)
+            compact_layout.setContentsMargins(0, 0, 0, 0)
+            compact_layout.setSpacing(8)
             grid = QGridLayout()
             grid.setColumnStretch(1, 1)
             grid.setColumnStretch(3, 1)
+            grid.setVerticalSpacing(8)
+
+            def segmented_choice(
+                label: str,
+                field: str,
+                choices: tuple[str, ...],
+                current: str,
+            ) -> QButtonGroup:
+                compact_layout.addWidget(QLabel(label))
+                group = QButtonGroup(dialog)
+                group.setExclusive(True)
+                for choice in choices:
+                    button = QPushButton(duel_choice_label(field, choice))
+                    button.setCheckable(True)
+                    button.setProperty("segmentButton", True)
+                    button.setProperty("choiceData", choice)
+                    if choice == current:
+                        button.setChecked(True)
+                    group.addButton(button)
+                    compact_layout.addWidget(button)
+                if group.checkedButton() is None and group.buttons():
+                    group.buttons()[0].setChecked(True)
+                return group
 
             def choice_combo(
                 row: int,
@@ -3547,47 +3609,54 @@ def _run(args: argparse.Namespace) -> int:
                 grid.addWidget(combo, row, column + 1)
                 return combo
 
-            status_combo = choice_combo(
-                0, 0, "状態", "status", ("draft", "confirmed"), values.status
+            status_group = segmented_choice(
+                "状態", "status", ("draft", "confirmed"), values.status
             )
-            result_combo = choice_combo(
-                0, 2, "勝敗", "result", ("unknown", "win", "loss", "draw"), values.result
+            result_group = segmented_choice(
+                "勝敗", "result", ("unknown", "win", "loss", "draw"), values.result
             )
-            order_combo = choice_combo(
-                1, 0, "先後", "play_order", ("unknown", "first", "second"), values.play_order
+            order_group = segmented_choice(
+                "先後", "play_order", ("unknown", "first", "second"), values.play_order
             )
-            coin_combo = choice_combo(
-                1, 2, "コイン", "coin_face", ("unknown", "heads", "tails"), values.coin_face
+            coin_group = segmented_choice(
+                "コイン", "coin_face", ("unknown", "heads", "tails"), values.coin_face
             )
+            compact_layout.addStretch(1)
+            layout.addWidget(compact_row)
             type_combo = choice_combo(
-                2, 0, "対戦種別", "duel_type", ("other", "ranked", "event", "room", "solo"), values.duel_type
+                0,
+                0,
+                "対戦種別",
+                "duel_type",
+                ("other", "ranked", "event", "room", "solo"),
+                values.duel_type,
             )
 
-            grid.addWidget(QLabel("シーズン"), 2, 2)
+            grid.addWidget(QLabel("シーズン"), 0, 2)
             season_combo = QComboBox()
             season_combo.addItem("未設定", None)
             for season in seasons:
                 season_combo.addItem(getattr(season, "name", ""), getattr(season, "season_id", None))
             season_index = season_combo.findData(values.season_id)
             season_combo.setCurrentIndex(season_index if season_index >= 0 else 0)
-            grid.addWidget(season_combo, 2, 3)
+            grid.addWidget(season_combo, 0, 3)
 
-            grid.addWidget(QLabel("自分デッキ"), 3, 0)
+            grid.addWidget(QLabel("自分デッキ"), 1, 0)
             own_deck = self._editable_deck_combo(decks, values.own_deck)
-            grid.addWidget(own_deck, 3, 1, 1, 3)
-            grid.addWidget(QLabel("相手デッキ"), 4, 0)
+            grid.addWidget(own_deck, 1, 1, 1, 3)
+            grid.addWidget(QLabel("相手デッキ"), 2, 0)
             opponent_deck = self._editable_deck_combo(decks, values.opponent_deck)
-            grid.addWidget(opponent_deck, 4, 1, 1, 3)
-            grid.addWidget(QLabel("タグ"), 5, 0)
+            grid.addWidget(opponent_deck, 2, 1, 1, 3)
+            grid.addWidget(QLabel("タグ"), 3, 0)
             tags = QLineEdit(", ".join(values.tags))
             tags.setToolTip("複数タグはカンマ区切りで入力します")
-            grid.addWidget(tags, 5, 1, 1, 3)
+            grid.addWidget(tags, 3, 1, 1, 3)
             layout.addLayout(grid)
 
             layout.addWidget(QLabel("メモ"))
             notes = QTextEdit()
             notes.setPlainText(values.notes)
-            notes.setMinimumHeight(130)
+            notes.setMinimumHeight(90)
             layout.addWidget(notes)
 
             buttons = QDialogButtonBox(
@@ -3605,6 +3674,10 @@ def _run(args: argparse.Namespace) -> int:
             def selected_value(combo: QComboBox) -> str:
                 return str(combo.currentData())
 
+            def selected_segment_value(group: QButtonGroup) -> str:
+                checked = group.checkedButton()
+                return str(checked.property("choiceData")) if checked is not None else ""
+
             def save() -> None:
                 selected_season = season_combo.currentData()
                 selected_tags = tuple(
@@ -3613,10 +3686,10 @@ def _run(args: argparse.Namespace) -> int:
                     if part.strip()
                 )
                 updated = DuelRecordValues(
-                    status=selected_value(status_combo),
-                    result=selected_value(result_combo),
-                    play_order=selected_value(order_combo),
-                    coin_face=selected_value(coin_combo),
+                    status=selected_segment_value(status_group),
+                    result=selected_segment_value(result_group),
+                    play_order=selected_segment_value(order_group),
+                    coin_face=selected_segment_value(coin_group),
                     own_deck=own_deck.currentText(),
                     opponent_deck=opponent_deck.currentText(),
                     duel_type=selected_value(type_combo),
@@ -5079,6 +5152,17 @@ def _style_sheet() -> str:
     QPushButton[variant="icon"] {
         min-width: 40px;
         padding: 6px 8px;
+        font-weight: 700;
+    }
+    QPushButton[segmentButton="true"] {
+        min-height: 28px;
+        padding: 4px 9px;
+        border-radius: 4px;
+    }
+    QPushButton[segmentButton="true"]:checked {
+        background: #007c7a;
+        color: #ffffff;
+        border-color: #006665;
         font-weight: 700;
     }
     QPushButton[variant="danger"] {
