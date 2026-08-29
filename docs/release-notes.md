@@ -9,7 +9,8 @@
 - 通常の戦績編集ダイアログも同じセグメント式へ寄せ、縦方向の最小サイズを抑えた
 - SQLite schema、設定schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 - Py compile、Ruff、GUI contract tests、Review ViewModel regression tests、全622 pytest、Qt offscreen screen construction、CLI/GUI/updater EXE build、3 EXE smokeに合格した
-- commit、push、tag、GitHub Release、artifact公開、公開検証を実行する
+- GitHub Actions run `33235741458` でmain CIに合格し、run `33235746335` でWindows EXE release workflow、公開asset検証、ダウンロード後EXE smokeに合格した
+- GitHub Release `v2.7.5` として公開した。V2.7.5用の外部Issue/Milestoneは存在しなかったため、Issue/Milestone closureは該当なし
 
 ## V2.7.4: 戦績編集とレビュー統合ワークフロー - 2026-08-29
 
