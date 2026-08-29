@@ -7,6 +7,9 @@
 - PySide6録画画面で、自動監視開始中でも停止ボタンと自動監視停止ボタンを有効化するようにした
 - `stop_watch()`を自動監視開始直後に呼んでも不正状態遷移にならないようにした
 - 録画方式、FFmpegコマンド、DB schema、設定schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
+- Ruff、対象pytest、全616 pytest、PySide6録画画面smoke、実機GUI自動監視開始直後停止検証、CLI/GUI/updater EXEビルド、3 EXE smokeに合格した
+- GitHub Actions run `33222600993` でmain CIに合格し、run `33222608177` でWindows EXE release workflow、公開asset検証、ダウンロード後EXE smokeに合格した
+- GitHub Release `v2.7.3` として公開した。V2.7.3用の外部Issue/Milestoneは存在しなかったため、Issue/Milestone closureは該当なし
 
 ## V2.7.2: 録画画面操作Hotfix - 2026-08-29
 
