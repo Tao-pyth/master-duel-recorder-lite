@@ -146,6 +146,17 @@ def build_command(
     return tuple(command)
 
 
+def pyinstaller_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    path_entries = env.get("PATH", "").split(os.pathsep)
+    env["PATH"] = os.pathsep.join(
+        entry
+        for entry in path_entries
+        if entry and "poppler\\library\\bin" not in entry.lower()
+    )
+    return env
+
+
 def resolve_youtube_oauth_client_asset(
     project_root: Path,
     build_root: Path,
@@ -307,7 +318,7 @@ def build_windows_executable(
         youtube_oauth_client_asset=youtube_oauth_client_asset,
         include_pyside_review=True,
     )
-    completed = subprocess.run(command, cwd=project_root, check=False)
+    completed = subprocess.run(command, cwd=project_root, env=pyinstaller_environment(), check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"PyInstallerビルドに失敗しました: exit code {completed.returncode}")
     executable = project_root / "dist" / EXECUTABLE_NAME
@@ -338,7 +349,7 @@ def build_updater_executable(project_root: Path = PROJECT_ROOT) -> Path:
         entrypoint="mdrl_updater_entry.py",
         windowed=False,
     )
-    completed = subprocess.run(command, cwd=project_root, check=False)
+    completed = subprocess.run(command, cwd=project_root, env=pyinstaller_environment(), check=False)
     if completed.returncode != 0:
         raise RuntimeError(
             f"Updater版PyInstallerビルドに失敗しました: exit code {completed.returncode}"
@@ -386,7 +397,7 @@ def build_windows_executables(
         extra_binaries=((updater_executable, "."),),
         include_pyside_review=True,
     )
-    completed = subprocess.run(command, cwd=project_root, check=False)
+    completed = subprocess.run(command, cwd=project_root, env=pyinstaller_environment(), check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"GUI版PyInstallerビルドに失敗しました: exit code {completed.returncode}")
     gui_executable = project_root / "dist" / GUI_EXECUTABLE_NAME

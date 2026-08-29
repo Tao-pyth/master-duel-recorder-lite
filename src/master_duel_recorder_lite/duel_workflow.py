@@ -39,9 +39,13 @@ class IncompleteDuel:
 
 @dataclass(frozen=True)
 class BulkDuelUpdate:
+    status: str | None = None
+    result: str | None = None
+    play_order: str | None = None
     season_id: int | None = None
     change_season: bool = False
     own_deck: str | None = None
+    opponent_deck: str | None = None
     coin_face: str | None = None
     duel_type: str | None = None
     add_tags: tuple[str, ...] = ()
@@ -63,8 +67,16 @@ class BulkDuelUpdate:
         }
         if self.change_season:
             raw["season_id"] = self.season_id
+        if self.status is not None:
+            raw["status"] = self.status
+        if self.result is not None:
+            raw["result"] = self.result
+        if self.play_order is not None:
+            raw["play_order"] = self.play_order
         if self.own_deck is not None:
             raw["own_deck"] = self.own_deck
+        if self.opponent_deck is not None:
+            raw["opponent_deck"] = self.opponent_deck
         if self.coin_face is not None:
             raw["coin_face"] = self.coin_face
         if self.duel_type is not None:

@@ -12,6 +12,7 @@ from scripts.build_windows_exe import (
     APP_ICON,
     build_command,
     PROJECT_ROOT,
+    pyinstaller_environment,
     read_project_version,
     resolve_youtube_oauth_client_asset,
     windows_version_resource,
@@ -110,6 +111,33 @@ class ReleaseToolingTest(unittest.TestCase):
 
         self.assertIn("--add-binary", command)
         self.assertIn(f"{updater};.", command)
+
+    def test_review_enabled_build_uses_pyside_hidden_imports(self) -> None:
+        root = Path("project").resolve()
+
+        command = build_command(
+            root,
+            root / "build" / "gui-version.txt",
+            executable_name=GUI_EXECUTABLE_NAME,
+            entrypoint="mdrl_gui_entry.py",
+            windowed=True,
+            include_pyside_review=True,
+        )
+
+        self.assertIn("--hidden-import", command)
+        self.assertIn("PySide6.QtMultimediaWidgets", command)
+        self.assertNotIn("--collect-binaries", command)
+        self.assertNotIn("--collect-data", command)
+
+    def test_pyinstaller_environment_excludes_poppler_dll_path(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"PATH": "C:\\tools;C:\\deps\\poppler\\Library\\bin;C:\\Windows"},
+            clear=True,
+        ):
+            env = pyinstaller_environment()
+
+        self.assertEqual(env["PATH"], "C:\\tools;C:\\Windows")
 
     def test_updater_build_command_is_console_entrypoint(self) -> None:
         root = Path("project").resolve()

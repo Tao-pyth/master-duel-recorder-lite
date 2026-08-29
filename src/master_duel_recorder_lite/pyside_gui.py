@@ -15,6 +15,7 @@ from .app_update import AppUpdateService, UpdateRelease, launch_update_after_exi
 from .application import DuelManagementQuery, RecorderApplicationService
 from .config_management import config_values
 from .duel_records import DuelRecordValues, duel_choice_label
+from .duel_workflow import BulkDuelUpdate
 from .gui_feature_parity import (
     STANDARD_GUI_FEATURES,
     evaluate_standard_operation_checks,
@@ -609,6 +610,7 @@ def smoke_contract(
                 "history_youtube",
             ],
             "selection_required_buttons": [
+                "history_bulk",
                 "history_play",
                 "history_duel",
                 "history_delete",
@@ -677,6 +679,18 @@ def smoke_contract(
             "save_source": "RecorderApplicationService.update_duel_record",
             "recording_save_source": "RecorderApplicationService.save_duel_record",
             "manual_create_source": "RecorderApplicationService.create_manual_duel_record",
+            "deck_inputs": "editable_candidate_combo",
+            "dialog_minimum_size": [620, 680],
+            "button_labels": ["保存", "キャンセル"],
+        },
+        "bulk_duel_editor_contract": {
+            "entry_button": "history_bulk",
+            "target": "selected_confirmed_duel_rows",
+            "selection_mode": "extended_rows",
+            "update_source": "RecorderApplicationService.bulk_update_duel_records",
+            "checked_fields_only": True,
+            "confirm_target_count": True,
+            "tag_mode": ["add", "remove"],
         },
         "review_video_contract": {
             "entry_button": "history_play",
@@ -684,7 +698,9 @@ def smoke_contract(
             "supported_extensions": [".mp4", ".mkv"],
             "fallback": "external_player",
             "visual_timeline": review_visual_timeline_contract(),
-            "timeline_columns": ["経過", "種別", "状態", "ラベル", "由来"],
+            "tabs": ["マーカー編集", "戦績入力"],
+            "timeline_columns": ["経過", "種別", "状態", "説明"],
+            "source_column_visible": False,
             "marker_source": "RecorderApplicationService.add_review_marker",
             "marker_edit_source": "RecorderApplicationService.update_review_marker_label",
             "clip_export_source": "RecorderApplicationService.export_review_clip",
@@ -716,7 +732,7 @@ def smoke_contract(
         },
         "icon_button_contract": {
             "priority": "major_actions",
-            "provider": "app-drawn line icons",
+            "provider": "pictogrammers-inspired app line icons",
             "uses_qt_standard_icons": False,
             "buttons": [
                 "record_target_refresh",
@@ -727,11 +743,16 @@ def smoke_contract(
                 "record_manual_duel_add",
                 "record_diagnostics_export",
                 "visual_diagnostics_folder",
+                "history_incomplete",
+                "history_bulk",
                 "manual_duel_add",
                 "history_play",
                 "history_duel",
                 "history_delete",
+                "history_duplicates",
                 "history_refresh",
+                "history_columns",
+                "history_youtube",
                 "settings_reload",
                 "settings_save",
                 "youtube_template_save",
@@ -1261,14 +1282,19 @@ def _run(args: argparse.Namespace) -> int:
                 "record_manual_duel_add": "add",
                 "record_diagnostics_export": "download",
                 "visual_diagnostics_folder": "folder",
+                "history_incomplete": "check",
+                "history_bulk": "bulk-edit",
                 "manual_duel_add": "add",
                 "history_add": "add",
                 "history_play": "play",
                 "history_duel": "edit",
                 "history_delete": "delete",
+                "history_duplicates": "copy",
                 "history_refresh": "refresh",
                 "history_filter_apply": "check",
                 "history_filter_clear": "clear",
+                "history_columns": "columns",
+                "history_youtube": "video",
                 "deck_add": "add",
                 "deck_save": "save",
                 "deck_delete": "delete",
@@ -1319,7 +1345,11 @@ def _run(args: argparse.Namespace) -> int:
         def _line_icon(self, name: str, button: QPushButton) -> QIcon:
             pixmap = QPixmap(20, 20)
             pixmap.fill(Qt.GlobalColor.transparent)
-            color = QColor("#9A3412" if button.property("variant") == "danger" else "#007F78")
+            color = QColor(
+                "#ffffff"
+                if button.property("variant") in {"danger", "primary"}
+                else "#007F78"
+            )
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(QPen(color, 2))
@@ -1352,6 +1382,25 @@ def _run(args: argparse.Namespace) -> int:
                 painter.drawLine(6, 14, 14, 6)
                 painter.drawLine(5, 15, 9, 14)
                 painter.drawLine(13, 5, 15, 7)
+            elif name == "bulk-edit":
+                painter.drawRect(4, 5, 12, 10)
+                painter.drawLine(4, 9, 16, 9)
+                painter.drawLine(8, 5, 8, 15)
+                painter.drawLine(12, 5, 12, 15)
+                painter.drawLine(12, 15, 17, 10)
+                painter.drawLine(17, 10, 15, 8)
+            elif name == "columns":
+                painter.drawRect(4, 4, 12, 12)
+                painter.drawLine(8, 4, 8, 16)
+                painter.drawLine(12, 4, 12, 16)
+            elif name == "video":
+                painter.drawRoundedRect(4, 5, 12, 10, 2, 2)
+                painter.drawLine(7, 8, 7, 12)
+                painter.drawLine(7, 8, 12, 10)
+                painter.drawLine(12, 10, 7, 12)
+            elif name == "copy":
+                painter.drawRect(6, 4, 10, 10)
+                painter.drawRect(4, 7, 10, 9)
             elif name == "check":
                 painter.drawLine(4, 10, 8, 14)
                 painter.drawLine(8, 14, 16, 5)
@@ -1685,6 +1734,7 @@ def _run(args: argparse.Namespace) -> int:
                 column_widths=(148, 220, 72, 72, 72, 100, 82, 92, 180, 86),
                 minimum_height=310,
             )
+            table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
             self._set_table_rows(
                 table,
                 (
@@ -3127,6 +3177,28 @@ def _run(args: argparse.Namespace) -> int:
             row_id = item.data(Qt.ItemDataRole.UserRole)
             return self.history_views_by_row_id.get(str(row_id))
 
+        def _selected_history_views(self) -> tuple[object, ...]:
+            table = self.widgets.get("history_table")
+            if not isinstance(table, QTableWidget):
+                return ()
+            selection = table.selectionModel()
+            rows = sorted(
+                {index.row() for index in selection.selectedRows()}
+                if selection is not None
+                else set()
+            )
+            if not rows and table.currentRow() >= 0:
+                rows = [table.currentRow()]
+            views: list[object] = []
+            for row in rows:
+                item = table.item(row, 0)
+                if item is None:
+                    continue
+                view = self.history_views_by_row_id.get(str(item.data(Qt.ItemDataRole.UserRole)))
+                if view is not None:
+                    views.append(view)
+            return tuple(views)
+
         def _update_history_action_states(self) -> None:
             selected = self._selected_history_view()
             has_selection = selected is not None
@@ -3152,11 +3224,184 @@ def _run(args: argparse.Namespace) -> int:
             self._show_information("未完了処理", f"未完了の戦績は{len(items)}件です。")
 
         def _show_bulk_duel_editor(self) -> None:
-            self._show_information(
-                "一括編集",
-                "一括編集はこの版では提供していません。複数の戦績を変更する場合は、"
-                "戦績管理で対象行を1件ずつ開いて編集してください。",
+            views = self._selected_history_views()
+            if not views:
+                self._show_information("一括編集", "一括編集する戦績行を選択してください。")
+                return
+            records = tuple(
+                getattr(view, "duel_record", None)
+                for view in views
+                if getattr(view, "duel_record", None) is not None
             )
+            if len(records) != len(views):
+                self._show_information(
+                    "一括編集",
+                    "戦績が未作成の録画行は一括編集できません。先に戦績編集で保存してください。",
+                )
+                return
+            try:
+                data = self.service.get_duel_editor_data(None)
+            except Exception as exc:
+                self._show_warning("一括編集を開けません", str(exc))
+                return
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle("一括編集")
+            dialog.setMinimumSize(700, 560)
+            layout = QVBoxLayout(dialog)
+            layout.addWidget(QLabel(f"対象: {len(records)}件"))
+            grid = QGridLayout()
+            grid.setColumnStretch(2, 1)
+
+            def choice_combo(
+                row: int,
+                label: str,
+                field: str,
+                choices: tuple[str, ...],
+            ) -> tuple[QCheckBox, QComboBox]:
+                check = QCheckBox(label)
+                combo = QComboBox()
+                for choice in choices:
+                    combo.addItem(duel_choice_label(field, choice), choice)
+                grid.addWidget(check, row, 0)
+                grid.addWidget(combo, row, 1, 1, 2)
+                return check, combo
+
+            status_check, status_combo = choice_combo(
+                0, "状態", "status", ("draft", "confirmed")
+            )
+            result_check, result_combo = choice_combo(
+                1, "勝敗", "result", ("unknown", "win", "loss", "draw")
+            )
+            order_check, order_combo = choice_combo(
+                2, "先後", "play_order", ("unknown", "first", "second")
+            )
+            coin_check, coin_combo = choice_combo(
+                3, "コイン", "coin_face", ("unknown", "heads", "tails")
+            )
+            type_check, type_combo = choice_combo(
+                4, "対戦種別", "duel_type", ("other", "ranked", "event", "room", "solo")
+            )
+
+            season_check = QCheckBox("シーズン")
+            season_combo = QComboBox()
+            season_combo.addItem("未設定", None)
+            for season in data.seasons:
+                season_combo.addItem(
+                    str(getattr(season, "name", "")),
+                    getattr(season, "season_id", None),
+                )
+            grid.addWidget(season_check, 5, 0)
+            grid.addWidget(season_combo, 5, 1, 1, 2)
+
+            own_check = QCheckBox("自分デッキ")
+            own_deck = self._editable_deck_combo(data.decks, "")
+            grid.addWidget(own_check, 6, 0)
+            grid.addWidget(own_deck, 6, 1, 1, 2)
+            opponent_check = QCheckBox("相手デッキ")
+            opponent_deck = self._editable_deck_combo(data.decks, "")
+            grid.addWidget(opponent_check, 7, 0)
+            grid.addWidget(opponent_deck, 7, 1, 1, 2)
+
+            add_tags_check = QCheckBox("タグを追加")
+            add_tags = QLineEdit()
+            add_tags.setToolTip("複数タグはカンマ区切りで入力します")
+            grid.addWidget(add_tags_check, 8, 0)
+            grid.addWidget(add_tags, 8, 1, 1, 2)
+            remove_tags_check = QCheckBox("タグを削除")
+            remove_tags = QLineEdit()
+            remove_tags.setToolTip("複数タグはカンマ区切りで入力します")
+            grid.addWidget(remove_tags_check, 9, 0)
+            grid.addWidget(remove_tags, 9, 1, 1, 2)
+            layout.addLayout(grid)
+
+            note = QLabel("チェックした項目だけを選択中の戦績へ反映します。タグは追加/削除のみです。")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Save
+                | QDialogButtonBox.StandardButton.Cancel
+            )
+            save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+            cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+            if save_button is not None:
+                save_button.setText("保存")
+            if cancel_button is not None:
+                cancel_button.setText("キャンセル")
+            layout.addWidget(buttons)
+
+            def selected_value(combo: QComboBox) -> str:
+                return str(combo.currentData())
+
+            def parsed_tags(text: str) -> tuple[str, ...]:
+                return tuple(
+                    part.strip()
+                    for part in text.replace("、", ",").split(",")
+                    if part.strip()
+                )
+
+            def save() -> None:
+                fields: dict[str, object] = {}
+                summary: list[str] = []
+                if status_check.isChecked():
+                    fields["status"] = selected_value(status_combo)
+                    summary.append(f"状態={status_combo.currentText()}")
+                if result_check.isChecked():
+                    fields["result"] = selected_value(result_combo)
+                    summary.append(f"勝敗={result_combo.currentText()}")
+                if order_check.isChecked():
+                    fields["play_order"] = selected_value(order_combo)
+                    summary.append(f"先後={order_combo.currentText()}")
+                if coin_check.isChecked():
+                    fields["coin_face"] = selected_value(coin_combo)
+                    summary.append(f"コイン={coin_combo.currentText()}")
+                if type_check.isChecked():
+                    fields["duel_type"] = selected_value(type_combo)
+                    summary.append(f"対戦種別={type_combo.currentText()}")
+                if season_check.isChecked():
+                    fields["change_season"] = True
+                    selected_season = season_combo.currentData()
+                    fields["season_id"] = (
+                        int(selected_season) if selected_season is not None else None
+                    )
+                    summary.append(f"シーズン={season_combo.currentText()}")
+                if own_check.isChecked():
+                    fields["own_deck"] = own_deck.currentText()
+                    summary.append(f"自分デッキ={own_deck.currentText() or '-'}")
+                if opponent_check.isChecked():
+                    fields["opponent_deck"] = opponent_deck.currentText()
+                    summary.append(f"相手デッキ={opponent_deck.currentText() or '-'}")
+                if add_tags_check.isChecked():
+                    fields["add_tags"] = parsed_tags(add_tags.text())
+                    summary.append(f"タグ追加={', '.join(fields['add_tags']) or '-'}")
+                if remove_tags_check.isChecked():
+                    fields["remove_tags"] = parsed_tags(remove_tags.text())
+                    summary.append(f"タグ削除={', '.join(fields['remove_tags']) or '-'}")
+                if not summary:
+                    self._show_information("一括編集", "変更する項目にチェックを入れてください。")
+                    return
+                if QMessageBox.question(
+                    dialog,
+                    "一括編集を保存",
+                    f"{len(records)}件の戦績を更新します。\n" + "\n".join(summary),
+                ) != QMessageBox.StandardButton.Yes:
+                    return
+                try:
+                    self.service.bulk_update_duel_records(
+                        tuple(str(getattr(record, "duel_id")) for record in records),
+                        BulkDuelUpdate(**fields),
+                    )
+                except Exception as exc:
+                    self._show_warning("一括編集を保存できません", str(exc))
+                    return
+                dialog.accept()
+                self._append_activity(f"一括編集で{len(records)}件を更新しました")
+                self._refresh_history()
+
+            buttons.accepted.connect(save)
+            buttons.rejected.connect(dialog.reject)
+            dialog.exec()
 
         def _show_manual_duel_entry(self) -> None:
             block_reason = self.service.duel_write_block_reason()
@@ -3172,6 +3417,7 @@ def _run(args: argparse.Namespace) -> int:
                 record=None,
                 recording_id=None,
                 values=data.values,
+                decks=data.decks,
                 seasons=data.seasons,
             )
 
@@ -3248,8 +3494,24 @@ def _run(args: argparse.Namespace) -> int:
                 record=record,
                 recording_id=recording_id,
                 values=values,
+                decks=data.decks,
                 seasons=data.seasons,
             )
+
+        @staticmethod
+        def _editable_deck_combo(decks: tuple[object, ...], current: str) -> QComboBox:
+            combo = QComboBox()
+            combo.setEditable(True)
+            names: list[str] = []
+            for deck in decks:
+                name = str(getattr(deck, "name", "")).strip()
+                if name and name not in names:
+                    names.append(name)
+            combo.addItems(names)
+            combo.setCurrentText(current)
+            combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            combo.setToolTip("登録済みデッキを選ぶか、そのまま自由に入力できます")
+            return combo
 
         def _open_duel_editor_dialog(
             self,
@@ -3257,10 +3519,12 @@ def _run(args: argparse.Namespace) -> int:
             record: object | None,
             recording_id: str | None,
             values: DuelRecordValues,
+            decks: tuple[object, ...],
             seasons: tuple[object, ...],
         ) -> None:
             dialog = QDialog(self)
             dialog.setWindowTitle("戦績編集")
+            dialog.setMinimumSize(620, 680)
             layout = QVBoxLayout(dialog)
             grid = QGridLayout()
             grid.setColumnStretch(1, 1)
@@ -3309,10 +3573,10 @@ def _run(args: argparse.Namespace) -> int:
             grid.addWidget(season_combo, 2, 3)
 
             grid.addWidget(QLabel("自分デッキ"), 3, 0)
-            own_deck = QLineEdit(values.own_deck)
+            own_deck = self._editable_deck_combo(decks, values.own_deck)
             grid.addWidget(own_deck, 3, 1, 1, 3)
             grid.addWidget(QLabel("相手デッキ"), 4, 0)
-            opponent_deck = QLineEdit(values.opponent_deck)
+            opponent_deck = self._editable_deck_combo(decks, values.opponent_deck)
             grid.addWidget(opponent_deck, 4, 1, 1, 3)
             grid.addWidget(QLabel("タグ"), 5, 0)
             tags = QLineEdit(", ".join(values.tags))
@@ -3330,6 +3594,12 @@ def _run(args: argparse.Namespace) -> int:
                 QDialogButtonBox.StandardButton.Save
                 | QDialogButtonBox.StandardButton.Cancel
             )
+            save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+            cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+            if save_button is not None:
+                save_button.setText("保存")
+            if cancel_button is not None:
+                cancel_button.setText("キャンセル")
             layout.addWidget(buttons)
 
             def selected_value(combo: QComboBox) -> str:
@@ -3347,8 +3617,8 @@ def _run(args: argparse.Namespace) -> int:
                     result=selected_value(result_combo),
                     play_order=selected_value(order_combo),
                     coin_face=selected_value(coin_combo),
-                    own_deck=own_deck.text(),
-                    opponent_deck=opponent_deck.text(),
+                    own_deck=own_deck.currentText(),
+                    opponent_deck=opponent_deck.currentText(),
                     duel_type=selected_value(type_combo),
                     tags=selected_tags,
                     notes=notes.toPlainText(),

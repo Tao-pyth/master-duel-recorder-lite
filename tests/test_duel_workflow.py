@@ -174,6 +174,30 @@ class DuelWorkflowServiceTest(unittest.TestCase):
         self.assertEqual([item.values.coin_face for item in saved], ["unknown", "unknown"])
         self.assertEqual(self.records.get(heads.duel_id).values.coin_face, "unknown")
 
+    def test_bulk_update_changes_result_order_status_and_opponent_deck(self) -> None:
+        records = tuple(
+            self.records.create_manual(
+                DuelRecordValues(status="draft", result="unknown", play_order="unknown"),
+                occurred_at=datetime(2026, 8, 10 + index, tzinfo=timezone.utc),
+            )
+            for index in range(2)
+        )
+
+        saved = self.service.bulk_update(
+            tuple(item.duel_id for item in records),
+            BulkDuelUpdate(
+                status="confirmed",
+                result="win",
+                play_order="second",
+                opponent_deck="相手デッキ",
+            ),
+        )
+
+        self.assertTrue(all(item.values.status == "confirmed" for item in saved))
+        self.assertTrue(all(item.values.result == "win" for item in saved))
+        self.assertTrue(all(item.values.play_order == "second" for item in saved))
+        self.assertTrue(all(item.values.opponent_deck == "相手デッキ" for item in saved))
+
     def test_bulk_update_validates_every_identifier_before_writing(self) -> None:
         record = self.records.create_manual(
             DuelRecordValues(status="confirmed", own_deck="変更前"),

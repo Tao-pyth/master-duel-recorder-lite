@@ -20,8 +20,11 @@ from master_duel_recorder_lite.pyside_gui import (
 from master_duel_recorder_lite.operation_state import OperationAction
 from master_duel_recorder_lite.pyside_review import (
     REVIEW_WIDGETS,
+    compose_marker_label,
+    review_clip_range_message,
     review_operation_error_message,
     review_timeline_display_row,
+    split_marker_label,
 )
 
 
@@ -68,7 +71,13 @@ class PySideGuiContractTest(unittest.TestCase):
         )
         self.assertEqual(
             contract["history_hub_operation_contract"]["selection_required_buttons"],
-            ["history_play", "history_duel", "history_delete", "history_youtube"],
+            [
+                "history_bulk",
+                "history_play",
+                "history_duel",
+                "history_delete",
+                "history_youtube",
+            ],
         )
         self.assertEqual(
             contract["history_hub_operation_contract"]["danger_button"],
@@ -224,9 +233,22 @@ class PySideGuiContractTest(unittest.TestCase):
         )
         self.assertEqual(
             contract["review_video_contract"]["timeline_columns"],
-            ["経過", "種別", "状態", "ラベル", "由来"],
+            ["経過", "種別", "状態", "説明"],
         )
         self.assertTrue(contract["review_video_contract"]["timeline_user_labels"])
+        self.assertEqual(
+            contract["review_video_contract"]["tabs"],
+            ["マーカー編集", "戦績入力"],
+        )
+        self.assertFalse(contract["review_video_contract"]["source_column_visible"])
+        self.assertEqual(
+            contract["duel_editor_contract"]["deck_inputs"],
+            "editable_candidate_combo",
+        )
+        self.assertEqual(
+            contract["bulk_duel_editor_contract"]["update_source"],
+            "RecorderApplicationService.bulk_update_duel_records",
+        )
         self.assertEqual(
             contract["operational_quality_audit_contract"]["target_version"],
             "2.6.0",
@@ -274,7 +296,7 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertIn("history_duel", contract["icon_button_contract"]["buttons"])
         self.assertEqual(
             contract["icon_button_contract"]["provider"],
-            "app-drawn line icons",
+            "pictogrammers-inspired app line icons",
         )
         self.assertFalse(contract["icon_button_contract"]["uses_qt_standard_icons"])
         for widget in REVIEW_WIDGETS:
@@ -425,8 +447,20 @@ class PySideGuiContractTest(unittest.TestCase):
 
         self.assertEqual(
             row,
-            ("01:23.456", "マーカー", "確定", "レビューで追加", "手動"),
+            ("01:23.456", "メモ", "確定", "レビューで追加"),
         )
+
+    def test_marker_label_splits_type_and_description(self) -> None:
+        self.assertEqual(split_marker_label("プレミ: 展開順を確認"), ("プレミ", "展開順を確認"))
+        self.assertEqual(split_marker_label("レビューで追加"), ("メモ", "レビューで追加"))
+        self.assertEqual(compose_marker_label("リーサル", "打点確認"), "リーサル: 打点確認")
+
+    def test_review_clip_range_message_explains_actual_output_range(self) -> None:
+        message = review_clip_range_message(center_seconds=10.0, duration_seconds=45.0)
+
+        self.assertIn("前30秒・後30秒", message)
+        self.assertIn("00:00", message)
+        self.assertIn("00:40", message)
 
     def test_review_error_message_summarizes_ffmpeg_output_format_error(self) -> None:
         message = review_operation_error_message(

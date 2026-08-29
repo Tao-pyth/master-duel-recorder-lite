@@ -155,6 +155,22 @@ class DuelTimelineRepositoryTest(unittest.TestCase):
         with self.assertRaisesRegex(DuelTimelineError, "marker"):
             self.repository.update_marker_label(event.event_id, "変更")
 
+    def test_detected_marker_label_cannot_be_overwritten(self) -> None:
+        event = self.repository.add(
+            "recording",
+            elapsed_ms=1000,
+            event_type="marker",
+            label="自動判定の根拠",
+            source="detected",
+            status="candidate",
+            confidence=0.9,
+            detector_id="test",
+            detector_version="1",
+        )
+
+        with self.assertRaisesRegex(DuelTimelineError, "自動判定"):
+            self.repository.update_marker_label(event.event_id, "変更")
+
     def test_event_cannot_exceed_recording_duration(self) -> None:
         with self.assertRaisesRegex(DuelTimelineError, "録画時間"):
             self.repository.add(

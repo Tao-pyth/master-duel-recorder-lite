@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib.util
+import os
 from pathlib import Path
 import webbrowser
 
 from .application import RecorderApplicationService
+from .clip_export import resolve_clip_range
+from .duel_records import DuelRecordValues, duel_choice_label
 from .review_viewmodel import (
     ReviewClipExportRequest,
     ReviewMarkerRequest,
@@ -33,11 +36,28 @@ REVIEW_WIDGETS: tuple[str, ...] = (
     "review_external_player",
     "review_marker_add",
     "review_marker_edit",
+    "review_timeline_confirm",
+    "review_timeline_reject",
     "review_clip_export",
+    "review_clip_hint",
+    "review_clip_open_folder",
     "review_position_slider",
     "review_position_label",
     "review_visual_timeline",
+    "review_editor_tabs",
+    "review_marker_tab",
+    "review_duel_tab",
+    "review_duel_save",
     "review_timeline_table",
+)
+
+MARKER_KIND_CHOICES: tuple[str, ...] = (
+    "メモ",
+    "重要局面",
+    "プレミ",
+    "ターン判断",
+    "リーサル",
+    "その他",
 )
 
 REVIEW_EVENT_TYPE_LABELS: dict[str, str] = {
@@ -106,13 +126,51 @@ def _review_application() -> object:
     return QApplication.instance() or QApplication([])
 
 
-def review_timeline_display_row(event: ReviewTimelineEvent) -> tuple[str, str, str, str, str]:
+def review_timeline_display_row(event: ReviewTimelineEvent) -> tuple[str, str, str, str]:
+    event_type = REVIEW_EVENT_TYPE_LABELS.get(event.event_type, event.event_type or "-")
+    description = event.label
+    if event.event_type == "marker":
+        event_type, description = split_marker_label(event.label)
     return (
         event.elapsed_label,
-        REVIEW_EVENT_TYPE_LABELS.get(event.event_type, event.event_type or "-"),
+        event_type,
         REVIEW_EVENT_STATUS_LABELS.get(event.status, event.status or "-"),
-        event.label,
-        REVIEW_EVENT_SOURCE_LABELS.get(event.source, event.source or "-"),
+        description,
+    )
+
+
+def split_marker_label(label: str) -> tuple[str, str]:
+    normalized = label.strip()
+    for kind in MARKER_KIND_CHOICES:
+        prefix = f"{kind}:"
+        if normalized.startswith(prefix):
+            return kind, normalized[len(prefix) :].strip() or kind
+    return "メモ", normalized or "レビューで追加"
+
+
+def compose_marker_label(kind: str, description: str) -> str:
+    normalized_kind = kind.strip() if kind.strip() in MARKER_KIND_CHOICES else "メモ"
+    normalized_description = description.strip() or normalized_kind
+    return f"{normalized_kind}: {normalized_description}"
+
+
+def review_clip_range_message(
+    *,
+    center_seconds: float,
+    duration_seconds: float | None,
+    before_seconds: float = 30.0,
+    after_seconds: float = 30.0,
+) -> str:
+    clip_range = resolve_clip_range(
+        center_seconds=center_seconds,
+        duration_seconds=duration_seconds,
+        before_seconds=before_seconds,
+        after_seconds=after_seconds,
+    )
+    return (
+        "選択位置を中心に前30秒・後30秒を出力します。"
+        f"実際の出力は{_seconds_label(clip_range.start_seconds)}から"
+        f"{_seconds_label(clip_range.duration_seconds)}分です。"
     )
 
 
@@ -123,6 +181,8 @@ def review_visual_timeline_contract() -> dict[str, object]:
         "kinds": ["duel_start", "manual_marker", "clip_candidate", "timeline_event"],
         "sync": ["current_position", "selected_event", "timeline_table"],
         "fallback_safe": True,
+        "tabs": ["マーカー編集", "戦績入力"],
+        "source_column_visible": False,
     }
 
 
@@ -156,16 +216,22 @@ def create_review_window(
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QHBoxLayout,
-            QInputDialog,
             QLabel,
+            QLineEdit,
             QMainWindow,
             QMessageBox,
             QPushButton,
             QSlider,
+            QTabWidget,
             QTableWidget,
             QTableWidgetItem,
+            QTextEdit,
             QVBoxLayout,
             QWidget,
+            QComboBox,
+            QDialog,
+            QDialogButtonBox,
+            QGridLayout,
         )
     except Exception as exc:  # pragma: no cover - depends on local Qt installation
         raise PySideReviewError(f"PySide6レビュー画面の読み込みに失敗しました: {exc}") from exc
@@ -179,6 +245,7 @@ def create_review_window(
     window = QMainWindow(parent)
     window.setObjectName("review_window")
     window.setWindowTitle(f"Master Duel Recorder Lite Review - {recording_id}")
+    window.setStyleSheet(_review_style_sheet())
     root = QWidget()
     layout = QVBoxLayout(root)
     title = QLabel(f"{model.recording.recording_id} / {model.video.path.name}")
@@ -194,6 +261,8 @@ def create_review_window(
 
     video = QVideoWidget()
     video.setObjectName("review_video")
+    video.setMinimumHeight(260)
+    video.setMaximumHeight(420)
     layout.addWidget(video, stretch=1)
 
     player = QMediaPlayer()
@@ -298,17 +367,9 @@ def create_review_window(
     play_button.setObjectName("review_play_pause")
     open_external_button = QPushButton("外部で開く")
     open_external_button.setObjectName("review_external_player")
-    marker_button = QPushButton("現在位置にマーカー")
-    marker_button.setObjectName("review_marker_add")
-    marker_edit_button = QPushButton("マーカー編集")
-    marker_edit_button.setObjectName("review_marker_edit")
-    clip_button = QPushButton("選択位置をクリップ出力")
-    clip_button.setObjectName("review_clip_export")
     controls.addWidget(play_button)
     controls.addWidget(open_external_button)
-    controls.addWidget(marker_button)
-    controls.addWidget(marker_edit_button)
-    controls.addWidget(clip_button)
+    controls.addStretch(1)
     layout.addLayout(controls)
 
     slider = QSlider(Qt.Orientation.Horizontal)
@@ -321,19 +382,159 @@ def create_review_window(
     visual_timeline = ReviewVisualTimelineWidget(model.visual_timeline)
     layout.addWidget(visual_timeline)
 
-    timeline = QTableWidget(0, 5)
+    tabs = QTabWidget()
+    tabs.setObjectName("review_editor_tabs")
+    marker_tab = QWidget()
+    marker_tab.setObjectName("review_marker_tab")
+    marker_layout = QVBoxLayout(marker_tab)
+    marker_controls = QHBoxLayout()
+    marker_button = QPushButton("現在位置にマーカー")
+    marker_button.setObjectName("review_marker_add")
+    marker_edit_button = QPushButton("マーカー編集")
+    marker_edit_button.setObjectName("review_marker_edit")
+    confirm_button = QPushButton("候補を確定")
+    confirm_button.setObjectName("review_timeline_confirm")
+    reject_button = QPushButton("候補を却下")
+    reject_button.setObjectName("review_timeline_reject")
+    clip_button = QPushButton("選択位置をクリップ出力")
+    clip_button.setObjectName("review_clip_export")
+    clip_folder_button = QPushButton("保存先を開く")
+    clip_folder_button.setObjectName("review_clip_open_folder")
+    clip_folder_button.setEnabled(False)
+    for button in (
+        marker_button,
+        marker_edit_button,
+        confirm_button,
+        reject_button,
+        clip_button,
+        clip_folder_button,
+    ):
+        marker_controls.addWidget(button)
+    marker_controls.addStretch(1)
+    marker_layout.addLayout(marker_controls)
+    clip_hint = QLabel(
+        "クリップ出力は、選択行または現在位置を中心に前30秒・後30秒を保存します。"
+    )
+    clip_hint.setObjectName("review_clip_hint")
+    clip_hint.setWordWrap(True)
+    marker_layout.addWidget(clip_hint)
+
+    timeline = QTableWidget(0, 4)
     timeline.setObjectName("review_timeline_table")
-    timeline.setHorizontalHeaderLabels(("経過", "種別", "状態", "ラベル", "由来"))
+    timeline.setHorizontalHeaderLabels(("経過", "種別", "状態", "説明"))
     timeline.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     timeline.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     timeline.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     timeline.verticalHeader().setVisible(False)
     timeline.horizontalHeader().setStretchLastSection(True)
+    marker_layout.addWidget(timeline)
+    tabs.addTab(marker_tab, "マーカー編集")
+
+    duel_tab = QWidget()
+    duel_tab.setObjectName("review_duel_tab")
+    duel_layout = QVBoxLayout(duel_tab)
+    duel_grid = QGridLayout()
+    duel_grid.setColumnStretch(1, 1)
+    duel_grid.setColumnStretch(3, 1)
+    duel_editor_data = service.get_duel_editor_data(recording_id)
+
+    def choice_combo(
+        row: int,
+        column: int,
+        label: str,
+        field: str,
+        choices: tuple[str, ...],
+        current: str,
+    ) -> QComboBox:
+        duel_grid.addWidget(QLabel(label), row, column)
+        combo = QComboBox()
+        for choice in choices:
+            combo.addItem(duel_choice_label(field, choice), choice)
+        index = combo.findData(current)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+        duel_grid.addWidget(combo, row, column + 1)
+        return combo
+
+    def editable_deck_combo(current: str) -> QComboBox:
+        combo = QComboBox()
+        combo.setEditable(True)
+        names: list[str] = []
+        for deck in duel_editor_data.decks:
+            name = str(getattr(deck, "name", "")).strip()
+            if name and name not in names:
+                names.append(name)
+        combo.addItems(names)
+        combo.setCurrentText(current)
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        combo.setToolTip("登録済みデッキを選ぶか、そのまま自由に入力できます")
+        return combo
+
+    duel_values = duel_editor_data.values
+    status_combo = choice_combo(
+        0, 0, "状態", "status", ("draft", "confirmed"), duel_values.status
+    )
+    result_combo = choice_combo(
+        0, 2, "勝敗", "result", ("unknown", "win", "loss", "draw"), duel_values.result
+    )
+    order_combo = choice_combo(
+        1, 0, "先後", "play_order", ("unknown", "first", "second"), duel_values.play_order
+    )
+    coin_combo = choice_combo(
+        1, 2, "コイン", "coin_face", ("unknown", "heads", "tails"), duel_values.coin_face
+    )
+    type_combo = choice_combo(
+        2, 0, "対戦種別", "duel_type", ("other", "ranked", "event", "room", "solo"), duel_values.duel_type
+    )
+    duel_grid.addWidget(QLabel("シーズン"), 2, 2)
+    season_combo = QComboBox()
+    season_combo.addItem("未設定", None)
+    for season in duel_editor_data.seasons:
+        season_combo.addItem(str(getattr(season, "name", "")), getattr(season, "season_id", None))
+    season_index = season_combo.findData(duel_values.season_id)
+    season_combo.setCurrentIndex(season_index if season_index >= 0 else 0)
+    duel_grid.addWidget(season_combo, 2, 3)
+    duel_grid.addWidget(QLabel("自分デッキ"), 3, 0)
+    own_deck = editable_deck_combo(duel_values.own_deck)
+    duel_grid.addWidget(own_deck, 3, 1, 1, 3)
+    duel_grid.addWidget(QLabel("相手デッキ"), 4, 0)
+    opponent_deck = editable_deck_combo(duel_values.opponent_deck)
+    duel_grid.addWidget(opponent_deck, 4, 1, 1, 3)
+    duel_grid.addWidget(QLabel("タグ"), 5, 0)
+    tags = QLineEdit(", ".join(duel_values.tags))
+    tags.setToolTip("複数タグはカンマ区切りで入力します")
+    duel_grid.addWidget(tags, 5, 1, 1, 3)
+    duel_layout.addLayout(duel_grid)
+    duel_layout.addWidget(QLabel("メモ"))
+    notes = QTextEdit()
+    notes.setPlainText(duel_values.notes)
+    notes.setMinimumHeight(120)
+    duel_layout.addWidget(notes)
+    duel_save = QPushButton("戦績を保存")
+    duel_save.setObjectName("review_duel_save")
+    duel_layout.addWidget(duel_save)
+    tabs.addTab(duel_tab, "戦績入力")
+    layout.addWidget(tabs, stretch=1)
+
     event_id_role = Qt.ItemDataRole.UserRole + 1
     event_type_role = Qt.ItemDataRole.UserRole + 2
+    event_source_role = Qt.ItemDataRole.UserRole + 3
+    event_status_role = Qt.ItemDataRole.UserRole + 4
+    event_label_role = Qt.ItemDataRole.UserRole + 5
+    last_clip_output_path: Path | None = None
+
+    def refresh_duel_summary() -> None:
+        duel = model.duel
+        duel_summary.setText(
+            f"戦績: {duel_choice_label('result', duel.result)} / "
+            f"{duel_choice_label('play_order', duel.play_order)} / "
+            f"{duel.own_deck or '-'} vs {duel.opponent_deck or '-'}"
+        )
 
     def reload_timeline() -> None:
+        nonlocal model
         refreshed = service.get_review_view_model(recording_id)
+        model = refreshed
+        refresh_duel_summary()
         visual_timeline.set_items(refreshed.visual_timeline)
         timeline.setRowCount(0)
         for event in refreshed.timeline:
@@ -341,15 +542,15 @@ def create_review_window(
             timeline.insertRow(row)
             for column, value in enumerate(review_timeline_display_row(event)):
                 item = QTableWidgetItem(value)
+                item.setData(event_id_role, event.event_id)
+                item.setData(event_type_role, event.event_type)
+                item.setData(event_source_role, event.source)
+                item.setData(event_status_role, event.status)
+                item.setData(event_label_role, event.label)
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, event.elapsed_ms)
-                    item.setData(event_id_role, event.event_id)
-                if column == 1:
-                    item.setData(event_type_role, event.event_type)
                 timeline.setItem(row, column, item)
-
-    reload_timeline()
-    layout.addWidget(timeline)
+        update_timeline_action_state()
 
     def selected_elapsed_ms() -> int:
         item = timeline.item(timeline.currentRow(), 0)
@@ -357,6 +558,29 @@ def create_review_window(
             return max(0, int(player.position()))
         value = item.data(Qt.ItemDataRole.UserRole)
         return int(value)
+
+    def selected_timeline_event() -> tuple[str, str, str, str, str] | None:
+        item = timeline.item(timeline.currentRow(), 0)
+        if item is None:
+            return None
+        event_id = item.data(event_id_role)
+        event_type = item.data(event_type_role)
+        source = item.data(event_source_role)
+        status = item.data(event_status_role)
+        label = item.data(event_label_role)
+        return str(event_id), str(event_type), str(source), str(status), str(label)
+
+    def update_timeline_action_state() -> None:
+        selected = selected_timeline_event()
+        is_candidate = selected is not None and selected[3] == "candidate"
+        is_manual_marker = (
+            selected is not None and selected[1] == "marker" and selected[2] == "manual"
+        )
+        confirm_button.setEnabled(is_candidate)
+        reject_button.setEnabled(is_candidate)
+        marker_edit_button.setEnabled(is_manual_marker)
+
+    reload_timeline()
 
     def report_error(message: str) -> None:
         QMessageBox.warning(window, "レビュー操作に失敗しました", message)
@@ -375,7 +599,7 @@ def create_review_window(
                 ReviewMarkerRequest(
                     recording_id=recording_id,
                     elapsed_ms=max(0, int(player.position())),
-                    label="レビューで追加",
+                    label=compose_marker_label("メモ", "レビューで追加"),
                 )
             )
         except Exception as exc:
@@ -384,44 +608,159 @@ def create_review_window(
         reload_timeline()
 
     def edit_marker() -> None:
-        row = timeline.currentRow()
-        type_item = timeline.item(row, 1)
-        label_item = timeline.item(row, 3)
-        elapsed_item = timeline.item(row, 0)
-        if type_item is None or label_item is None or elapsed_item is None:
+        selected = selected_timeline_event()
+        if selected is None:
             report_error("編集するマーカーを選択してください。")
             return
-        if type_item.data(event_type_role) != "marker":
+        event_id, event_type, source, _status, label = selected
+        if event_type != "marker":
             report_error("マーカー行だけを編集できます。")
             return
-        event_id = elapsed_item.data(event_id_role)
-        label, accepted = QInputDialog.getText(
-            window,
-            "マーカー編集",
-            "ラベル",
-            text=label_item.text(),
+        if source != "manual":
+            report_error("自動判定のラベルは編集できません。候補は確定/却下で整理してください。")
+            return
+        current_kind, current_description = split_marker_label(label)
+        dialog = QDialog(window)
+        dialog.setWindowTitle("マーカー編集")
+        editor_layout = QVBoxLayout(dialog)
+        marker_grid = QGridLayout()
+        marker_grid.addWidget(QLabel("種別"), 0, 0)
+        kind_combo = QComboBox()
+        kind_combo.addItems(MARKER_KIND_CHOICES)
+        kind_combo.setCurrentText(current_kind)
+        marker_grid.addWidget(kind_combo, 0, 1)
+        marker_grid.addWidget(QLabel("説明"), 1, 0)
+        description = QLineEdit(current_description)
+        marker_grid.addWidget(description, 1, 1)
+        editor_layout.addLayout(marker_grid)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
         )
-        if not accepted:
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if save_button is not None:
+            save_button.setText("保存")
+        if cancel_button is not None:
+            cancel_button.setText("キャンセル")
+        editor_layout.addWidget(buttons)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            service.update_review_marker_label(str(event_id), label)
+            service.update_review_marker_label(
+                event_id,
+                compose_marker_label(kind_combo.currentText(), description.text()),
+            )
         except Exception as exc:
             report_error(review_operation_error_message("マーカー編集", exc))
             return
         reload_timeline()
 
+    def confirm_selected_event() -> None:
+        selected = selected_timeline_event()
+        if selected is None:
+            report_error("確定する候補イベントを選択してください。")
+            return
+        try:
+            service.confirm_timeline_event(selected[0])
+        except Exception as exc:
+            report_error(review_operation_error_message("候補確定", exc))
+            return
+        reload_timeline()
+
+    def reject_selected_event() -> None:
+        selected = selected_timeline_event()
+        if selected is None:
+            report_error("却下する候補イベントを選択してください。")
+            return
+        try:
+            service.reject_timeline_event(selected[0])
+        except Exception as exc:
+            report_error(review_operation_error_message("候補却下", exc))
+            return
+        reload_timeline()
+
+    def open_clip_folder() -> None:
+        if last_clip_output_path is None:
+            return
+        try:
+            _open_folder(last_clip_output_path.parent)
+        except Exception as exc:
+            report_error(review_operation_error_message("保存先を開く", exc))
+
     def export_clip() -> None:
+        nonlocal last_clip_output_path
+        center_seconds = selected_elapsed_ms() / 1000
+        range_message = review_clip_range_message(
+            center_seconds=center_seconds,
+            duration_seconds=model.recording.duration_seconds,
+        )
+        if QMessageBox.question(
+            window,
+            "クリップ出力",
+            range_message + "\n\nこの範囲で出力しますか？",
+        ) != QMessageBox.StandardButton.Yes:
+            return
         try:
             result = service.export_review_clip(
                 ReviewClipExportRequest(
                     recording_id=recording_id,
-                    center_seconds=selected_elapsed_ms() / 1000,
+                    center_seconds=center_seconds,
                 )
             )
         except Exception as exc:
             report_error(review_operation_error_message("クリップ出力", exc))
             return
-        QMessageBox.information(window, "クリップ出力", f"出力しました:\n{result.output_path}")
+        last_clip_output_path = result.output_path
+        clip_folder_button.setEnabled(True)
+        box = QMessageBox(window)
+        box.setWindowTitle("クリップ出力")
+        box.setText("出力しました。")
+        box.setInformativeText(f"{range_message}\n\n保存先:\n{result.output_path}")
+        open_button = box.addButton("エクスプローラーで開く", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Ok)
+        box.exec()
+        if box.clickedButton() == open_button:
+            open_clip_folder()
+
+    def save_review_duel() -> None:
+        nonlocal duel_editor_data, model
+        selected_season = season_combo.currentData()
+        selected_tags = tuple(
+            part.strip()
+            for part in tags.text().replace("、", ",").split(",")
+            if part.strip()
+        )
+        values = DuelRecordValues(
+            status=str(status_combo.currentData()),
+            result=str(result_combo.currentData()),
+            play_order=str(order_combo.currentData()),
+            coin_face=str(coin_combo.currentData()),
+            own_deck=own_deck.currentText(),
+            opponent_deck=opponent_deck.currentText(),
+            duel_type=str(type_combo.currentData()),
+            tags=selected_tags,
+            notes=notes.toPlainText(),
+            season_id=int(selected_season) if selected_season is not None else None,
+        )
+        try:
+            if duel_editor_data.record is not None:
+                service.update_duel_record(
+                    duel_editor_data.record.duel_id,
+                    values,
+                    expected_revision=duel_editor_data.record.revision,
+                )
+            else:
+                service.save_duel_record(recording_id, values, expected_revision=0)
+            duel_editor_data = service.get_duel_editor_data(recording_id)
+            model = service.get_review_view_model(recording_id)
+        except Exception as exc:
+            report_error(review_operation_error_message("戦績保存", exc))
+            return
+        refresh_duel_summary()
+        QMessageBox.information(window, "戦績入力", "戦績を保存しました。")
 
     def open_external_player_window() -> None:
         try:
@@ -446,6 +785,7 @@ def create_review_window(
             return
         visual_timeline.set_selected_event(str(item.data(event_id_role)))
         player.setPosition(int(item.data(Qt.ItemDataRole.UserRole)))
+        update_timeline_action_state()
 
     def select_timeline_event(item: ReviewVisualTimelineItem) -> None:
         for row in range(timeline.rowCount()):
@@ -461,8 +801,13 @@ def create_review_window(
     open_external_button.clicked.connect(open_external_player_window)
     marker_button.clicked.connect(add_marker)
     marker_edit_button.clicked.connect(edit_marker)
+    confirm_button.clicked.connect(confirm_selected_event)
+    reject_button.clicked.connect(reject_selected_event)
     clip_button.clicked.connect(export_clip)
+    clip_folder_button.clicked.connect(open_clip_folder)
+    duel_save.clicked.connect(save_review_duel)
     timeline.cellClicked.connect(lambda row, _column: seek_to_timeline_row(row))
+    timeline.itemSelectionChanged.connect(update_timeline_action_state)
     visual_timeline.set_item_selected_callback(select_timeline_event)
     slider.sliderMoved.connect(player.setPosition)
     player.positionChanged.connect(slider.setValue)
@@ -478,7 +823,7 @@ def create_review_window(
         controls.addWidget(youtube_button)
 
     window.setCentralWidget(root)
-    window.resize(980, 720)
+    window.resize(1120, 780)
     update_position_label(0)
     return window
 
@@ -491,3 +836,64 @@ def _position_label(elapsed_ms: int) -> str:
     total_seconds = max(0, elapsed_ms) // 1000
     minutes, seconds = divmod(total_seconds, 60)
     return f"{minutes:02d}:{seconds:02d}.{elapsed_ms % 1000:03d}"
+
+
+def _seconds_label(seconds: float) -> str:
+    whole = max(0, int(seconds))
+    minutes, remainder = divmod(whole, 60)
+    return f"{minutes:02d}:{remainder:02d}"
+
+
+def _open_folder(path: Path) -> None:
+    directory = path.expanduser().resolve()
+    if hasattr(os, "startfile"):
+        os.startfile(str(directory))  # type: ignore[attr-defined]
+        return
+    webbrowser.open(directory.as_uri())
+
+
+def _review_style_sheet() -> str:
+    return """
+    * {
+        font-family: "Yu Gothic UI", "Yu Gothic", "Meiryo", "MS Gothic", "Segoe UI";
+        font-size: 10pt;
+    }
+    QMainWindow { background: #f4f7f5; color: #111827; }
+    QLabel { color: #111827; }
+    QPushButton {
+        min-height: 34px;
+        padding: 6px 12px;
+        border: 1px solid #b8c1cc;
+        border-radius: 6px;
+        background: #f9fafb;
+        color: #111827;
+    }
+    QComboBox, QLineEdit {
+        min-height: 34px;
+        border: 1px solid #c8d0d8;
+        border-radius: 4px;
+        background: #ffffff;
+        padding: 4px 8px;
+    }
+    QTableWidget, QTextEdit {
+        background: #ffffff;
+        border: 1px solid #c8d0d8;
+        alternate-background-color: #f7faf9;
+        selection-background-color: #d7ece8;
+        selection-color: #10201c;
+        gridline-color: #e3e8ed;
+    }
+    QHeaderView::section {
+        background: #eef2f0;
+        border: 1px solid #c8d0d8;
+        padding: 5px;
+        font-weight: 700;
+    }
+    QTabWidget::pane { border: 1px solid #d0d7de; background: #ffffff; }
+    QTabBar::tab {
+        background: #edf2f1;
+        padding: 8px 12px;
+        border: 1px solid #d0d7de;
+    }
+    QTabBar::tab:selected { background: #ffffff; color: #007c7a; font-weight: 700; }
+    """

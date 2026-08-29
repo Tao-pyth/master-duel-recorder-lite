@@ -231,13 +231,15 @@ class DuelTimelineRepository:
             connection,
         ):
             row = connection.execute(
-                "SELECT event_type FROM duel_events WHERE event_id = ?",
+                "SELECT event_type, source FROM duel_events WHERE event_id = ?",
                 (normalized_id,),
             ).fetchone()
             if row is None:
                 raise DuelTimelineError(f"対戦イベントが見つかりません: {event_id}")
             if row["event_type"] != "marker":
                 raise DuelTimelineError("markerイベントだけを編集できます")
+            if row["source"] != "manual":
+                raise DuelTimelineError("自動判定イベントのラベルは編集できません")
             connection.execute(
                 "UPDATE duel_events SET label = ?, updated_at = ? WHERE event_id = ?",
                 (normalized_label, now.isoformat(), normalized_id),
