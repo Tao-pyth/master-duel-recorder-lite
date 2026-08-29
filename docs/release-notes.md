@@ -14,6 +14,8 @@
 - PyInstaller実行時にPoppler付属ICU DLLを誤同梱しないようPATHを整理し、PySide6 GUI EXEのQtCore起動失敗を回避した
 - SQLite schema、設定schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 - Ruff、全622 pytest、CI相当623 unittest、PySide6 GUI smoke、実機GUI接続確認、CLI/GUI/updater EXEビルド、3 EXE smokeに合格した
+- GitHub Actions run `33229602416` でmain CIに合格し、run `33229616111` でWindows EXE release workflow、公開asset検証、ダウンロード後EXE smokeに合格した
+- GitHub Release `v2.7.4` として公開した。V2.7.4用の外部Issue/Milestoneは存在しなかったため、Issue/Milestone closureは該当なし
 
 ## V2.7.3: 自動監視開始直後停止不能Hotfix - 2026-08-29
 
