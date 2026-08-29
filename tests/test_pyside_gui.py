@@ -132,6 +132,9 @@ class PySideGuiContractTest(unittest.TestCase):
                 "stop_button_routes_active_operation"
             ]
         )
+        self.assertTrue(
+            contract["recording_control_state_contract"]["watch_starting_allows_stop"]
+        )
         self.assertTrue(contract["health_status_contract"]["fixed_warning_removed"])
         self.assertEqual(contract["health_status_contract"]["ready_text"], "準備OK")
         self.assertIn("deck_save", contract["catalog_edit_contract"]["deck_widgets"])
@@ -339,6 +342,26 @@ class PySideGuiContractTest(unittest.TestCase):
         )
 
         self.assertEqual(state.status_text, "● 自動監視中")
+        self.assertFalse(state.start_enabled)
+        self.assertTrue(state.stop_enabled)
+        self.assertTrue(state.watch_enabled)
+        self.assertEqual(state.watch_text, "自動監視停止")
+
+    def test_record_ui_state_allows_stop_while_watch_is_starting(self) -> None:
+        state = pyside_record_ui_state(
+            operation_state="watch_starting",
+            operation_message="自動監視を開始しています",
+            allowed_actions=frozenset({OperationAction.STOP_WATCH}),
+            watch_active=True,
+            recording_active=False,
+            recording_state="completed",
+            recording_id=None,
+            output_path=None,
+            elapsed_seconds=0,
+            visual_message="録画開始後に自動判定状態を表示します",
+        )
+
+        self.assertEqual(state.status_text, "● 自動監視開始中")
         self.assertFalse(state.start_enabled)
         self.assertTrue(state.stop_enabled)
         self.assertTrue(state.watch_enabled)

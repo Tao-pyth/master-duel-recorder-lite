@@ -28,6 +28,14 @@ class OperationStateMachineTest(unittest.TestCase):
         machine.transition(OperationState.WATCH_WAITING, "次の対戦待機中")
         self.assertTrue(machine.snapshot.allows(OperationAction.STOP_WATCH))
 
+    def test_watch_starting_can_be_stopped(self) -> None:
+        machine = OperationStateMachine()
+        machine.transition(OperationState.WATCH_STARTING, "開始中")
+
+        self.assertTrue(machine.snapshot.allows(OperationAction.STOP_WATCH))
+        machine.transition(OperationState.STOPPING, "停止中")
+        machine.transition(OperationState.IDLE, "待機中")
+
     def test_invalid_transition_and_action_are_rejected(self) -> None:
         machine = OperationStateMachine()
         with self.assertRaises(RuntimeError):

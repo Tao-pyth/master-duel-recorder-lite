@@ -25,7 +25,7 @@ from master_duel_recorder_lite.detection import DetectionSignal, DuelObservation
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.ffmpeg import FfmpegVersion
 from master_duel_recorder_lite.ffmpeg_setup import FfmpegInstallResult
-from master_duel_recorder_lite.operation_state import OperationState
+from master_duel_recorder_lite.operation_state import OperationAction, OperationState
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
@@ -1094,6 +1094,80 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             service._watch_loop(None)
 
         process.assert_not_called()
+
+    def test_stop_watch_during_starting_state_returns_idle(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        stop_seen = threading.Event()
+
+        def wait_for_stop(_callback):
+            stop_seen.wait(5.0)
+
+        service._watch_loop = wait_for_stop  # type: ignore[method-assign]
+        service.start_watch()
+
+        try:
+            self.assertEqual(
+                service.operation_snapshot().state, OperationState.WATCH_STARTING
+            )
+            self.assertTrue(
+                service.operation_snapshot().allows(OperationAction.STOP_WATCH)
+            )
+            stop_seen.set()
+            service.stop_watch(timeout_seconds=2.0)
+            self.assertEqual(service.operation_snapshot().state, OperationState.IDLE)
+            self.assertFalse(service.watch_active)
+        finally:
+            stop_seen.set()
+            service.close()
+
+    def test_watch_loop_stop_before_first_poll_returns_idle(self) -> None:
+        service = RecorderApplicationService(user_data_dir=Path("user_data"))
+        service._operation_state.transition(OperationState.WATCH_STARTING, "開始中")
+        report = PreflightReport(
+            (PreflightCheck("all", "環境", CheckStatus.OK, "利用可能"),)
+        )
+        frame_stream = SimpleNamespace(
+            restart_count=0,
+            source_description="test",
+            capture=Mock(),
+            stop=Mock(),
+        )
+        diagnostics = SimpleNamespace(transition=Mock(), close=Mock())
+        controller = SimpleNamespace(current=None)
+
+        with (
+            patch.object(
+                service,
+                "load_config",
+                return_value=SimpleNamespace(config=AppConfig(), config_loaded=True),
+            ),
+            patch("master_duel_recorder_lite.application.run_preflight", return_value=report),
+            patch(
+                "master_duel_recorder_lite.application.discover_ffmpeg",
+                return_value=SimpleNamespace(found=True, executable=Path("ffmpeg.exe")),
+            ),
+            patch("master_duel_recorder_lite.application.GameWindowMonitor"),
+            patch("master_duel_recorder_lite.application.MasterDuelWindowDetector"),
+            patch(
+                "master_duel_recorder_lite.application.PersistentFfmpegRegionFrameCapture",
+                return_value=frame_stream,
+            ),
+            patch(
+                "master_duel_recorder_lite.application.VisualDiagnosticSession",
+                return_value=diagnostics,
+            ),
+            patch("master_duel_recorder_lite.application.MasterDuelStartMonitor"),
+            patch(
+                "master_duel_recorder_lite.application.AutoRecordingController",
+                return_value=controller,
+            ),
+        ):
+            service._watch_stop.set()
+            service._watch_loop(None)
+
+        self.assertEqual(service.operation_snapshot().state, OperationState.IDLE)
+        frame_stream.stop.assert_called_once()
+        diagnostics.close.assert_called_once()
 
     def test_watch_prewarms_process_audio_and_stops_reservation(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))

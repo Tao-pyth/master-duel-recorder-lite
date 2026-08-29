@@ -11,7 +11,7 @@ V0.23.0以降は、録画状態、自動監視状態、GUIの操作可否を`Ope
 | `idle` | 録画・監視とも停止 | 手動録画開始、自動監視開始、戦績更新、管理データ操作、終了 |
 | `manual_starting` | 手動録画の診断・開始処理中 | なし |
 | `manual_recording` | 手動録画中 | 録画停止、終了 |
-| `watch_starting` | 自動監視の診断・開始処理中 | なし |
+| `watch_starting` | 自動監視の診断・開始処理中 | 自動監視停止、終了 |
 | `watch_waiting` | 自動監視中・対戦待機 | 自動監視停止、終了 |
 | `candidate_recording` | 対戦候補を仮録画中 | 自動監視停止、終了 |
 | `automatic_recording` | 盤面確定済みの自動録画中 | 自動監視停止、終了 |
@@ -30,6 +30,7 @@ idle -> manual_starting -> manual_recording -> stopping -> idle
               |              |              |        `-> automatic_recording
               |              |              `------------^          |
               |              `---------------------------------------'
+              `-> stopping -> idle
               `-> failed
 ```
 

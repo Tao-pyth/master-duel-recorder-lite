@@ -52,7 +52,9 @@ _ALLOWED = {
     OperationState.MANUAL_RECORDING: frozenset(
         {OperationAction.STOP_RECORDING, OperationAction.CLOSE}
     ),
-    OperationState.WATCH_STARTING: frozenset(),
+    OperationState.WATCH_STARTING: frozenset(
+        {OperationAction.STOP_WATCH, OperationAction.CLOSE}
+    ),
     OperationState.WATCH_WAITING: frozenset(
         {OperationAction.STOP_WATCH, OperationAction.CLOSE}
     ),
@@ -95,6 +97,7 @@ _TRANSITIONS = {
     },
     OperationState.WATCH_STARTING: {
         OperationState.WATCH_WAITING,
+        OperationState.STOPPING,
         OperationState.IDLE,
         OperationState.FAILED,
     },

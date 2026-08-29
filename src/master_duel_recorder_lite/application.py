@@ -2199,6 +2199,10 @@ class RecorderApplicationService:
                 OperationState.WATCH_WAITING,
                 OperationState.CANDIDATE_RECORDING,
                 OperationState.AUTOMATIC_RECORDING,
+            }:
+                self._transition_operation(OperationState.STOPPING, "自動監視を停止しています")
+                state = self._operation_state.snapshot.state
+            if state in {
                 OperationState.STOPPING,
             }:
                 self._transition_operation(OperationState.IDLE, "待機中")

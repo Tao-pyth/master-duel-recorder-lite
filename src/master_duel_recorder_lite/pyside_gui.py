@@ -773,6 +773,7 @@ def smoke_contract(
             "manual_recording_disables_start": True,
             "manual_recording_enables_stop": True,
             "watching_switches_toggle_to_stop": True,
+            "watch_starting_allows_stop": True,
             "stop_button_routes_active_operation": True,
             "japanese_state_labels": True,
         },
