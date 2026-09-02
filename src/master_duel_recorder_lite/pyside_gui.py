@@ -699,6 +699,13 @@ def smoke_contract(
             "entry_button": "history_play",
             "duel_entry_button": "history_duel",
             "history_duel_initial_tab": "戦績入力",
+            "duel_save_parent_refresh": {
+                "callback_argument": "on_duel_saved",
+                "connected_from": ["history_play", "history_duel"],
+                "refresh_source": "_refresh_history",
+                "success_only": True,
+                "preserves_history_filters": True,
+            },
             "widgets": list(REVIEW_WIDGETS),
             "supported_extensions": [".mp4", ".mkv"],
             "fallback": "external_player",
@@ -3453,6 +3460,7 @@ def _run(args: argparse.Namespace) -> int:
                     service=self.service,
                     recording_id=recording_id,
                     parent=self,
+                    on_duel_saved=self._refresh_history,
                 )
             except PySideReviewError as exc:
                 self._fallback_to_external_player(recording_id, reason=str(exc))
@@ -3511,6 +3519,7 @@ def _run(args: argparse.Namespace) -> int:
                         recording_id=recording_id,
                         parent=self,
                         initial_tab="duel",
+                        on_duel_saved=self._refresh_history,
                     )
                 except PySideReviewError:
                     pass

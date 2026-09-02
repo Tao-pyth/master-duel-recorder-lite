@@ -213,6 +213,16 @@ class PySideGuiContractTest(unittest.TestCase):
             "戦績入力",
         )
         self.assertEqual(
+            contract["review_video_contract"]["duel_save_parent_refresh"],
+            {
+                "callback_argument": "on_duel_saved",
+                "connected_from": ["history_play", "history_duel"],
+                "refresh_source": "_refresh_history",
+                "success_only": True,
+                "preserves_history_filters": True,
+            },
+        )
+        self.assertEqual(
             contract["review_video_contract"]["supported_extensions"],
             [".mp4", ".mkv"],
         )

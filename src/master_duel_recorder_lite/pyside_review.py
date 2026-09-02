@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import importlib.util
 import os
@@ -19,6 +20,9 @@ from .review_viewmodel import (
 
 class PySideReviewError(RuntimeError):
     """PySide6レビュー画面を起動できない場合のエラーです。"""
+
+
+DuelSavedCallback = Callable[[], None]
 
 
 @dataclass(frozen=True)
@@ -207,6 +211,7 @@ def create_review_window(
     recording_id: str,
     parent: object | None = None,
     initial_tab: str = "marker",
+    on_duel_saved: DuelSavedCallback | None = None,
 ) -> object:
     try:
         from PySide6.QtCore import QSize, QUrl
@@ -798,6 +803,12 @@ def create_review_window(
             model = service.get_review_view_model(recording_id)
         except Exception as exc:
             report_error(review_operation_error_message("戦績保存", exc))
+            return
+        try:
+            if on_duel_saved is not None:
+                on_duel_saved()
+        except Exception as exc:
+            report_error(review_operation_error_message("戦績管理表更新", exc))
             return
         refresh_duel_summary()
         QMessageBox.information(window, "戦績入力", "戦績を保存しました。")
