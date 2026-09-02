@@ -8,7 +8,8 @@
 - 戦績管理表の現在フィルター条件と固定行高契約を維持した
 - SQLite schema、設定schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 - Py compile、Ruff、GUI contract tests、全622 pytest、CLI/GUI/updater EXE build、3 EXE smokeに合格した
-- GitHub Release、公開asset検証、Issue #612 closureはRelease実行時に追記する
+- GitHub Actions run `33688593621` でmain CIに合格し、run `33688605575` でWindows EXE release workflow、公開asset検証、ダウンロード後EXE smokeに合格した
+- GitHub Release `v2.7.6` として公開し、Issue #612 を完了として閉じた
 
 ## V2.7.5: レビュー戦績入力コンパクト化 - 2026-08-29
 
