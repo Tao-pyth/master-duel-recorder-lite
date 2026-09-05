@@ -9,7 +9,8 @@
 - 手動録画、録画なし手動戦績、候補破棄、失敗録画、既存戦績には自動監視初期値を適用しないようにした
 - `[interaction]`設定に非シークレット項目`auto_watch_default_own_deck`、`auto_watch_default_season_id`、`auto_watch_default_desired_play_order`を追加した。SQLite schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
 - Py compile、Ruff、関連pytest 92件、全632 pytest（629 passed、3 skipped）、CLI/GUI/updater EXE build、3 EXE smoke、`git diff --check`に合格した
-- GitHub Issue #613 とMilestone `V2.7.7` で追跡する
+- GitHub Actions run `33937947315` でmain CIに合格し、run `33937952681` でWindows EXE release workflow、公開asset検証、ダウンロード後EXE smokeに合格した
+- GitHub Release `v2.7.7` として公開し、Issue #613 とMilestone `V2.7.7` を完了として閉じた
 
 ## V2.7.6: 戦績登録後の戦績管理表自動更新 - 2026-09-02
 
