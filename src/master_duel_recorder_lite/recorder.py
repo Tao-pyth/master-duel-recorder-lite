@@ -28,6 +28,7 @@ from .recording_profile import RecordingProfile, RecordingProfileError
 from .recording_session import RecordingResult, RecordingSession, RecordingState
 from .recording_state_store import RecordingStateStore, RecordingStateStoreError
 from .runtime_paths import RuntimePaths
+from .seasons import SeasonError, SeasonRepository
 from .preroll import FrozenPreroll, PrerollRecordingSession
 from .upload_media import UploadMediaValidator, find_ffprobe
 from .visual_detection import (
@@ -50,6 +51,37 @@ class RecordingTrackingError(RuntimeError):
 VisualWorkerBuilder = Callable[[datetime], VisualDetectionWorker]
 SharedFrameCapture = Callable[[], FrameCaptureResult]
 AnalysisCallback = Callable[[FrameAnalysis], None]
+
+
+@dataclass(frozen=True)
+class AutoWatchDuelDefaults:
+    own_deck: str = ""
+    season_id: int | None = None
+    desired_play_order: str = "unknown"
+
+    @classmethod
+    def from_config(cls, config: AppConfig) -> AutoWatchDuelDefaults:
+        return cls(
+            own_deck=config.auto_watch_default_own_deck,
+            season_id=(
+                config.auto_watch_default_season_id
+                if config.auto_watch_default_season_id > 0
+                else None
+            ),
+            desired_play_order=config.auto_watch_default_desired_play_order,
+        ).normalized()
+
+    def normalized(self) -> AutoWatchDuelDefaults:
+        values = DuelRecordValues(
+            own_deck=self.own_deck,
+            season_id=self.season_id,
+            play_order=self.desired_play_order,
+        ).normalized()
+        return AutoWatchDuelDefaults(
+            own_deck=values.own_deck,
+            season_id=values.season_id,
+            desired_play_order=values.play_order,
+        )
 
 
 @dataclass
@@ -108,6 +140,7 @@ class PreparedRecording:
     state_store: RecordingStateStore
     visual_worker_builder: VisualWorkerBuilder | None = None
     visual_lifecycle: RecordingVisualLifecycle = field(default_factory=RecordingVisualLifecycle)
+    auto_watch_duel_defaults: AutoWatchDuelDefaults = field(default_factory=AutoWatchDuelDefaults)
     timeline_offset_ms: int = 0
     _history_started: bool = field(default=False, init=False)
     _history_finalized: bool = field(default=False, init=False)
@@ -218,16 +251,30 @@ class PreparedRecording:
             self.history.finalize(self.target.recording_id, result)
             if result.succeeded:
                 records = DuelRecordRepository(self.history.database_path)
-                _, play_order, outcome, _, _ = self.visual_lifecycle.snapshot()
-                if play_order != "unknown" or outcome != "unknown":
-                    records.save(
-                        self.target.recording_id,
-                        DuelRecordValues(result=outcome, play_order=play_order),
-                        expected_revision=0,
-                        source="detected",
+                if records.get(self.target.recording_id) is None:
+                    _, play_order, outcome, _, _ = self.visual_lifecycle.snapshot()
+                    values = _automatic_duel_record_values(
+                        _existing_auto_watch_defaults(
+                            self.auto_watch_duel_defaults,
+                            database_path=self.history.database_path,
+                        ),
+                        play_order=play_order,
+                        outcome=outcome,
                     )
-                else:
-                    records.create_draft(self.target.recording_id, source="system")
+                    if values == DuelRecordValues():
+                        records.create_draft(self.target.recording_id, source="system")
+                    else:
+                        source = (
+                            "detected"
+                            if play_order != "unknown" or outcome != "unknown"
+                            else "system"
+                        )
+                        records.save(
+                            self.target.recording_id,
+                            values,
+                            expected_revision=0,
+                            source=source,
+                        )
             self._save_state(self.session.result.state.value)
         except (DuelRecordError, RecordingHistoryError, RecordingStateStoreError) as exc:
             raise RecordingTrackingError(f"録画履歴を最終状態へ更新できません: {exc}") from exc
@@ -336,6 +383,7 @@ def prepare_recording(
     audio_process_id: int | None = None,
     reserved_process_audio: ProcessLoopbackController | None = None,
     frozen_preroll: FrozenPreroll | None = None,
+    auto_watch_duel_defaults: AutoWatchDuelDefaults | None = None,
 ) -> PreparedRecording:
     discovery = discover_ffmpeg(config.ffmpeg_path)
     if not discovery.found or discovery.executable is None:
@@ -468,11 +516,53 @@ def prepare_recording(
             state_store=RecordingStateStore(paths),
             visual_worker_builder=visual_worker_builder,
             visual_lifecycle=visual_lifecycle,
+            auto_watch_duel_defaults=(
+                auto_watch_duel_defaults.normalized()
+                if auto_watch_duel_defaults is not None
+                else AutoWatchDuelDefaults()
+            ),
             timeline_offset_ms=frozen_preroll.offset_ms if frozen_preroll else 0,
         )
     except (OSError, RecordingHistoryError) as exc:
         recording_lock.release()
         raise RecordingPreparationError(f"録画履歴を準備できません: {exc}") from exc
+
+
+def _automatic_duel_record_values(
+    defaults: AutoWatchDuelDefaults,
+    *,
+    play_order: str,
+    outcome: str,
+) -> DuelRecordValues:
+    normalized_defaults = defaults.normalized()
+    actual_play_order = play_order if play_order in {"first", "second"} else "unknown"
+    result = outcome if outcome in {"win", "loss", "draw"} else "unknown"
+    coin_face = "unknown"
+    desired = normalized_defaults.desired_play_order
+    if desired in {"first", "second"} and actual_play_order in {"first", "second"}:
+        coin_face = "heads" if desired == actual_play_order else "tails"
+    return DuelRecordValues(
+        result=result,
+        play_order=actual_play_order,
+        coin_face=coin_face,
+        own_deck=normalized_defaults.own_deck,
+        season_id=normalized_defaults.season_id,
+    ).normalized()
+
+
+def _existing_auto_watch_defaults(
+    defaults: AutoWatchDuelDefaults,
+    *,
+    database_path: Path,
+) -> AutoWatchDuelDefaults:
+    normalized = defaults.normalized()
+    if normalized.season_id is None:
+        return normalized
+    try:
+        SeasonRepository(database_path).get(normalized.season_id)
+    except SeasonError:
+        return replace(normalized, season_id=None)
+    return normalized
 
 
 def _visual_worker_builder(

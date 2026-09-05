@@ -107,6 +107,15 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
             "hotkey_watch_toggle", _stripped_text
         ),
         "interaction.tray_enabled": ConfigField("tray_enabled", _boolean),
+        "interaction.auto_watch_default_own_deck": ConfigField(
+            "auto_watch_default_own_deck", _stripped_text
+        ),
+        "interaction.auto_watch_default_season_id": ConfigField(
+            "auto_watch_default_season_id", _integer
+        ),
+        "interaction.auto_watch_default_desired_play_order": ConfigField(
+            "auto_watch_default_desired_play_order", _lower_text
+        ),
         "runtime.auto_create_user_data": ConfigField("auto_create_user_data", _boolean),
     }
 )

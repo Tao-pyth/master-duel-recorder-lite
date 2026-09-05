@@ -2,23 +2,25 @@ import tempfile
 import time
 import unittest
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from master_duel_recorder_lite.config import AppConfig
 from master_duel_recorder_lite.capture_targets import CaptureInput
-from master_duel_recorder_lite.duel_records import DuelRecordRepository
+from master_duel_recorder_lite.duel_records import DuelRecordRepository, DuelRecordValues
 from master_duel_recorder_lite.duel_timeline import DuelTimelineRepository
 from master_duel_recorder_lite.ffmpeg import FfmpegDiscoveryResult, FfmpegVersion
 from master_duel_recorder_lite.frame_capture import FrameCaptureResult, FrameSample
 from master_duel_recorder_lite.recorder import (
+    AutoWatchDuelDefaults,
     RecordingPreparationError,
     RecordingTrackingError,
     prepare_recording,
 )
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
+from master_duel_recorder_lite.seasons import SeasonRepository
 from master_duel_recorder_lite.recording_state_store import RecordingStateStoreError
 from master_duel_recorder_lite.upload_media import (
     MediaValidationStatus,
@@ -140,6 +142,236 @@ class RecorderPreparationTest(unittest.TestCase):
         self.assertEqual(duel_record.values.status, "draft")
         assert persisted is not None
         self.assertEqual(persisted.value.state, "completed")
+
+    def test_auto_watch_defaults_seed_successful_new_duel_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(),
+                source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58),
+                attempts=(),
+            )
+            with patch(
+                "master_duel_recorder_lite.recorder.discover_ffmpeg",
+                return_value=discovery,
+            ):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(
+                        ffmpeg_path=str(executable), capture_mode="desktop"
+                    ),
+                    auto_watch_duel_defaults=AutoWatchDuelDefaults(
+                        own_deck=" 青眼 ",
+                        season_id=None,
+                        desired_play_order="first",
+                    ),
+                )
+            prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+            prepared.visual_lifecycle.play_order = "first"
+            prepared.visual_lifecycle.outcome = "win"
+            try:
+                prepared.start(source="auto")
+                prepared.stop()
+                duel_record = DuelRecordRepository(prepared.history.database_path).get(
+                    prepared.target.recording_id
+                )
+            finally:
+                prepared.release()
+
+        assert duel_record is not None
+        self.assertEqual(duel_record.values.own_deck, "青眼")
+        self.assertEqual(duel_record.values.result, "win")
+        self.assertEqual(duel_record.values.play_order, "first")
+        self.assertEqual(duel_record.values.coin_face, "heads")
+
+    def test_auto_watch_defaults_apply_season_without_inferring_coin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(),
+                source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58),
+                attempts=(),
+            )
+            with patch(
+                "master_duel_recorder_lite.recorder.discover_ffmpeg",
+                return_value=discovery,
+            ):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(
+                        ffmpeg_path=str(executable), capture_mode="desktop"
+                    ),
+                    auto_watch_duel_defaults=AutoWatchDuelDefaults(
+                        season_id=None,
+                        desired_play_order="second",
+                    ),
+                )
+            season = SeasonRepository(prepared.history.database_path).add(
+                name="Season 1",
+                season_type="ranked",
+                duel_type="ranked",
+                start_date=date(2026, 9, 1),
+                end_date=date(2026, 9, 30),
+            )
+            prepared.auto_watch_duel_defaults = AutoWatchDuelDefaults(
+                season_id=season.season_id,
+                desired_play_order="second",
+            )
+            prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+            try:
+                prepared.start(source="auto")
+                prepared.stop()
+                duel_record = DuelRecordRepository(prepared.history.database_path).get(
+                    prepared.target.recording_id
+                )
+            finally:
+                prepared.release()
+
+        assert duel_record is not None
+        self.assertEqual(duel_record.values.season_id, season.season_id)
+        self.assertEqual(duel_record.values.play_order, "unknown")
+        self.assertEqual(duel_record.values.coin_face, "unknown")
+
+    def test_auto_watch_missing_season_default_falls_back_to_unset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(),
+                source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58),
+                attempts=(),
+            )
+            with patch(
+                "master_duel_recorder_lite.recorder.discover_ffmpeg",
+                return_value=discovery,
+            ):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(
+                        ffmpeg_path=str(executable), capture_mode="desktop"
+                    ),
+                    auto_watch_duel_defaults=AutoWatchDuelDefaults(
+                        own_deck="青眼",
+                        season_id=999,
+                    ),
+                )
+            prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+            try:
+                prepared.start(source="auto")
+                prepared.stop()
+                duel_record = DuelRecordRepository(prepared.history.database_path).get(
+                    prepared.target.recording_id
+                )
+            finally:
+                prepared.release()
+
+        assert duel_record is not None
+        self.assertEqual(duel_record.values.own_deck, "青眼")
+        self.assertIsNone(duel_record.values.season_id)
+
+    def test_auto_watch_detected_play_order_overrides_existing_desired_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(),
+                source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58),
+                attempts=(),
+            )
+            with patch(
+                "master_duel_recorder_lite.recorder.discover_ffmpeg",
+                return_value=discovery,
+            ):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(
+                        ffmpeg_path=str(executable), capture_mode="desktop"
+                    ),
+                    auto_watch_duel_defaults=AutoWatchDuelDefaults(
+                        desired_play_order="first",
+                    ),
+                )
+            prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+            prepared.visual_lifecycle.play_order = "second"
+            try:
+                prepared.start(source="auto")
+                prepared.stop()
+                duel_record = DuelRecordRepository(prepared.history.database_path).get(
+                    prepared.target.recording_id
+                )
+            finally:
+                prepared.release()
+
+        assert duel_record is not None
+        self.assertEqual(duel_record.values.play_order, "second")
+        self.assertEqual(duel_record.values.coin_face, "tails")
+
+    def test_auto_watch_defaults_do_not_overwrite_existing_duel_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = root / "ffmpeg.exe"
+            executable.touch()
+            paths = default_runtime_paths(user_data_dir=root / "user_data")
+            ensure_runtime_dirs(paths)
+            discovery = FfmpegDiscoveryResult(
+                executable=executable.resolve(),
+                source="config",
+                version=FfmpegVersion("6.1.1", (6, 1, 1), 58),
+                attempts=(),
+            )
+            with patch(
+                "master_duel_recorder_lite.recorder.discover_ffmpeg",
+                return_value=discovery,
+            ):
+                prepared = prepare_recording(
+                    paths=paths,
+                    config=AppConfig(
+                        ffmpeg_path=str(executable), capture_mode="desktop"
+                    ),
+                    auto_watch_duel_defaults=AutoWatchDuelDefaults(
+                        own_deck="上書きされない",
+                        desired_play_order="first",
+                    ),
+                )
+            prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
+            try:
+                prepared.start(source="auto")
+                DuelRecordRepository(prepared.history.database_path).save(
+                    prepared.target.recording_id,
+                    DuelRecordValues(own_deck="既存", play_order="second"),
+                    expected_revision=0,
+                    source="user",
+                )
+                prepared.visual_lifecycle.play_order = "first"
+                prepared.stop()
+                duel_record = DuelRecordRepository(prepared.history.database_path).get(
+                    prepared.target.recording_id
+                )
+            finally:
+                prepared.release()
+
+        assert duel_record is not None
+        self.assertEqual(duel_record.values.own_deck, "既存")
+        self.assertEqual(duel_record.values.play_order, "second")
+        self.assertEqual(duel_record.values.coin_face, "unknown")
 
     def test_prepared_recording_marks_missing_process_audio_stream_as_warning(
         self,

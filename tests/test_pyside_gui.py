@@ -124,6 +124,27 @@ class PySideGuiContractTest(unittest.TestCase):
             "active_season_status",
         )
         self.assertEqual(
+            contract["auto_watch_duel_defaults_contract"]["widgets"],
+            [
+                "watch_default_own_deck",
+                "watch_default_season",
+                "watch_default_desired_play_order",
+            ],
+        )
+        self.assertEqual(
+            contract["auto_watch_duel_defaults_contract"]["snapshot_timing"],
+            "自動監視開始時",
+        )
+        self.assertTrue(
+            contract["auto_watch_duel_defaults_contract"][
+                "detected_play_order_priority"
+            ]
+        )
+        self.assertIn(
+            "unknown",
+            contract["auto_watch_duel_defaults_contract"]["coin_face_rule"],
+        )
+        self.assertEqual(
             contract["recording_control_state_contract"]["status_widget"],
             "record_status_band",
         )

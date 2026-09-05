@@ -17,6 +17,7 @@ ALLOWED_AUDIO_INPUT_FORMATS = {"dshow"}
 ALLOWED_AUDIO_MODES = {"process", "system", "device", "none"}
 ALLOWED_CAPTURE_MODES = {"master_duel", "window", "monitor", "desktop"}
 ALLOWED_VISUAL_DETECTION_LANGUAGES = {"auto", "ja", "en"}
+ALLOWED_AUTO_WATCH_DESIRED_PLAY_ORDERS = {"unknown", "first", "second"}
 
 
 class AppConfigError(RuntimeError):
@@ -73,6 +74,9 @@ class AppConfig:
     hotkey_marker: str = "Ctrl+Alt+M"
     hotkey_watch_toggle: str = "Ctrl+Alt+W"
     tray_enabled: bool = True
+    auto_watch_default_own_deck: str = ""
+    auto_watch_default_season_id: int = 0
+    auto_watch_default_desired_play_order: str = "unknown"
     auto_create_user_data: bool = True
 
 
@@ -277,6 +281,23 @@ def load_app_config(
             tray_enabled=_bool_value(
                 interaction_table, "tray_enabled", AppConfig.tray_enabled
             ),
+            auto_watch_default_own_deck=_optional_string_value(
+                interaction_table,
+                "auto_watch_default_own_deck",
+                AppConfig.auto_watch_default_own_deck,
+            ),
+            auto_watch_default_season_id=_int_value(
+                interaction_table,
+                "auto_watch_default_season_id",
+                AppConfig.auto_watch_default_season_id,
+            ),
+            auto_watch_default_desired_play_order=_auto_watch_desired_play_order(
+                _string_value(
+                    interaction_table,
+                    "auto_watch_default_desired_play_order",
+                    AppConfig.auto_watch_default_desired_play_order,
+                )
+            ),
             auto_create_user_data=_bool_value(
                 runtime_table, "auto_create_user_data", AppConfig.auto_create_user_data
             ),
@@ -320,6 +341,7 @@ def validate_app_config(config: AppConfig) -> None:
     _hotkey_value(config.hotkey_watch_toggle)
     if not isinstance(config.tray_enabled, bool):
         raise ValueError("tray_enabled はtrueまたはfalseである必要があります")
+    _auto_watch_default_values(config)
     if not isinstance(config.windows_notifications_enabled, bool):
         raise ValueError("windows_notifications_enabled はtrueまたはfalseである必要があります")
     if not isinstance(config.auto_create_user_data, bool):
@@ -406,6 +428,9 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"hotkey_marker = {_toml_string(config.hotkey_marker)}",
                 f"hotkey_watch_toggle = {_toml_string(config.hotkey_watch_toggle)}",
                 f"tray_enabled = {_toml_bool(config.tray_enabled)}",
+                f"auto_watch_default_own_deck = {_toml_string(config.auto_watch_default_own_deck)}",
+                f"auto_watch_default_season_id = {config.auto_watch_default_season_id}",
+                f"auto_watch_default_desired_play_order = {_toml_string(config.auto_watch_default_desired_play_order)}",
                 "",
                 "[runtime]",
                 f"auto_create_user_data = {_toml_bool(config.auto_create_user_data)}",
@@ -650,6 +675,27 @@ def _visual_detection_language(value: str) -> str:
     if normalized not in ALLOWED_VISUAL_DETECTION_LANGUAGES:
         raise ValueError("visual_language はauto、ja、enのいずれかで指定してください")
     return normalized
+
+
+def _auto_watch_desired_play_order(value: str) -> str:
+    normalized = value.strip().casefold()
+    if normalized not in ALLOWED_AUTO_WATCH_DESIRED_PLAY_ORDERS:
+        raise ValueError("auto_watch_default_desired_play_order はunknown、first、secondのいずれかで指定してください")
+    return normalized
+
+
+def _auto_watch_default_values(config: AppConfig) -> None:
+    if not isinstance(config.auto_watch_default_own_deck, str):
+        raise ValueError("auto_watch_default_own_deck は文字列である必要があります")
+    if len(config.auto_watch_default_own_deck.strip()) > 100:
+        raise ValueError("auto_watch_default_own_deck は100文字以下で指定してください")
+    if isinstance(config.auto_watch_default_season_id, bool) or not isinstance(
+        config.auto_watch_default_season_id, int
+    ):
+        raise ValueError("auto_watch_default_season_id は整数である必要があります")
+    if config.auto_watch_default_season_id < 0:
+        raise ValueError("auto_watch_default_season_id は0以上の整数で指定してください")
+    _auto_watch_desired_play_order(config.auto_watch_default_desired_play_order)
 
 
 def _toml_string(value: str) -> str:

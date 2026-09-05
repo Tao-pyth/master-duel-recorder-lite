@@ -32,6 +32,9 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.preroll_seconds, 5)
         self.assertEqual(loaded.config.preroll_max_megabytes, 512)
         self.assertEqual(loaded.config.upload_privacy_status, "private")
+        self.assertEqual(loaded.config.auto_watch_default_own_deck, "")
+        self.assertEqual(loaded.config.auto_watch_default_season_id, 0)
+        self.assertEqual(loaded.config.auto_watch_default_desired_play_order, "unknown")
 
     def test_save_and_load_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -71,6 +74,9 @@ class AppConfigTest(unittest.TestCase):
                     preroll_enabled=True,
                     preroll_seconds=8,
                     preroll_max_megabytes=256,
+                    auto_watch_default_own_deck="青眼",
+                    auto_watch_default_season_id=12,
+                    auto_watch_default_desired_play_order="first",
                     upload_privacy_status="unlisted",
                     auto_create_user_data=False,
                 ),
@@ -106,6 +112,9 @@ class AppConfigTest(unittest.TestCase):
         self.assertTrue(loaded.config.preroll_enabled)
         self.assertEqual(loaded.config.preroll_seconds, 8)
         self.assertEqual(loaded.config.preroll_max_megabytes, 256)
+        self.assertEqual(loaded.config.auto_watch_default_own_deck, "青眼")
+        self.assertEqual(loaded.config.auto_watch_default_season_id, 12)
+        self.assertEqual(loaded.config.auto_watch_default_desired_play_order, "first")
         self.assertEqual(loaded.config.upload_privacy_status, "unlisted")
         self.assertFalse(loaded.config.auto_create_user_data)
 
@@ -143,6 +152,22 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.screen_input_format, "gdigrab")
         self.assertEqual(loaded.config.audio_input, "")
         self.assertEqual(loaded.config.video_encoder, "libx264")
+        self.assertEqual(loaded.config.auto_watch_default_own_deck, "")
+        self.assertEqual(loaded.config.auto_watch_default_season_id, 0)
+        self.assertEqual(loaded.config.auto_watch_default_desired_play_order, "unknown")
+
+    def test_invalid_auto_watch_defaults_fail_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = default_runtime_paths(user_data_dir=Path(tmp_dir) / "user_data")
+            ensure_runtime_dirs(paths)
+            config_path = paths.config / "app.toml"
+            config_path.write_text(
+                '[interaction]\nauto_watch_default_season_id = -1\nauto_watch_default_desired_play_order = "either"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
 
     def test_invalid_screen_input_format_fails_fast(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

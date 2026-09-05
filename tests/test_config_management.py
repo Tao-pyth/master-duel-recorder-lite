@@ -21,6 +21,11 @@ class ConfigManagementTest(unittest.TestCase):
         self.assertEqual(values["detection.visual_maximum_fps"], 2.0)
         self.assertFalse(values["detection.preroll_enabled"])
         self.assertEqual(values["detection.preroll_seconds"], 5)
+        self.assertEqual(values["interaction.auto_watch_default_own_deck"], "")
+        self.assertEqual(values["interaction.auto_watch_default_season_id"], 0)
+        self.assertEqual(
+            values["interaction.auto_watch_default_desired_play_order"], "unknown"
+        )
         self.assertFalse(any("token" in key or "secret" in key or "key" in key for key in values))
 
     def test_updates_typed_value_and_validates_whole_config(self) -> None:
@@ -31,6 +36,11 @@ class ConfigManagementTest(unittest.TestCase):
         config = updated_config(config, "detection.preroll_enabled", "true")
         config = updated_config(config, "detection.preroll_seconds", "8")
         config = updated_config(config, "detection.preroll_max_megabytes", "256")
+        config = updated_config(config, "interaction.auto_watch_default_own_deck", " 青眼 ")
+        config = updated_config(config, "interaction.auto_watch_default_season_id", "3")
+        config = updated_config(
+            config, "interaction.auto_watch_default_desired_play_order", " FIRST "
+        )
 
         self.assertEqual(config.frame_rate, 60)
         self.assertFalse(config.auto_start_recording)
@@ -39,6 +49,9 @@ class ConfigManagementTest(unittest.TestCase):
         self.assertTrue(config.preroll_enabled)
         self.assertEqual(config.preroll_seconds, 8)
         self.assertEqual(config.preroll_max_megabytes, 256)
+        self.assertEqual(config.auto_watch_default_own_deck, "青眼")
+        self.assertEqual(config.auto_watch_default_season_id, 3)
+        self.assertEqual(config.auto_watch_default_desired_play_order, "first")
 
         with self.assertRaises(ConfigValueError):
             updated_config(config, "recorder.frame_rate", "0")

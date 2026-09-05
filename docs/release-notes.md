@@ -1,5 +1,16 @@
 # リリースノート
 
+## V2.7.7: 自動監視時の戦績初期値 - 2026-09-05
+
+- 録画画面に、自動監視で作成する戦績下書き用の自分デッキ、シーズン、希望先後の初期値を追加した
+- 自動監視開始時点の初期値をスナップショットし、その監視セッション中の成功した新規自動録画だけへ反映するようにした
+- 視覚判定で検出した実際の先後を希望先後より優先し、希望先後と検出先後が一致した場合は`coin_face=heads`、異なる場合は`coin_face=tails`を補助入力するようにした
+- 検出先後が不明な場合は`coin_face=unknown`を維持し、希望先後だけから実先後やコインを推測しないようにした
+- 手動録画、録画なし手動戦績、候補破棄、失敗録画、既存戦績には自動監視初期値を適用しないようにした
+- `[interaction]`設定に非シークレット項目`auto_watch_default_own_deck`、`auto_watch_default_season_id`、`auto_watch_default_desired_play_order`を追加した。SQLite schema、録画ファイル、queue、manifest、OAuth資格情報は変更しない
+- Py compile、Ruff、関連pytest 92件、全632 pytest（629 passed、3 skipped）、CLI/GUI/updater EXE build、3 EXE smoke、`git diff --check`に合格した
+- GitHub Issue #613 とMilestone `V2.7.7` で追跡する
+
 ## V2.7.6: 戦績登録後の戦績管理表自動更新 - 2026-09-02
 
 - レビュー画面の「戦績入力」タブで戦績を保存した後、戦績管理表が手動更新なしで再読み込みされるようにした

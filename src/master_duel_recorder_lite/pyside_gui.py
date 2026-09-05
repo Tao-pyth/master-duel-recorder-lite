@@ -22,8 +22,10 @@ from .gui_feature_parity import (
     required_standard_widget_keys,
     satisfied_standard_feature_keys,
 )
+from .history_database import HISTORY_DATABASE_NAME
 from .operation_state import OperationAction, OperationState
 from .pyside_review import REVIEW_WIDGETS, review_visual_timeline_contract
+from .recorder import AutoWatchDuelDefaults
 from .ui_preferences import load_ui_preferences, save_ui_preferences
 from .uninstall import (
     CONFIRMATION_TEXT,
@@ -193,6 +195,9 @@ UI_USABILITY_WIDGETS: tuple[str, ...] = (
     "active_season_status",
     "record_target_refresh",
     "record_target_save",
+    "watch_default_own_deck",
+    "watch_default_season",
+    "watch_default_desired_play_order",
     "record_manual_duel_add",
     "record_diagnostics_export",
     "history_table",
@@ -797,6 +802,19 @@ def smoke_contract(
             "service_method": "RecorderApplicationService.active_season_summaries",
             "fixed_loading_text_removed": True,
             "states": ["未確認", "なし", "開催中", "取得失敗"],
+        },
+        "auto_watch_duel_defaults_contract": {
+            "target": "successful_new_auto_watch_recording_draft",
+            "widgets": [
+                "watch_default_own_deck",
+                "watch_default_season",
+                "watch_default_desired_play_order",
+            ],
+            "save_source": "RecorderApplicationService.save_settings",
+            "start_source": "RecorderApplicationService.start_watch",
+            "snapshot_timing": "自動監視開始時",
+            "detected_play_order_priority": True,
+            "coin_face_rule": "希望先後と検出先後が一致すればheads、不一致ならtails、不明ならunknown",
         },
         "recording_control_state_contract": {
             "status_widget": "record_status_band",
@@ -1593,6 +1611,63 @@ def _run(args: argparse.Namespace) -> int:
             watch.clicked.connect(self._toggle_watch)
             state_layout.addLayout(state_grid)
             layout.addWidget(state_section)
+
+            default_own_deck = ""
+            default_season_id = 0
+            default_desired_order = "unknown"
+            decks: tuple[object, ...] = ()
+            seasons: tuple[object, ...] = ()
+            try:
+                config = self.service.load_config().config
+                default_own_deck = config.auto_watch_default_own_deck
+                default_season_id = config.auto_watch_default_season_id
+                default_desired_order = config.auto_watch_default_desired_play_order
+                if (self.service.paths.db / HISTORY_DATABASE_NAME).exists():
+                    decks = self.service.list_decks()
+                    seasons = self.service.list_seasons(include_archived=True)
+            except Exception:
+                pass
+
+            defaults_section, defaults_layout = self._section(
+                "record_auto_watch_defaults_section",
+                "自動監視の戦績初期値",
+                "自動監視で作成する新しい戦績下書きへ、開始時点の値を入れます。",
+            )
+            defaults_grid = QGridLayout()
+            defaults_grid.setColumnStretch(1, 1)
+            defaults_grid.setColumnStretch(3, 1)
+            defaults_grid.addWidget(QLabel("自分デッキ"), 0, 0)
+            watch_own_deck = self._register(
+                "watch_default_own_deck",
+                self._editable_deck_combo(decks, default_own_deck),
+            )
+            defaults_grid.addWidget(watch_own_deck, 0, 1)
+            defaults_grid.addWidget(QLabel("シーズン"), 0, 2)
+            watch_season = self._register("watch_default_season", QComboBox())
+            assert isinstance(watch_season, QComboBox)
+            watch_season.addItem("未設定", 0)
+            for season in seasons:
+                season_id = getattr(season, "season_id", None)
+                if season_id is not None:
+                    watch_season.addItem(getattr(season, "name", ""), int(season_id))
+            season_index = watch_season.findData(default_season_id)
+            watch_season.setCurrentIndex(season_index if season_index >= 0 else 0)
+            defaults_grid.addWidget(watch_season, 0, 3)
+            defaults_grid.addWidget(QLabel("希望先後"), 1, 0)
+            desired_order = self._register(
+                "watch_default_desired_play_order",
+                QComboBox(),
+            )
+            assert isinstance(desired_order, QComboBox)
+            desired_order.addItem("未設定", "unknown")
+            desired_order.addItem("先攻希望", "first")
+            desired_order.addItem("後攻希望", "second")
+            desired_index = desired_order.findData(default_desired_order)
+            desired_order.setCurrentIndex(desired_index if desired_index >= 0 else 0)
+            desired_order.setToolTip("検出した実際の先後と比較してコイン表裏を自動入力します")
+            defaults_grid.addWidget(desired_order, 1, 1)
+            defaults_layout.addLayout(defaults_grid)
+            layout.addWidget(defaults_section)
 
             manual_section, manual_layout = self._section("record_manual_section", "")
             manual_row = QHBoxLayout()
@@ -2867,7 +2942,45 @@ def _run(args: argparse.Namespace) -> int:
             if self.service.watch_active:
                 self._run_action("自動監視停止", self.service.stop_watch)
             else:
-                self._run_action("自動監視開始", self.service.start_watch)
+                self._run_action("自動監視開始", self._start_watch_with_duel_defaults)
+
+        def _start_watch_with_duel_defaults(self) -> None:
+            defaults = self._auto_watch_duel_defaults_from_ui()
+            self.service.save_settings(
+                {
+                    "interaction.auto_watch_default_own_deck": defaults.own_deck,
+                    "interaction.auto_watch_default_season_id": str(
+                        defaults.season_id or 0
+                    ),
+                    "interaction.auto_watch_default_desired_play_order": (
+                        defaults.desired_play_order
+                    ),
+                }
+            )
+            self.service.start_watch(duel_defaults=defaults)
+
+        def _auto_watch_duel_defaults_from_ui(self) -> AutoWatchDuelDefaults:
+            own_deck = ""
+            season_id: int | None = None
+            desired_play_order = "unknown"
+            own_deck_widget = self.widgets.get("watch_default_own_deck")
+            if isinstance(own_deck_widget, QComboBox):
+                own_deck = own_deck_widget.currentText()
+            season_widget = self.widgets.get("watch_default_season")
+            if isinstance(season_widget, QComboBox):
+                raw_season = season_widget.currentData()
+                if raw_season not in {None, 0, "0", ""}:
+                    season_id = int(raw_season)
+            desired_widget = self.widgets.get("watch_default_desired_play_order")
+            if isinstance(desired_widget, QComboBox):
+                value = desired_widget.currentData()
+                if value in {"unknown", "first", "second"}:
+                    desired_play_order = str(value)
+            return AutoWatchDuelDefaults(
+                own_deck=own_deck,
+                season_id=season_id,
+                desired_play_order=desired_play_order,
+            ).normalized()
 
         def refresh_recording_targets(self, *_args: object) -> None:
             try:

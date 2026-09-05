@@ -54,6 +54,18 @@ visual_minimum_confidence = 0.70
 [upload]
 privacy_status = "private"
 
+[interaction]
+readiness_check_seconds = 30
+setup_wizard_completed = false
+hotkeys_enabled = false
+hotkey_record_toggle = "Ctrl+Alt+R"
+hotkey_marker = "Ctrl+Alt+M"
+hotkey_watch_toggle = "Ctrl+Alt+W"
+tray_enabled = true
+auto_watch_default_own_deck = ""
+auto_watch_default_season_id = 0
+auto_watch_default_desired_play_order = "unknown"
+
 [runtime]
 auto_create_user_data = true
 ```
@@ -72,7 +84,9 @@ GUIでFFmpegを導入した場合、実行ファイルを既定では`%LOCALAPPD
 
 `upload.privacy_status` はアップロード準備とYouTube投稿メタデータの既定公開範囲です。安全のため `private` が既定で、明示した場合だけ `unlisted` または `public` を使用できます。OAuthトークン、APIキー、クライアントシークレットは設定・メタデータ・マニフェストへ保存しません。YouTube OAuth資格情報はOS資格情報ストアだけに保存します。
 
-`[interaction]`はV1.2.0の利用者操作に関する非シークレット設定です。`readiness_check_seconds`は5から120秒、`setup_wizard_completed`は初回導入確認の完了状態、`hotkeys_enabled`、`hotkey_record_toggle`、`hotkey_marker`、`hotkey_watch_toggle`、`tray_enabled`はショートカットとトレイ入口を扱います。これらはOAuth token、API key、client secretを含めてはいけません。CLIの公開設定キーでは、秘密情報との混同を避けるため`interaction.shortcut_*`という名前で扱います。
+`[interaction]`は利用者操作に関する非シークレット設定です。`readiness_check_seconds`は5から120秒、`setup_wizard_completed`は初回導入確認の完了状態、`hotkeys_enabled`、`hotkey_record_toggle`、`hotkey_marker`、`hotkey_watch_toggle`、`tray_enabled`はショートカットとトレイ入口を扱います。これらはOAuth token、API key、client secretを含めてはいけません。CLIの公開設定キーでは、秘密情報との混同を避けるため`interaction.shortcut_*`という名前で扱います。
+
+`auto_watch_default_own_deck`、`auto_watch_default_season_id`、`auto_watch_default_desired_play_order`は、自動監視で作成する新しい戦績下書きの初期値です。GUIの録画画面で自動監視開始時に保存し、その監視セッション中は開始時点の値を固定して使います。`auto_watch_default_season_id = 0`は未設定、`auto_watch_default_desired_play_order`は`unknown`、`first`、`second`のいずれかです。希望先後は戦績の実先後として保存せず、検出された実際の先後と比較して`coin_face`を補助入力するためだけに使います。
 
 V0.1.xで作成した設定には新しい項目がありませんが、読込時に上記の既定値を補うため手動移行は不要です。
 

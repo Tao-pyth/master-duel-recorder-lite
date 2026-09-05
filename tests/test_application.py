@@ -29,6 +29,7 @@ from master_duel_recorder_lite.operation_state import OperationAction, Operation
 from master_duel_recorder_lite.preflight import CheckStatus, PreflightCheck, PreflightReport
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
+from master_duel_recorder_lite.recorder import AutoWatchDuelDefaults
 from master_duel_recorder_lite.upload_metadata import UploadMetadata
 from master_duel_recorder_lite.upload_queue import UploadQueueState, UploadQueueStore
 from master_duel_recorder_lite.visual_detection import DetectionCandidate
@@ -1119,6 +1120,48 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         finally:
             stop_seen.set()
             service.close()
+
+    def test_start_watch_snapshots_auto_watch_duel_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RecorderApplicationService(
+                user_data_dir=Path(tmp_dir) / "user_data"
+            )
+            stop_seen = threading.Event()
+            started = threading.Event()
+
+            def wait_for_stop(_callback):
+                started.set()
+                stop_seen.wait(5.0)
+
+            service._watch_loop = wait_for_stop  # type: ignore[method-assign]
+            service.start_watch(
+                duel_defaults=AutoWatchDuelDefaults(
+                    own_deck=" 青眼 ",
+                    season_id=7,
+                    desired_play_order="second",
+                )
+            )
+            try:
+                self.assertTrue(started.wait(1.0))
+                service.save_settings(
+                    {
+                        "interaction.auto_watch_default_own_deck": "御巫",
+                        "interaction.auto_watch_default_season_id": "8",
+                        "interaction.auto_watch_default_desired_play_order": "first",
+                    }
+                )
+                self.assertEqual(
+                    service._watch_duel_defaults,
+                    AutoWatchDuelDefaults(
+                        own_deck="青眼",
+                        season_id=7,
+                        desired_play_order="second",
+                    ),
+                )
+            finally:
+                stop_seen.set()
+                service.stop_watch(timeout_seconds=2.0)
+                service.close()
 
     def test_watch_loop_stop_before_first_poll_returns_idle(self) -> None:
         service = RecorderApplicationService(user_data_dir=Path("user_data"))

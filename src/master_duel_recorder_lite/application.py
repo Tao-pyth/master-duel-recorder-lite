@@ -105,7 +105,7 @@ from .operation_state import (
 )
 from .preflight import PreflightReport, run_preflight
 from .preroll import FrozenPreroll, PrerollCaptureBuffer, new_preroll_buffer
-from .recorder import PreparedRecording, prepare_recording
+from .recorder import AutoWatchDuelDefaults, PreparedRecording, prepare_recording
 from .recording_history import (
     ConsistencyIssue,
     HistoryDeletionResult,
@@ -388,6 +388,7 @@ class RecorderApplicationService:
         self._lock = threading.RLock()
         self._current: PreparedRecording | None = None
         self._automatic_snapshot: RecordingSnapshot | None = None
+        self._watch_duel_defaults = AutoWatchDuelDefaults()
         self._manual_starting = False
         self._watch_thread: threading.Thread | None = None
         self._watch_stop = threading.Event()
@@ -768,7 +769,12 @@ class RecorderApplicationService:
     def watch_active(self) -> bool:
         return self._watch_thread is not None and self._watch_thread.is_alive()
 
-    def start_watch(self, callback: EventCallback | None = None) -> None:
+    def start_watch(
+        self,
+        callback: EventCallback | None = None,
+        *,
+        duel_defaults: AutoWatchDuelDefaults | None = None,
+    ) -> None:
         with self._lock:
             self._collect_manual_terminal_locked()
             if self._manual_starting:
@@ -783,6 +789,11 @@ class RecorderApplicationService:
                 self._operation_state.require(OperationAction.START_WATCH)
             except RuntimeError as exc:
                 raise ApplicationOperationError(str(exc)) from exc
+            self._watch_duel_defaults = (
+                duel_defaults.normalized()
+                if duel_defaults is not None
+                else AutoWatchDuelDefaults.from_config(self.load_config().config)
+            )
             self._watch_stop.clear()
             self._transition_operation(OperationState.WATCH_STARTING, "自動監視を開始しています")
             thread = threading.Thread(
@@ -1757,6 +1768,8 @@ class RecorderApplicationService:
         try:
             loaded = self.load_config()
             config = loaded.config
+            with self._lock:
+                watch_duel_defaults = self._watch_duel_defaults
             if config.auto_start_recording and not config.visual_detection_enabled:
                 raise ApplicationOperationError(
                     "自動録画の開始には画面イベント判定が必要です。設定で有効にしてください"
@@ -1963,6 +1976,7 @@ class RecorderApplicationService:
                         audio_process_id=observation.capture_process_id,
                         reserved_process_audio=reservation,
                         frozen_preroll=frozen_preroll,
+                        auto_watch_duel_defaults=watch_duel_defaults,
                     )
                 except Exception:
                     discard_frozen_preroll(frozen_preroll)
