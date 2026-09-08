@@ -2,6 +2,19 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.8: 録画画面の表示崩れ修正
+
+状態: 実装・ローカル配布検証完了。公開・closureの正本は[v2.7.8 Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.8)と下記の製品修正Issue/Milestone。
+
+- 録画ページの高さ不足を縦スクロールで扱い、状態帯と操作の必要高さを保つ
+- 環境診断表の行を読める高さにする
+- 初期/最小サイズ、複数録画状態、日本語表示、操作到達性を実widgetで検証する
+- 録画ロジック、初期値契約、DB/設定形式、実行時データを維持する
+
+追跡: [Issue #630](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/630)、[製品修正Milestone #90](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/90)、[Release Contract](release-contracts/2.7.8.md)。既存[計画・探索Milestone #89](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/89)は別途継続する。
+
+完了条件: レイアウト・操作・日本語表示の回帰、全テスト、3EXEビルドとsmoke、承認後の正式公開・公開asset検証・製品修正Issue/Milestoneのclosureまで完了すること。
+
 ## V0.1.0: 初期スキャフォールド
 
 状態: 完了

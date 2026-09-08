@@ -1,5 +1,14 @@
 # リリースノート
 
+## V2.7.8: 録画画面の表示崩れ修正 - 2026-09-08
+
+- 録画ページを縦スクロールできるようにし、小さいウィンドウで自動監視ボタンと「判定詳細」が重なる問題と録画状態帯が潰れる問題を修正した
+- 環境診断表の高さを内容に合わせ、診断行が読めるようにした
+- 4種類のウィンドウサイズ・6種類の録画状態で実widgetの領域と操作接続を確認する回帰検証を追加した
+- Windows日本語表示、模擬100/150/200%スケール、Ruff、全631 unittest（3 skipped）、CLI/GUI/updaterビルドとsmokeに合格した
+- 録画・検出・初期値の開始時スナップショット、DB、設定形式、実行時データは変更しない
+- 公開・公開asset検証は[v2.7.8 Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.8)と[Release workflow](https://github.com/Tao-pyth/master-duel-recorder-lite/actions/workflows/windows-release.yml)で追跡する。対象はIssue #630、Milestone #90。計画・探索用のMilestone #89とは分けて追跡する
+
 ## V2.7.7: 自動監視時の戦績初期値 - 2026-09-05
 
 - 録画画面に、自動監視で作成する戦績下書き用の自分デッキ、シーズン、希望先後の初期値を追加した

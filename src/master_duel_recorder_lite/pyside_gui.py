@@ -969,6 +969,7 @@ def _run(args: argparse.Namespace) -> int:
         from PySide6.QtCore import QDate, QPointF, QSize, Qt, QTimer
         from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
         from PySide6.QtWidgets import (
+            QAbstractScrollArea,
             QAbstractItemView,
             QApplication,
             QButtonGroup,
@@ -1265,8 +1266,6 @@ def _run(args: argparse.Namespace) -> int:
             elif key == "improve":
                 self._improve_page(layout)
             layout.addStretch(1)
-            if key == "record":
-                return page
             return self._scroll_page(page)
 
         def _scroll_page(self, page: QWidget) -> QScrollArea:
@@ -1716,7 +1715,8 @@ def _run(args: argparse.Namespace) -> int:
             diagnostics_layout.addLayout(diag_actions)
             diag_table = QTableWidget(3, 2)
             diag_table.setHorizontalHeaderLabels(("状態", "項目と結果"))
-            diag_table.setMaximumHeight(112)
+            diag_table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+            diag_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             self._configure_table(diag_table, column_widths=(70, None))
             self._set_table_rows(
                 diag_table,
