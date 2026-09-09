@@ -2,6 +2,15 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.10: 音声設定の整合性修正
+
+状態: 実装。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.10)とIssue #639/#640、Milestone V2.7.10。
+
+- 音声候補の再検索で選択と未保存状態を維持し、未検出入力を案内する
+- 設定の全項目をまとめて検証し、有効な組合せを編集順に依存せず保存する
+- 不正batchの非書込、既存atomic保存、単項目更新APIを維持する
+- 新機能、DB/設定形式、音声キャプチャ方式の変更は含めない
+
 ## V2.7.9: GUI監査8課題の品質修正
 
 状態: 実装。正式公開・closureはReleaseとIssueを正本とする。

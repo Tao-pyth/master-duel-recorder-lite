@@ -133,12 +133,19 @@ def config_value(config: AppConfig, key: str) -> object:
 
 
 def updated_config(config: AppConfig, key: str, raw_value: str) -> AppConfig:
-    field = CONFIG_FIELDS.get(key)
-    if field is None:
-        raise ConfigValueError(f"未対応の設定キーです: {key}")
+    return updated_config_values(config, {key: raw_value})
+
+
+def updated_config_values(config: AppConfig, values: Mapping[str, str]) -> AppConfig:
+    """相関する設定は、全項目を反映した最終状態で検証する。"""
+    changes: dict[str, object] = {}
     try:
-        value = field.parser(raw_value)
-        candidate = replace(config, **{field.attribute: value})
+        for key, raw_value in values.items():
+            field = CONFIG_FIELDS.get(key)
+            if field is None:
+                raise ConfigValueError(f"未対応の設定キーです: {key}")
+            changes[field.attribute] = field.parser(raw_value)
+        candidate = replace(config, **changes)
         validate_app_config(candidate)
     except ConfigValueError:
         raise

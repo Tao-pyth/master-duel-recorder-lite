@@ -967,7 +967,7 @@ def _run(args: argparse.Namespace) -> int:
     if not availability.available:
         raise PySideGuiError(availability.message)
     try:
-        from PySide6.QtCore import QDate, QPointF, QSize, Qt, QTimer
+        from PySide6.QtCore import QDate, QPointF, QSignalBlocker, QSize, Qt, QTimer
         from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
         from PySide6.QtWidgets import (
             QAbstractScrollArea,
@@ -4844,14 +4844,26 @@ def _run(args: argparse.Namespace) -> int:
                     status.setText(f"音声入力候補を取得できません: {exc}")
                 return
             audio = self.widgets.get("settings_audio_input")
+            missing_selection = False
             if isinstance(audio, QComboBox):
-                audio.clear()
-                audio.addItem("音声なし")
-                audio.addItem("Master Duel単体音声")
-                for item in result.inputs:
-                    audio.addItem(item.identifier)
+                selected = audio.currentText()
+                choices = list(dict.fromkeys((
+                    "音声なし", "Master Duel単体音声", *(item.identifier for item in result.inputs),
+                )))
+                missing_selection = bool(selected and selected not in choices)
+                if missing_selection:
+                    choices.append(selected)
+                with QSignalBlocker(audio):
+                    audio.clear()
+                    audio.addItems(choices)
+                    if selected:
+                        audio.setCurrentText(selected)
+                self._settings_edited()
             if isinstance(status, QLabel):
-                status.setText(f"音声入力候補: {len(result.inputs)}件")
+                message = f"音声入力候補: {len(result.inputs)}件"
+                if missing_selection:
+                    message += " / 選択中の入力は未検出です。選択を保持しています"
+                status.setText(message)
 
         def test_selected_audio_input(self, *_args: object) -> None:
             mode = self.widgets.get("settings_audio_mode")

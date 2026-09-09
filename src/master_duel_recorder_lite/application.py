@@ -37,7 +37,7 @@ from .config import (
     save_app_config,
     validate_app_config,
 )
-from .config_management import updated_config
+from .config_management import updated_config_values
 from .data_management import ManagedDataResult, ManagedDataService
 from .data_location import DataRelocationResult, relocate_runtime_data
 from .data_protection import (
@@ -424,9 +424,7 @@ class RecorderApplicationService:
 
     def save_settings(self, values: Mapping[str, str]) -> AppConfig:
         loaded = self.load_config()
-        config = loaded.config
-        for key, raw_value in values.items():
-            config = updated_config(config, key, raw_value)
+        config = updated_config_values(loaded.config, values)
         save_app_config(paths=self.paths, config=config)
         return config
 
