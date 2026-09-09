@@ -26,8 +26,11 @@ class StatisticsFilter:
     coin_face: str | None = None
     season_id: int | None = None
     season_unassigned: bool = False
+    result: str | None = None
 
     def __post_init__(self) -> None:
+        if self.result is not None and self.result not in {"win", "loss", "draw", "unknown"}:
+            raise ValueError(f"未対応の勝敗条件です: {self.result}")
         if self.date_from is not None and not isinstance(self.date_from, date):
             raise ValueError("date_fromはdateである必要があります")
         if self.date_to is not None and not isinstance(self.date_to, date):
@@ -230,6 +233,8 @@ class DuelStatisticsRepository:
 
 
 def _matches(row: _StatisticsRow, filters: StatisticsFilter) -> bool:
+    if filters.result is not None and row.result != filters.result:
+        return False
     local_date = statistics_local_date(row.occurred_at)
     if filters.date_from is not None and local_date < filters.date_from:
         return False

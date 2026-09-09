@@ -222,6 +222,7 @@ class DuelManagementQuery:
     tag_entry_ids: tuple[int, ...] = ()
     coin_face: str | None = None
     entry_origin: str | None = None
+    incomplete_only: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.limit, bool) or not isinstance(self.limit, int):
@@ -872,6 +873,8 @@ class RecorderApplicationService:
 
         def matches(view: RecordingHistoryView) -> bool:
             record = view.duel_record
+            if selected.incomplete_only and record is not None and record.values.status == "confirmed":
+                return False
             occurred_date = view.occurred_at.astimezone().date()
             if selected.occurred_from is not None and occurred_date < selected.occurred_from:
                 return False

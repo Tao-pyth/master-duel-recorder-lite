@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 import importlib.util
 import json
@@ -15,6 +15,7 @@ from .app_update import AppUpdateService, UpdateRelease, launch_update_after_exi
 from .application import DuelManagementQuery, RecorderApplicationService
 from .config_management import config_values
 from .duel_records import DuelRecordValues, duel_choice_label
+from .duel_statistics import StatisticsFilter
 from .duel_workflow import BulkDuelUpdate
 from .gui_feature_parity import (
     STANDARD_GUI_FEATURES,
@@ -895,8 +896,8 @@ def smoke_contract(
         },
         "reliability_action_contract": {
             "navigation_removed": "reliability" not in nav_pages,
-            "settings_tab": "録画設定②",
-            "recording_tabs": ["録画設定①", "録画設定②"],
+            "settings_tab": "自動監視・診断",
+            "recording_tabs": ["録画設定", "自動監視・診断"],
             "buttons": [
                 "settings_reliability_refresh",
                 "settings_reliability_setup_check",
@@ -1026,7 +1027,7 @@ def _run(args: argparse.Namespace) -> int:
             painter.setPen(QPen(QColor("#c8d0d8"), 1))
             painter.drawRect(rect)
 
-            plot = rect.adjusted(44, 28, -22, -58)
+            plot = rect.adjusted(44, 28, -48, -58)
             painter.setPen(QColor("#4b5563"))
             painter.drawText(rect.left() + 10, rect.top() + 18, "勝利数")
             painter.drawText(rect.right() - 72, rect.top() + 18, "累積勝率")
@@ -1046,6 +1047,13 @@ def _run(args: argparse.Namespace) -> int:
             wins = [self._wins(point) for point in self.points]
             rates = [self._rate(point) for point in self.points]
             max_wins = max(max(wins), 1)
+            for fraction in (0.0, 0.5, 1.0):
+                y = int(plot.bottom() - fraction * plot.height())
+                painter.setPen(QPen(QColor("#d6dde3"), 1))
+                painter.drawLine(plot.left(), y, plot.right(), y)
+                painter.setPen(QColor("#4b5563"))
+                painter.drawText(rect.left() + 4, y + 5, f"{max_wins * fraction:g}")
+                painter.drawText(plot.right() + 4, y + 5, f"{fraction:.0%}")
             count = len(self.points)
             step = plot.width() / max(count, 1)
             bar_width = max(10.0, min(34.0, step * 0.46))
@@ -1146,6 +1154,9 @@ def _run(args: argparse.Namespace) -> int:
             self.setting_combo_keys: dict[str, str] = {}
             self.settings_tabs: QTabWidget | None = None
             self.settings_reliability_tab_index: int | None = None
+            self.settings_loaded = False
+            self.settings_baseline = None
+            self.history_incomplete_only = False
             self.ui_preferences = load_ui_preferences(self.service.paths.config)
             self.setWindowTitle(f"Master Duel Recorder Lite {__version__}")
             self.resize(1180, 760)
@@ -1157,9 +1168,24 @@ def _run(args: argparse.Namespace) -> int:
         def _register(self, key: str, widget: QWidget) -> QWidget:
             self.widgets[key] = widget
             widget.setObjectName(key)
+            if isinstance(widget, QComboBox):
+                widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+                widget.setMinimumContentsLength(8)
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             return widget
 
         def closeEvent(self, event: object) -> None:
+            if self._settings_dirty():
+                choice = QMessageBox.question(
+                    self, "未保存の設定", "設定の変更を保存して終了しますか？",
+                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if choice == QMessageBox.StandardButton.Cancel or (
+                    choice == QMessageBox.StandardButton.Save and not self.save_settings()
+                ):
+                    event.ignore()
+                    return
             self.record_state_timer.stop()
             self.background_timer.stop()
             self.background_executor.shutdown(wait=False, cancel_futures=True)
@@ -1235,8 +1261,11 @@ def _run(args: argparse.Namespace) -> int:
                 button.setChecked(page == key)
             label = dict((*NAVIGATION_PAGES, *INTERNAL_PAGES))[key]
             self.page_title.setText(label)
+            if key == "statistics" and self.load_runtime_data:
+                self._refresh_statistics()
             if key == "settings":
-                self.load_settings()
+                if not self.settings_loaded or not self._settings_dirty():
+                    self.load_settings()
                 self._refresh_youtube_settings()
                 self._refresh_data_protection()
 
@@ -1265,7 +1294,14 @@ def _run(args: argparse.Namespace) -> int:
                 self._prepare_page(layout)
             elif key == "improve":
                 self._improve_page(layout)
-            layout.addStretch(1)
+            if key not in {"history", "statistics", "settings"}:
+                layout.addStretch(1)
+            for label in page.findChildren(QLabel):
+                label.setWordWrap(True)
+                if len(label.text()) > 60 or "\n" in label.text() or label.objectName() == "settings_runtime_path":
+                    label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            if key == "settings":
+                return page
             return self._scroll_page(page)
 
         def _scroll_page(self, page: QWidget) -> QScrollArea:
@@ -1593,18 +1629,18 @@ def _run(args: argparse.Namespace) -> int:
             controls.addWidget(start)
             controls.addWidget(stop)
             controls.addWidget(watch)
-            state_grid.addLayout(controls, 1, 1)
+            state_grid.addLayout(controls, 2, 0, 1, 2)
             record_status = self._register(
                 "record_status",
                 QLabel("録画ID: -\n保存先: -"),
             )
             visual_status = self._register("visual_status", QLabel("自動監視: 待機中"))
             audio_status = QLabel("音声: 設定で入力を選択できます")
-            state_grid.addWidget(record_status, 2, 0)
-            state_grid.addWidget(visual_status, 3, 0)
-            state_grid.addWidget(audio_status, 4, 0)
+            state_grid.addWidget(record_status, 3, 0, 1, 2)
+            state_grid.addWidget(visual_status, 4, 0, 1, 2)
+            state_grid.addWidget(audio_status, 5, 0, 1, 2)
             details = self._register("visual_details_toggle", QCheckBox("判定詳細"))
-            state_grid.addWidget(details, 2, 1, alignment=Qt.AlignmentFlag.AlignRight)
+            state_grid.addWidget(details, 6, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignRight)
             start.clicked.connect(self._start_recording)
             stop.clicked.connect(self._stop_active_operation)
             watch.clicked.connect(self._toggle_watch)
@@ -1694,7 +1730,7 @@ def _run(args: argparse.Namespace) -> int:
             manual_layout.addLayout(manual_row)
             layout.addWidget(manual_section)
 
-            bottom = QHBoxLayout()
+            bottom = QVBoxLayout()
             diagnostics, diagnostics_layout = self._section(
                 "record_environment_diagnostics", "環境診断"
             )
@@ -1734,7 +1770,8 @@ def _run(args: argparse.Namespace) -> int:
             )
             activity = self._register("activity", QListWidget())
             assert isinstance(activity, QListWidget)
-            activity.addItems(("GUI起動スモーク", "録画対象の選択待ち"))
+            activity.addItems(("GUIを起動しました", "録画対象の選択待ち"))
+            activity.setMaximumHeight(140)
             activity_layout.addWidget(activity)
             bottom.addWidget(activity_frame, stretch=1)
             layout.addLayout(bottom)
@@ -1742,7 +1779,7 @@ def _run(args: argparse.Namespace) -> int:
         def _history_page(self, layout: QVBoxLayout) -> None:
             toolbar = self._register("history_toolbar", QFrame())
             assert isinstance(toolbar, QFrame)
-            toolbar_layout = QHBoxLayout(toolbar)
+            toolbar_layout = QGridLayout(toolbar)
             toolbar_layout.setContentsMargins(0, 0, 0, 0)
             for key, text, variant, tooltip in (
                 ("history_incomplete", "未完了処理", "primary", "未入力・下書きの戦績を確認します"),
@@ -1753,21 +1790,21 @@ def _run(args: argparse.Namespace) -> int:
                 ("history_delete", "削除", "danger", "選択した履歴または手動戦績を削除します"),
                 ("history_duplicates", "重複", "secondary", "重複候補を確認します"),
                 ("history_refresh", "更新", "secondary", "一覧を再読み込みします"),
-                ("history_columns", "表示列", "secondary", "表示列を確認します"),
+                ("history_columns", "列の説明", "secondary", "表示中の列の意味を確認します"),
                 ("history_youtube", "YouTube", "secondary", "選択した録画のYouTube投稿導線を確認します"),
             ):
                 button = self._button(key, text, variant)
                 button.setToolTip(tooltip)
-                toolbar_layout.addWidget(button)
+                index = toolbar_layout.count()
+                toolbar_layout.addWidget(button, index // 5, index % 5)
                 self._connect_history_button(key, button)
-            toolbar_layout.addStretch(1)
             layout.addWidget(toolbar)
 
             filters = self._register("history_filter_bar", QFrame())
             assert isinstance(filters, QFrame)
             filter_layout = QGridLayout(filters)
             filter_layout.setContentsMargins(0, 0, 0, 0)
-            filter_layout.setColumnStretch(8, 1)
+            filter_layout.setColumnStretch(3, 1)
             filter_layout.addWidget(QLabel("期間"), 0, 0)
             period = self._register("history_period_mode", QComboBox())
             assert isinstance(period, QComboBox)
@@ -1794,7 +1831,7 @@ def _run(args: argparse.Namespace) -> int:
             ):
                 assert isinstance(combo, QComboBox)
                 combo.setMinimumWidth(92)
-                filter_layout.addWidget(combo, 1, column)
+                filter_layout.addWidget(combo, 1 + (column - 1) // 3, 1 + (column - 1) % 3)
             filter_layout.addWidget(QLabel("条件"), 1, 0)
             self._populate_history_filter_choices()
             apply_filter = self._button("history_filter_apply", "適用")
@@ -1803,12 +1840,11 @@ def _run(args: argparse.Namespace) -> int:
             clear_filter.clicked.connect(self._clear_history_filters)
             filter_layout.addWidget(apply_filter, 0, 4)
             filter_layout.addWidget(clear_filter, 0, 5)
-            history_add = self._button("history_add", "簡易入力")
-            history_add.clicked.connect(self._show_manual_duel_entry)
-            filter_layout.addWidget(history_add, 1, 7)
+            # 旧キーは手動追加へ集約し、重複する操作を表示しない。
+            self.widgets["history_add"] = self.widgets["manual_duel_add"]
             layout.addWidget(filters)
 
-            table = QTableWidget(0, 10)
+            table = QTableWidget(0, 11)
             table.setHorizontalHeaderLabels(
                 (
                     "開始日時",
@@ -1821,14 +1857,16 @@ def _run(args: argparse.Namespace) -> int:
                     "サイズ",
                     "相手デッキ",
                     "登録元",
+                    "状態",
                 )
             )
             self._configure_table(
                 table,
-                column_widths=(148, 220, 72, 72, 72, 100, 82, 92, 180, 86),
+                column_widths=(148, 180, 72, 72, 72, 100, 82, 92, 180, 86, 92),
                 minimum_height=310,
             )
             table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            table.horizontalHeader().moveSection(10, 1)
             self._set_table_rows(
                 table,
                 (
@@ -1869,10 +1907,11 @@ def _run(args: argparse.Namespace) -> int:
             assert isinstance(summary, QFrame)
             summary_layout = QHBoxLayout(summary)
             summary_layout.setContentsMargins(0, 0, 0, 0)
+            self.statistics_cards = []
             for title, value, detail in (
-                ("全体勝率", "50.0%", "1勝 / 2戦"),
-                ("条件適用後", "50.0%", "1勝 / 2戦"),
-                ("先後別", "先攻 100% / 後攻 0%", "少数標本を含む"),
+                ("全体勝率", "—", "読み込み前"),
+                ("条件適用後", "—", "読み込み前"),
+                ("先後別", "—", "読み込み前"),
             ):
                 card = QFrame()
                 card.setProperty("class", "metricCard")
@@ -1880,13 +1919,19 @@ def _run(args: argparse.Namespace) -> int:
                 card_layout.addWidget(QLabel(title))
                 metric = QLabel(value)
                 metric.setObjectName("metricValue")
+                metric.setWordWrap(True)
                 card_layout.addWidget(metric)
-                card_layout.addWidget(QLabel(detail))
+                detail_label = QLabel(detail)
+                detail_label.setWordWrap(True)
+                card_layout.addWidget(detail_label)
+                self.statistics_cards.append((metric, detail_label))
                 summary_layout.addWidget(card)
             layout.addWidget(summary)
 
             filters = QGroupBox("条件")
             grid = QGridLayout(filters)
+            period = self._register("statistics_period_enabled", QCheckBox("期間を指定"))
+            grid.addWidget(period, 1, 0, 1, 2)
             grid.addWidget(QLabel("開始日"), 0, 0)
             grid.addWidget(self._date_picker("statistics_date_from_picker"), 0, 1)
             grid.addWidget(QLabel("終了日"), 0, 2)
@@ -1904,7 +1949,7 @@ def _run(args: argparse.Namespace) -> int:
             trend_layout = QVBoxLayout(trend)
             trend_controls = QHBoxLayout()
             trend_controls.addWidget(QLabel("推移単位"))
-            granularity = QComboBox()
+            granularity = self._register("statistics_granularity", QComboBox())
             granularity.addItems(("日", "週", "月"))
             trend_controls.addWidget(granularity)
             trend_controls.addStretch(1)
@@ -1929,6 +1974,22 @@ def _run(args: argparse.Namespace) -> int:
                 "シーズン別",
             )
             layout.addWidget(tabs, stretch=1)
+            self.statistics_condition_status = QLabel("全期間・すべての確定済み戦績")
+            self.statistics_condition_status.setWordWrap(True)
+            grid.addWidget(self.statistics_condition_status, 2, 0, 1, 6)
+            refresh = self._button("statistics_refresh", "更新")
+            grid.addWidget(refresh, 1, 4, 1, 2)
+            refresh.clicked.connect(self._refresh_statistics)
+            period.toggled.connect(self._refresh_statistics)
+            filter_box.currentIndexChanged.connect(self._refresh_statistics)
+            granularity.currentIndexChanged.connect(self._refresh_statistics)
+            for key in ("statistics_date_from_picker", "statistics_date_to_picker"):
+                self.widgets[key].setEnabled(False)
+                self.widgets[key].dateChanged.connect(self._refresh_statistics)
+            tabs.addTab(
+                self._table_panel("statistics_trend_table", ("期間", "対戦", "勝利", "勝率", "累積勝率")),
+                "推移の数値",
+            )
 
         def _catalog_page(self, layout: QVBoxLayout, key: str) -> None:
             is_deck = key == "decks"
@@ -2138,16 +2199,24 @@ def _run(args: argparse.Namespace) -> int:
             tabs = self._register("settings_tabs", QTabWidget())
             assert isinstance(tabs, QTabWidget)
             self.settings_tabs = tabs
-            tabs.addTab(self._recording_settings_primary_tab(), "録画設定①")
+            tabs.addTab(self._scroll_page(self._recording_settings_primary_tab()), "録画設定")
             self.settings_reliability_tab_index = tabs.addTab(
-                self._recording_settings_secondary_tab(), "録画設定②"
+                self._scroll_page(self._recording_settings_secondary_tab()), "自動監視・診断"
             )
-            tabs.addTab(self._youtube_settings_tab(), "YouTube")
-            tabs.addTab(self._data_settings_tab(), "管理データ")
-            tabs.addTab(self._csv_settings_tab(), "CSV入出力")
-            tabs.addTab(self._display_settings_tab(), "戦績表示設定")
-            tabs.addTab(self._update_settings_tab(), "アプリ更新")
+            tabs.addTab(self._scroll_page(self._youtube_settings_tab()), "YouTube")
+            tabs.addTab(self._scroll_page(self._data_settings_tab()), "管理データ")
+            tabs.addTab(self._scroll_page(self._csv_settings_tab()), "CSV入出力")
+            tabs.addTab(self._scroll_page(self._display_settings_tab()), "戦績表示設定")
+            tabs.addTab(self._scroll_page(self._update_settings_tab()), "アプリ更新")
             layout.addWidget(tabs, stretch=1)
+            layout.addWidget(self.settings_actions)
+            layout.addWidget(self.settings_status_label)
+            for field in self.setting_fields.values():
+                field.textChanged.connect(self._settings_edited)
+            for check in self.setting_checks.values():
+                check.toggled.connect(self._settings_edited)
+            for combo in (*self.setting_combos.values(), self.widgets["settings_audio_mode"], self.widgets["settings_audio_input"]):
+                combo.currentTextChanged.connect(self._settings_edited)
 
         def _show_reliability_settings(self) -> None:
             self.show_page("settings")
@@ -2209,7 +2278,7 @@ def _run(args: argparse.Namespace) -> int:
             grid.setColumnStretch(0, 1)
             grid.setColumnStretch(1, 1)
             grid.setColumnStretch(2, 1)
-            grid.addWidget(self._setting_label("録画設定①"), 0, 0)
+            grid.addWidget(self._setting_label("録画設定"), 0, 0)
             select = self._button("settings_ffmpeg_select", "既存FFmpegを選択")
             assert isinstance(select, QPushButton)
             select.clicked.connect(self.select_existing_ffmpeg)
@@ -2297,7 +2366,7 @@ def _run(args: argparse.Namespace) -> int:
             )
             settings_form = self._register(
                 "settings_form",
-                QLabel("通常設定 / 外部連携 / データ保護 / 危険操作をV1.x相当の密度で確認できます。"),
+                QLabel("録画と自動監視の変更は「設定を保存」で反映します。"),
             )
             assert isinstance(settings_form, QLabel)
             settings_form.setWordWrap(True)
@@ -2311,10 +2380,10 @@ def _run(args: argparse.Namespace) -> int:
             actions_layout.setContentsMargins(0, 0, 0, 0)
             actions_layout.addWidget(reload_button)
             actions_layout.addWidget(save_button)
-            grid.addWidget(actions, 12, 2)
+            self.settings_actions = actions
             status = self._register("settings_status", QLabel("設定を読み込みました"))
             assert isinstance(status, QLabel)
-            grid.addWidget(status, 13, 0, 1, 3)
+            self.settings_status_label = status
             return tab
 
         def _recording_settings_secondary_tab(self) -> QWidget:
@@ -2322,7 +2391,7 @@ def _run(args: argparse.Namespace) -> int:
             assert isinstance(tab, QWidget)
             layout = QVBoxLayout(tab)
             grid_panel, grid_layout = self._section(
-                "settings_visual_recording_panel", "録画設定②"
+                "settings_visual_recording_panel", "自動監視・診断"
             )
             grid = QGridLayout()
             grid.setColumnStretch(0, 1)
@@ -3280,6 +3349,8 @@ def _run(args: argparse.Namespace) -> int:
             )
 
         def _clear_history_filters(self) -> None:
+            self.history_incomplete_only = False
+            self.widgets["history_incomplete"].setText("未完了処理")
             period = self.widgets.get("history_period_mode")
             if isinstance(period, QComboBox):
                 period.setCurrentText("すべて")
@@ -3348,12 +3419,10 @@ def _run(args: argparse.Namespace) -> int:
                     button.setEnabled(enabled)
 
         def _show_incomplete_duels(self) -> None:
-            try:
-                items = self.service.list_incomplete_duels()
-            except Exception as exc:
-                self._show_warning("未完了処理を確認できません", str(exc))
-                return
-            self._show_information("未完了処理", f"未完了の戦績は{len(items)}件です。")
+            self._clear_history_filters()
+            self.history_incomplete_only = True
+            self.widgets["history_incomplete"].setText("未完了のみ表示中")
+            self._refresh_history()
 
         def _show_bulk_duel_editor(self) -> None:
             views = self._selected_history_views()
@@ -3890,7 +3959,7 @@ def _run(args: argparse.Namespace) -> int:
         def _show_history_columns(self) -> None:
             self._show_information(
                 "表示列",
-                "開始日時、デッキ名、勝敗、先後、コイン、対戦種別、時間、サイズ、相手デッキ、登録元を表示します。",
+                "開始日時、デッキ名、勝敗、先後、コイン、対戦種別、時間、サイズ、相手デッキ、登録元、状態を表示します。状態は編集中・確認済み・未作成を区別します。",
             )
 
         def _show_selected_youtube_flow(self) -> None:
@@ -3999,17 +4068,20 @@ def _run(args: argparse.Namespace) -> int:
             self._append_activity(message)
 
         def _refresh_history(self) -> None:
-            dashboard = self.service.get_history_dashboard(query=self._history_query())
+            query = replace(self._history_query(), incomplete_only=self.history_incomplete_only)
+            dashboard = self.service.get_history_dashboard(query=query)
             table = self.widgets["history_table"]
             assert isinstance(table, QTableWidget)
             rows = []
             deck_colors = []
             self.history_views_by_row_id = {view.row_id: view for view in dashboard.views}
-            for view in dashboard.views:
+            views = dashboard.views
+            for view in views:
                 deck_colors.append(view.own_deck_color)
-                rows.append(history_table_display_row(view))
+                status = duel_choice_label("status", view.duel_record.values.status) if view.duel_record else "未作成"
+                rows.append((*history_table_display_row(view), status))
             self._set_table_rows(table, rows)
-            for row_index, view in enumerate(dashboard.views):
+            for row_index, view in enumerate(views):
                 item = table.item(row_index, 0)
                 if item is not None:
                     item.setData(Qt.ItemDataRole.UserRole, view.row_id)
@@ -4543,19 +4615,54 @@ def _run(args: argparse.Namespace) -> int:
                 self.close()
 
         def _refresh_statistics(self) -> None:
-            dashboard = self.service.get_statistics_dashboard(granularity="day")
+            use_dates = self.widgets["statistics_period_enabled"].isChecked()
+            for key in ("statistics_date_from_picker", "statistics_date_to_picker"):
+                self.widgets[key].setEnabled(use_dates)
+            try:
+                filters = StatisticsFilter(
+                    date_from=self.widgets["statistics_date_from_picker"].date().toPython() if use_dates else None,
+                    date_to=self.widgets["statistics_date_to_picker"].date().toPython() if use_dates else None,
+                    result=(None, "win", "loss")[self.widgets["statistics_filters"].currentIndex()],
+                )
+                unit = ("day", "week", "month")[self.widgets["statistics_granularity"].currentIndex()]
+                dashboard = self.service.get_statistics_dashboard(filters, granularity=unit)
+            except Exception as exc:
+                self.statistics_condition_status.setText(f"条件を適用できません: {exc}（前回の結果を表示中）")
+                return
+            for index, metric in enumerate((dashboard.overall, dashboard.filtered)):
+                value, detail = self.statistics_cards[index]
+                value.setText(self._format_rate(metric.win_rate))
+                detail.setText(f"{metric.wins}勝 / {metric.matches}戦")
+            orders = {row.key: row.metric for row in dashboard.by_play_order}
+            value, detail = self.statistics_cards[2]
+            value.setText(" / ".join(
+                f"{label} {self._format_rate(orders[key].win_rate) if key in orders else '—'}"
+                for key, label in (("first", "先攻"), ("second", "後攻"))
+            ))
+            detail.setText("条件適用後・確定済み戦績")
+            period_text = f"{filters.date_from}〜{filters.date_to}" if use_dates else "全期間"
+            self.statistics_condition_status.setText(
+                f"適用中: {period_text}・{self.widgets['statistics_filters'].currentText()}・"
+                f"{self.widgets['statistics_granularity'].currentText()}別 / 確定済み戦績を集計（勝敗条件は母集団も絞ります）"
+            )
             chart = self.widgets["statistics_chart"]
             assert isinstance(chart, StatisticsTrendChart)
-            overall = dashboard.overall
-            chart.set_points(dashboard.trend)
+            overall = dashboard.filtered
+            points = dashboard.trend if dashboard.filtered.matches else ()
+            chart.set_points(points)
             chart.setToolTip(
-                "日別勝利数と累積勝率: "
+                f"{self.widgets['statistics_granularity'].currentText()}別勝利数と累積勝率: "
                 + f"{overall.wins}勝 / {overall.matches}戦"
             )
             self._set_breakdown_rows("statistics_deck_table", dashboard.by_deck)
             self._set_breakdown_rows("statistics_order_table", dashboard.by_play_order)
             self._set_breakdown_rows("statistics_coin_table", dashboard.by_coin_face)
             self._set_breakdown_rows("statistics_season_table", dashboard.by_season)
+            self._set_table_rows(self.widgets["statistics_trend_table"], tuple(
+                (point.label, point.metric.matches, point.metric.wins,
+                 self._format_rate(point.metric.win_rate), self._format_rate(point.cumulative_win_rate))
+                for point in points
+            ))
 
         def _set_breakdown_rows(self, key: str, rows: tuple[object, ...]) -> None:
             table = self.widgets[key]
@@ -4587,6 +4694,21 @@ def _run(args: argparse.Namespace) -> int:
                     return f"{size:.1f}{unit}" if unit != "B" else f"{int(size)}B"
                 size /= 1024
             return f"{size:.1f}GB"
+
+        def _settings_snapshot(self) -> tuple:
+            return (
+                tuple(field.text() for field in self.setting_fields.values()),
+                tuple(check.isChecked() for check in self.setting_checks.values()),
+                tuple(combo.currentText() for combo in self.setting_combos.values()),
+                tuple(self.widgets[key].currentText() for key in ("settings_audio_mode", "settings_audio_input")),
+            )
+
+        def _settings_dirty(self) -> bool:
+            return self.settings_baseline is not None and self._settings_snapshot() != self.settings_baseline
+
+        def _settings_edited(self) -> None:
+            if self.settings_baseline is not None:
+                self.widgets["settings_status"].setText("未保存の変更があります" if self._settings_dirty() else "保存済みの設定です")
 
         def load_settings(self, *_args: object) -> None:
             try:
@@ -4637,8 +4759,10 @@ def _run(args: argparse.Namespace) -> int:
             status = self.widgets.get("settings_status")
             if isinstance(status, QLabel):
                 status.setText("設定を読み込みました")
+            self.settings_loaded = True
+            self.settings_baseline = self._settings_snapshot()
 
-        def save_settings(self, *_args: object) -> None:
+        def save_settings(self, *_args: object) -> bool:
             values: dict[str, str] = {}
             for widget_key, config_key in self.setting_field_keys.items():
                 field = self.setting_fields.get(widget_key)
@@ -4670,10 +4794,12 @@ def _run(args: argparse.Namespace) -> int:
                 self.service.save_settings(values)
             except Exception as exc:
                 self._show_warning("設定を保存できません", str(exc))
-                return
+                return False
             status = self.widgets.get("settings_status")
             if isinstance(status, QLabel):
                 status.setText("設定を保存しました")
+            self.settings_baseline = self._settings_snapshot()
+            return True
 
         def show_ffmpeg_setup(self, *_args: object) -> None:
             self._show_information(

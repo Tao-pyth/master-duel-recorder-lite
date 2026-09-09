@@ -191,11 +191,11 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertTrue(contract["reliability_action_contract"]["navigation_removed"])
         self.assertEqual(
             contract["reliability_action_contract"]["settings_tab"],
-            "録画設定②",
+            "自動監視・診断",
         )
         self.assertEqual(
             contract["reliability_action_contract"]["recording_tabs"],
-            ["録画設定①", "録画設定②"],
+            ["録画設定", "自動監視・診断"],
         )
         self.assertEqual(
             contract["reliability_action_contract"]["record_page_entry"],
