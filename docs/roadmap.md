@@ -2,6 +2,14 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.11: シーズンレポートの詳細閲覧とHTML保存
+
+状態: 実装。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.11)、Issue #641、Milestone V2.7.11。
+
+- シーズン画面から既存の詳細集計と保存済みメモを閲覧する
+- 保存前に同一シーズンを再集計し、確認付きでHTML出力する
+- #620計画の最小導線を実装。比較選択/メモ編集/他画面の入口は後続へ分離する
+
 ## V2.7.10: 音声設定の整合性修正
 
 状態: 実装。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.10)とIssue #639/#640、Milestone V2.7.10。

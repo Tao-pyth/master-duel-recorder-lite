@@ -4466,12 +4466,11 @@ def _run(args: argparse.Namespace) -> int:
             except Exception as exc:
                 self._show_warning("シーズンレポートを表示できません", str(exc))
                 return
-            metric = report.summary.filtered
-            self._show_information(
-                "シーズンレポート",
-                f"{report.season.name}\n"
-                f"{metric.matches}戦 {metric.wins}勝 / 勝率 {self._format_rate(metric.win_rate)}",
-            )
+            from .pyside_season_report import create_season_report_dialog
+
+            dialog = create_season_report_dialog(self, self.service, report)
+            dialog.exec()
+            dialog.deleteLater()
 
         def _refresh_youtube(self) -> None:
             status = self.service.youtube_connection_status()
