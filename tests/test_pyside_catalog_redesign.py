@@ -13,6 +13,56 @@ from master_duel_recorder_lite.application import RecorderApplicationService
 
 @unittest.skipUnless(importlib.util.find_spec("PySide6"), "PySide6 is optional")
 class CatalogRedesignTest(unittest.TestCase):
+    def test_many_long_descriptions_cannot_squeeze_names(self):
+        from PySide6.QtGui import QFontMetrics
+        from PySide6.QtCore import Qt
+
+        def scenario(w, service, app):
+            description = "長い説明があっても名前の表示幅を維持します。" * 12
+            names = ["レジェンドアンソロジー", "オノマト", "HERO", "レッドデーモン"]
+            names += [f"検証用デッキ{number:02d}" for number in range(28)]
+            names[-1] = "非常に長いデッキ名称" * 4
+            for name in names:
+                service.add_deck(name, description=description, color="#00BFC4")
+                service.add_tag(name, description=description, color="#00BFC4")
+            for key in ("decks", "tags"):
+                page = w.catalog_pages[key]
+                page.load()
+                w.show_page(key)
+                self.assertGreaterEqual(page.table.rowCount(), 32)
+                self.assertEqual(page.table.columnCount(), 4 if key == "decks" else 2)
+                self.assertFalse(page.table.wordWrap())
+                row = next(r for r in range(page.table.rowCount()) if page.table.item(r, 0).text() == names[0])
+                item = page.table.item(row, 0)
+                self.assertIn(description, item.toolTip())
+                self.assertEqual(item.data(Qt.ItemDataRole.UserRole + 1), description)
+                long_item = next(page.table.item(r, 0) for r in range(page.table.rowCount())
+                                 if page.table.item(r, 0).text() == names[-1])
+                self.assertIn(names[-1], long_item.toolTip())
+                for width, height in ((980, 640), (1180, 760), (1440, 1024)):
+                    w.resize(width, height)
+                    app.processEvents()
+                    self.assertGreaterEqual(page.table.columnWidth(0), 220)
+                    self.assertGreaterEqual(page.table.columnWidth(0) - 38,
+                                            QFontMetrics(page.table.font()).horizontalAdvance(names[0]))
+                    if key == "decks":
+                        self.assertEqual([page.table.columnWidth(c) for c in (1, 2, 3)], [76, 80, 88])
+                    capture = os.environ.get("MDRL_CATALOG_CAPTURE")
+                    if capture:
+                        dest = Path(capture)
+                        dest.mkdir(parents=True, exist_ok=True)
+                        page.table.clearSelection()
+                        app.processEvents()
+                        self.assertTrue(w.grab().save(str(dest / f"{key}-long-{width}x{height}.png")))
+                page.table.selectRow(row)
+                self.assertEqual(page.fields["name_input"].text(), names[0])
+                self.assertEqual(page.fields["description_input"].text(), description)
+                self.assertTrue(page.save())
+                page.search.setText("長い説明")
+                self.assertEqual(page.table.rowCount(), 32)
+                page.search.clear()
+        self.run_gui(scenario)
+
     def run_gui(self, scenario):
         from PySide6.QtWidgets import QApplication, QMainWindow
         from master_duel_recorder_lite import pyside_gui

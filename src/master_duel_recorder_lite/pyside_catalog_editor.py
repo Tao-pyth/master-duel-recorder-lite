@@ -4,13 +4,65 @@ from datetime import date
 
 
 def create_catalog_page(owner, key):
-    from PySide6.QtCore import QDate, QSignalBlocker, Qt
-    from PySide6.QtGui import QColor, QIcon, QPixmap
+    from PySide6.QtCore import QDate, QRect, QSignalBlocker, Qt
+    from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPalette, QPixmap
     from PySide6.QtWidgets import (
         QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QFormLayout,
         QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
-        QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+        QScrollArea, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+        QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
     )
+
+    description_role = Qt.ItemDataRole.UserRole + 1
+
+    class NameDelegate(QStyledItemDelegate):
+        """名前と補足を別の行へ描画し、長文を列幅の計算から切り離す。"""
+
+        def paint(self, painter, option, index):
+            opt = QStyleOptionViewItem(option)
+            self.initStyleOption(opt, index)
+            name = opt.text
+            description = " ".join(str(index.data(description_role) or "").split())
+            style = opt.widget.style()
+            text_rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget).adjusted(4, 0, -8, 0)
+            opt.text = ""
+            # ネイティブの選択背景と色アイコンはそのまま描く。
+            style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+            painter.save()
+            painter.setClipRect(option.rect)
+            font = QFont(opt.font)
+            painter.setFont(font)
+            selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+            painter.setPen(opt.palette.color(QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text))
+            flags = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            metrics = QFontMetrics(font)
+            name_rect = QRect(text_rect)
+            if description:
+                name_rect.setTop(text_rect.top() + 5)
+                name_rect.setHeight(metrics.height() + 2)
+            painter.drawText(name_rect, flags, metrics.elidedText(name, Qt.TextElideMode.ElideRight, text_rect.width()))
+            if description:
+                if font.pixelSize() > 0:
+                    font.setPixelSize(max(11, font.pixelSize() - 2))
+                else:
+                    font.setPointSizeF(max(8, font.pointSizeF() - 1))
+                painter.setFont(font)
+                painter.setPen(QColor("#53666b"))
+                detail_rect = QRect(text_rect)
+                detail_rect.setTop(name_rect.bottom() + 1)
+                detail_rect.setBottom(text_rect.bottom() - 4)
+                painter.drawText(detail_rect, flags, QFontMetrics(font).elidedText(description, Qt.TextElideMode.ElideRight, text_rect.width()))
+            painter.restore()
+
+    class CatalogTable(QTableWidget):
+        def fit_name_column(self):
+            if key != "seasons" and self.columnCount():
+                other_width = sum(self.columnWidth(col) for col in range(1, self.columnCount()))
+                self.setColumnWidth(0, max(220, self.viewport().width() - other_width))
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self.fit_name_column()
 
     class CatalogPage(QWidget):
         def __init__(self):
@@ -51,8 +103,8 @@ def create_catalog_page(owner, key):
             tools = QHBoxLayout()
             self.filter = self.register("filter", QComboBox())
             self.filter.setMaximumWidth(220)
-            self.filter.addItems({"decks": ("すべて", "通常", "相手専用", "非表示"),
-                                  "tags": ("すべて", "通常", "デッキ専用"),
+            self.filter.addItems({"decks": ("用途・表示：すべて", "用途：通常", "用途：相手専用", "表示：非表示"),
+                                  "tags": ("用途：すべて", "用途：通常", "用途：デッキ専用"),
                                   "seasons": ("すべて", "有効", "アーカイブ")}[key])
             tools.addWidget(self.filter, 1)
             add = self.register("add", QPushButton(f"＋ 新規{self.noun}"))
@@ -63,23 +115,31 @@ def create_catalog_page(owner, key):
             listing.addLayout(tools)
             self.summary = QLabel()
             listing.addWidget(self.summary)
-            self.table = QTableWidget()
+            self.table = CatalogTable()
             table_key = {"decks": "deck_catalog_table", "tags": "tag_catalog_table", "seasons": "season_table"}[key]
             owner._register(table_key, self.table)
-            headers = {"decks": ("色", "デッキ名", "説明", "使用回数", "用途", "履歴・統計"),
-                       "tags": ("色", "タグ名", "説明", "用途"),
+            headers = {"decks": ("デッキ名", "使用回数", "用途", "履歴・統計"),
+                       "tags": ("タグ名", "用途"),
                        "seasons": ("シーズン", "種別", "期間", "状態")}[key]
             self.table.setColumnCount(len(headers))
             self.table.setHorizontalHeaderLabels(headers)
             self.table.verticalHeader().hide()
-            self.table.verticalHeader().setDefaultSectionSize(48)
+            self.table.verticalHeader().setDefaultSectionSize(48 if key == "seasons" else 56)
             self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.table.setShowGrid(False)
             self.table.setAlternatingRowColors(True)
-            self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-            self.table.horizontalHeader().setSectionResizeMode(0 if key == "seasons" else 1, QHeaderView.ResizeMode.Stretch)
+            if key == "seasons":
+                self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+                self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            else:
+                self.table.setWordWrap(False)
+                self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+                for col, width in enumerate((76, 80, 88) if key == "decks" else (100,), start=1):
+                    self.table.setColumnWidth(col, width)
+                self.table.setItemDelegateForColumn(0, NameDelegate(self.table))
+                self.table.fit_name_column()
             self.table.setMinimumWidth(240)
             listing.addWidget(self.table, 1)
             if key == "decks":
@@ -259,12 +319,12 @@ def create_catalog_page(owner, key):
                 elif key == "decks":
                     if (choice == 1 and entry.opponent_only) or (choice == 2 and not entry.opponent_only) or (choice == 3 and not entry.hidden_from_history_statistics):
                         continue
-                    values = ("", entry.name, entry.description, entry.usage_count,
+                    values = (entry.name, entry.usage_count,
                               "相手専用" if entry.opponent_only else "通常", "非表示" if entry.hidden_from_history_statistics else "表示")
                 else:
                     if choice and entry.deck_only != (choice == 2):
                         continue
-                    values = ("", entry.name, entry.description, "デッキ専用" if entry.deck_only else "通常")
+                    values = (entry.name, "デッキ専用" if entry.deck_only else "通常")
                 rows.append((entry, values))
             with QSignalBlocker(self.table):
                 self.table.setRowCount(len(rows))
@@ -277,15 +337,18 @@ def create_catalog_page(owner, key):
                         if col == 0:
                             item.setData(Qt.ItemDataRole.UserRole, self.identifier(entry))
                             if key != "seasons":
+                                item.setData(description_role, entry.description)
+                                item.setToolTip(entry.name + ("\n" + entry.description if entry.description else ""))
+                                item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, entry.description)
                                 swatch = QPixmap(16, 16)
                                 swatch.fill(QColor(entry.color or "#4f6f8f"))
                                 item.setIcon(QIcon(swatch))
-                                item.setToolTip(f"色: {entry.color}")
-                        if key == "decks" and col == 3:
+                        if key == "decks" and col == 1:
                             item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                         self.table.setItem(row, col, item)
                     if self.identifier(entry) == self.selected_id:
                         self.table.selectRow(row)
+            self.table.fit_name_column()
             self.summary.setText(f"{len(rows)}件 / 全{len(self.entries)}件" + ("　条件に一致する項目はありません" if not rows else ""))
 
         def selection_changed(self):
