@@ -1127,6 +1127,7 @@ def _run(args: argparse.Namespace) -> int:
             self.review_windows: list[QWidget] = []
             self.available_update: UpdateRelease | None = None
             self.history_views_by_row_id: dict[str, object] = {}
+            self.catalog_pages = {}
             self.catalog_entries_by_id: dict[int, object] = {}
             self.seasons_by_id: dict[int, object] = {}
             self.capture_targets_by_label: dict[str, object] = {}
@@ -1177,6 +1178,9 @@ def _run(args: argparse.Namespace) -> int:
             return widget
 
         def closeEvent(self, event: object) -> None:
+            if not self._allow_catalog_leave():
+                event.ignore()
+                return
             if not self._allow_history_leave():
                 event.ignore()
                 return
@@ -1261,6 +1265,8 @@ def _run(args: argparse.Namespace) -> int:
                 self._load_runtime_dashboard()
 
         def show_page(self, key: str) -> None:
+            if self.stack.currentWidget() != self.pages.get(key) and not self._allow_catalog_leave():
+                return
             if hasattr(self, "history_editor") and self.stack.currentWidget() == self.pages.get("history") and key != "history":
                 if not self._allow_history_leave():
                     return
@@ -1304,13 +1310,13 @@ def _run(args: argparse.Namespace) -> int:
                 self._prepare_page(layout)
             elif key == "improve":
                 self._improve_page(layout)
-            if key not in {"history", "statistics", "settings"}:
+            if key not in {"history", "statistics", "settings", "decks", "tags", "seasons"}:
                 layout.addStretch(1)
             for label in page.findChildren(QLabel):
                 label.setWordWrap(True)
                 if len(label.text()) > 60 or "\n" in label.text() or label.objectName() == "settings_runtime_path":
                     label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            if key == "settings":
+            if key in {"settings", "decks", "tags", "seasons"}:
                 return page
             return self._scroll_page(page)
 
@@ -2216,152 +2222,16 @@ def _run(args: argparse.Namespace) -> int:
             )
 
         def _catalog_page(self, layout: QVBoxLayout, key: str) -> None:
-            is_deck = key == "decks"
-            editor_key = "deck_editor" if is_deck else "tag_editor"
-            title = "デッキ名管理" if is_deck else "タグ管理"
-            prefix = "deck" if is_deck else "tag"
-            editor, editor_layout = self._section(editor_key, title)
-            grid = QGridLayout()
-            grid.addWidget(QLabel("名前"), 0, 0)
-            name = self._register(f"{prefix}_name_input", QLineEdit())
-            assert isinstance(name, QLineEdit)
-            grid.addWidget(name, 0, 1, 1, 3)
-            grid.addWidget(QLabel("説明"), 1, 0)
-            description = self._register(f"{prefix}_description_input", QLineEdit())
-            assert isinstance(description, QLineEdit)
-            grid.addWidget(description, 1, 1, 1, 3)
-            grid.addWidget(QLabel("カラー"), 2, 0)
-            color_button = self._register(f"{prefix}_color_button", QPushButton("色を選択"))
-            assert isinstance(color_button, QPushButton)
-            color_button.clicked.connect(lambda _checked=False, area=key: self._choose_catalog_color(area))
-            self._set_color_button(color_button, "#2F6B5F" if is_deck else "#4F6F8F")
-            grid.addWidget(color_button, 2, 1)
-            if is_deck:
-                opponent = self._register("deck_opponent_only", QCheckBox("相手デッキのみで使用"))
-                hidden = self._register("deck_hidden_from_history", QCheckBox("履歴・統計で非表示"))
-                assert isinstance(opponent, QCheckBox)
-                assert isinstance(hidden, QCheckBox)
-                grid.addWidget(opponent, 2, 2)
-                grid.addWidget(hidden, 2, 3)
-            else:
-                deck_only = self._register("tag_deck_only", QCheckBox("デッキ名登録でのみ使用"))
-                assert isinstance(deck_only, QCheckBox)
-                grid.addWidget(deck_only, 2, 2)
-            editor_layout.addLayout(grid)
-            actions = QHBoxLayout()
-            actions.addStretch(1)
-            add_button = self._button(f"{prefix}_add", "追加")
-            save_button = self._button(f"{prefix}_save", "保存")
-            delete_button = self._button(f"{prefix}_delete", "削除")
-            add_button.clicked.connect(lambda _checked=False, area=key: self._add_catalog_entry(area))
-            save_button.clicked.connect(lambda _checked=False, area=key: self._save_catalog_entry(area))
-            delete_button.clicked.connect(lambda _checked=False, area=key: self._delete_catalog_entry(area))
-            actions.addWidget(add_button)
-            actions.addWidget(save_button)
-            actions.addWidget(delete_button)
-            editor_layout.addLayout(actions)
-            layout.addWidget(editor)
-
-            headers = (
-                ("カラー", "名前", "説明", "使用回数", "用途")
-                if is_deck
-                else ("カラー", "名前", "説明", "用途")
-            )
-            rows = (
-                (
-                    ("#2F6B5F", "天威相剣", "ランク戦メイン", 12, "通常"),
-                    ("#8E4F7A", "御巫", "後攻確認用", 3, "通常"),
-                )
-                if is_deck
-                else (
-                    ("#4F6F8F", "ランク戦", "ランクマッチ用の共通タグ", "通常"),
-                    ("#B08942", "大型連勝", "デッキ検証で使用", "デッキ専用"),
-                )
-            )
-            widget_key = "deck_catalog_table" if is_deck else "tag_catalog_table"
-            table = self._table(widget_key, headers, rows)
-            table.itemSelectionChanged.connect(
-                lambda area=key: self._catalog_selection_changed(area)
-            )
-            if is_deck:
-                self._configure_table(
-                    table,
-                    column_widths=(74, 180, None, 86, 120),
-                    minimum_height=320,
-                    maximum_height=360,
-                )
-            else:
-                self._configure_table(
-                    table,
-                    column_widths=(74, 180, None, 120),
-                    minimum_height=320,
-                    maximum_height=360,
-                )
-            layout.addWidget(table, stretch=1)
-            if is_deck:
-                layout.addWidget(
-                    self._register(
-                        "catalog_table",
-                        QLabel("デッキ名候補、使用回数、デッキタグの管理状態を表示します"),
-                    )
-                )
+            from .pyside_catalog_editor import create_catalog_page
+            page = create_catalog_page(self, key)
+            self.catalog_pages[key] = page
+            layout.addWidget(page, 1)
 
         def _season_page(self, layout: QVBoxLayout) -> None:
-            editor, editor_layout = self._section("season_editor", "シーズン管理")
-            grid = QGridLayout()
-            grid.setColumnStretch(1, 1)
-            grid.setColumnStretch(3, 1)
-            grid.setColumnStretch(5, 1)
-            grid.addWidget(QLabel("名前"), 0, 0)
-            name = self._register("season_name_input", QLineEdit())
-            assert isinstance(name, QLineEdit)
-            grid.addWidget(name, 0, 1, 1, 5)
-            grid.addWidget(QLabel("種別"), 1, 0)
-            type_box = self._register("season_type_select", QComboBox())
-            assert isinstance(type_box, QComboBox)
-            type_box.addItems(("ランク戦", "イベント", "カスタム"))
-            start_picker = self._date_picker("season_start_date_picker")
-            end_picker = self._date_picker("season_end_date_picker")
-            for field in (type_box, start_picker, end_picker):
-                field.setMinimumWidth(168)
-                field.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Fixed,
-                )
-            grid.addWidget(type_box, 1, 1)
-            grid.addWidget(QLabel("開始日"), 1, 2)
-            grid.addWidget(start_picker, 1, 3)
-            grid.addWidget(QLabel("終了日"), 1, 4)
-            grid.addWidget(end_picker, 1, 5)
-            grid.addWidget(QLabel("説明"), 2, 0)
-            description = self._register("season_description_input", QLineEdit())
-            assert isinstance(description, QLineEdit)
-            grid.addWidget(description, 2, 1, 1, 5)
-            editor_layout.addLayout(grid)
-            actions = QHBoxLayout()
-            actions.addStretch(1)
-            for key, text, action in (
-                ("season_add", "追加", self._add_season),
-                ("season_save", "保存", self._save_selected_season),
-                ("season_archive", "アーカイブ", self._archive_selected_season),
-                ("season_report", "レポート", self._show_selected_season_report),
-            ):
-                button = self._button(key, text)
-                button.clicked.connect(action)
-                actions.addWidget(button)
-            editor_layout.addLayout(actions)
-            layout.addWidget(editor)
-            table = self._table(
-                "season_table",
-                ("シーズン", "種別", "期間", "状態"),
-                (
-                    ("WCS予選", "イベント", "2026-08-01 - 2026-08-20", "有効"),
-                    ("ランク戦 8月", "ランク戦", "2026-08-01 - 2026-08-31", "有効"),
-                ),
-                column_widths=(220, 96, 210, 96),
-            )
-            table.itemSelectionChanged.connect(self._season_selection_changed)
-            layout.addWidget(table, stretch=1)
+            self._catalog_page(layout, "seasons")
+
+        def _allow_catalog_leave(self) -> bool:
+            return all(page.allow_leave() for page in self.catalog_pages.values())
 
         def _template_page(self, layout: QVBoxLayout) -> None:
             editor, editor_layout = self._section(
@@ -4366,72 +4236,11 @@ def _run(args: argparse.Namespace) -> int:
             return True
 
         def _refresh_catalogs(self) -> None:
-            deck_table = self.widgets["deck_catalog_table"]
-            tag_table = self.widgets["tag_catalog_table"]
-            assert isinstance(deck_table, QTableWidget)
-            assert isinstance(tag_table, QTableWidget)
-            decks = self.service.list_decks()
-            tags = self.service.list_tags()
-            self.catalog_entries_by_id = {
-                entry.entry_id: entry for entry in (*decks, *tags)
-            }
-            self._set_table_rows(
-                deck_table,
-                tuple(
-                    (
-                        deck.color or "#2F6B5F",
-                        deck.name,
-                        deck.description,
-                        deck.usage_count,
-                        "非表示" if deck.hidden_from_history_statistics else "表示",
-                    )
-                    for deck in decks
-                ),
-            )
-            for row_index, deck in enumerate(decks):
-                item = deck_table.item(row_index, 0)
-                if item is not None:
-                    item.setData(Qt.ItemDataRole.UserRole, deck.entry_id)
-            self._select_row_by_identifier(
-                deck_table, self.selected_catalog_entry_ids.get("decks")
-            )
-            self._set_table_rows(
-                tag_table,
-                tuple(
-                    (
-                        tag.color or "#4F6F8F",
-                        tag.name,
-                        tag.description,
-                        "デッキ専用" if tag.deck_only else "通常",
-                    )
-                    for tag in tags
-                ),
-            )
-            for row_index, tag in enumerate(tags):
-                item = tag_table.item(row_index, 0)
-                if item is not None:
-                    item.setData(Qt.ItemDataRole.UserRole, tag.entry_id)
-            self._select_row_by_identifier(
-                tag_table, self.selected_catalog_entry_ids.get("tags")
-            )
-            self._catalog_selection_changed("decks")
-            self._catalog_selection_changed("tags")
+            for key in ("decks", "tags"):
+                self.catalog_pages[key].load()
 
         def _refresh_seasons(self) -> None:
-            table = self.widgets["season_table"]
-            assert isinstance(table, QTableWidget)
-            seasons = self.service.list_seasons(include_archived=True)
-            self.seasons_by_id = {season.season_id: season for season in seasons}
-            self._set_table_rows(
-                table,
-                tuple(season_table_display_row(season) for season in seasons),
-            )
-            for row_index, season in enumerate(seasons):
-                item = table.item(row_index, 0)
-                if item is not None:
-                    item.setData(Qt.ItemDataRole.UserRole, season.season_id)
-            self._select_row_by_identifier(table, self.selected_season_id)
-            self._season_selection_changed()
+            self.catalog_pages["seasons"].load()
 
         def _select_row_by_identifier(
             self, table: QTableWidget, identifier: int | None

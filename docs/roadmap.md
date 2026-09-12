@@ -1227,3 +1227,7 @@
 完了記録: commit `a7e3303`、タグ `v2.3.0`、GitHub Release公開、Windows EXE release workflow成功、公開asset検証、ダウンロード後EXEスモークまで完了。
 
 完了条件: PySide6 GUIの主要な未接続UIが実操作または明確な状態表示へ戻り、Ruff、全テスト、PySide6 GUI smoke、EXEビルド、3 EXEスモーク、公開Release asset検証、Release closureが完了すること。
+
+## V2.7.13 管理ページ改革
+
+デッキ名・タグ・シーズンを採用1案の左一覧・右編集へ統一。新規/保存の分離、検索と条件、未保存保護、既存機能維持。#645/#646/#647。全ナビ刷新と戦績管理の別フィードバックは範囲外。
