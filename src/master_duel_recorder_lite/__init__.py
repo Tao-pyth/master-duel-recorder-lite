@@ -1,3 +1,3 @@
 """master-duel-recorder-lite package."""
 
-__version__ = "2.7.11"
+__version__ = "2.7.12"

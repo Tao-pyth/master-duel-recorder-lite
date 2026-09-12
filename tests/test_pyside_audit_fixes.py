@@ -93,7 +93,8 @@ class AuditWidgetTest(unittest.TestCase):
                     self.assertEqual(widgets["history_table"].item(0, 10).text(), "編集中")
                     widgets["history_filter_clear"].click()
                     self.assertEqual(widgets["history_table"].rowCount(), 12)
-                    self.assertEqual(widgets["history_table"].horizontalHeader().visualIndex(10), 1)
+                    self.assertEqual(widgets["history_table"].horizontalHeader().visualIndex(11), 0)
+                    self.assertEqual(widgets["history_table"].horizontalHeader().visualIndex(10), 11)
 
                     for width in (980, 1180):
                         window.resize(width, 760)
@@ -118,4 +119,3 @@ class AuditWidgetTest(unittest.TestCase):
 
             with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}), patch.object(QApplication, "exec", inspect):
                 self.assertEqual(pyside_gui.main(["--project-root", str(root), "--user-data-dir", str(root / "data")]), 0)
-

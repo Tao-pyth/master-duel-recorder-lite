@@ -967,7 +967,7 @@ def _run(args: argparse.Namespace) -> int:
     if not availability.available:
         raise PySideGuiError(availability.message)
     try:
-        from PySide6.QtCore import QDate, QPointF, QSignalBlocker, QSize, Qt, QTimer
+        from PySide6.QtCore import QDate, QItemSelectionModel, QPointF, QSignalBlocker, QSize, Qt, QTimer
         from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
         from PySide6.QtWidgets import (
             QAbstractScrollArea,
@@ -991,11 +991,13 @@ def _run(args: argparse.Namespace) -> int:
             QLineEdit,
             QListWidget,
             QMainWindow,
+            QMenu,
             QMessageBox,
             QPushButton,
             QScrollArea,
             QSizePolicy,
             QStackedWidget,
+            QStyleFactory,
             QTabWidget,
             QTableWidget,
             QTableWidgetItem,
@@ -1175,6 +1177,9 @@ def _run(args: argparse.Namespace) -> int:
             return widget
 
         def closeEvent(self, event: object) -> None:
+            if not self._allow_history_leave():
+                event.ignore()
+                return
             if self._settings_dirty():
                 choice = QMessageBox.question(
                     self, "未保存の設定", "設定の変更を保存して終了しますか？",
@@ -1256,11 +1261,16 @@ def _run(args: argparse.Namespace) -> int:
                 self._load_runtime_dashboard()
 
         def show_page(self, key: str) -> None:
+            if hasattr(self, "history_editor") and self.stack.currentWidget() == self.pages.get("history") and key != "history":
+                if not self._allow_history_leave():
+                    return
             self.stack.setCurrentWidget(self.pages[key])
             for page, button in self.nav_buttons.items():
                 button.setChecked(page == key)
             label = dict((*NAVIGATION_PAGES, *INTERNAL_PAGES))[key]
             self.page_title.setText(label)
+            if key == "history" and self.load_runtime_data:
+                self._refresh_history()
             if key == "statistics" and self.load_runtime_data:
                 self._refresh_statistics()
             if key == "settings":
@@ -1777,130 +1787,344 @@ def _run(args: argparse.Namespace) -> int:
             layout.addLayout(bottom)
 
         def _history_page(self, layout: QVBoxLayout) -> None:
+            from .pyside_history_editor import create_history_editor
+
+            layout.parentWidget().setStyleSheet("""
+                QWidget { font-size: 14px; }
+                QPushButton { min-height: 28px; padding: 4px 10px; }
+                QComboBox, QDateEdit, QLineEdit { min-height: 28px; }
+                #history_incomplete:checked { background: #007c7a; color: white; border-color: #00605e; }
+                #history_editor { border-top: 1px solid #c8d0d8; }
+                #history_filter_clear { border: 0; background: transparent; color: #007c7a; }
+            """)
+            self.history_selection_ids = ()
+            self.history_syncing = False
+            self.history_filter_snapshot = None
+            self.history_menu_actions = {}
             toolbar = self._register("history_toolbar", QFrame())
-            assert isinstance(toolbar, QFrame)
-            toolbar_layout = QGridLayout(toolbar)
-            toolbar_layout.setContentsMargins(0, 0, 0, 0)
-            for key, text, variant, tooltip in (
-                ("history_incomplete", "未完了処理", "primary", "未入力・下書きの戦績を確認します"),
-                ("history_bulk", "一括編集", "secondary", "複数戦績の一括編集を開きます"),
-                ("manual_duel_add", "手動追加", "primary", "録画なしの戦績を追加します"),
-                ("history_play", "再生", "icon", "選択した録画を再生します"),
-                ("history_duel", "編集", "icon", "選択した戦績を編集します"),
-                ("history_delete", "削除", "danger", "選択した履歴または手動戦績を削除します"),
-                ("history_duplicates", "重複", "secondary", "重複候補を確認します"),
-                ("history_refresh", "更新", "secondary", "一覧を再読み込みします"),
-                ("history_columns", "列の説明", "secondary", "表示中の列の意味を確認します"),
-                ("history_youtube", "YouTube", "secondary", "選択した録画のYouTube投稿導線を確認します"),
-            ):
-                button = self._button(key, text, variant)
-                button.setToolTip(tooltip)
-                index = toolbar_layout.count()
-                toolbar_layout.addWidget(button, index // 5, index % 5)
-                self._connect_history_button(key, button)
+            top = QHBoxLayout(toolbar)
+            top.setContentsMargins(0, 0, 0, 0)
+            top.addWidget(QLabel("対戦の記録を確認・整理"), 1)
+            for key, label in (("history_refresh", "更新"), ("manual_duel_add", "手動追加")):
+                button = self._button(key, label)
+                top.addWidget(button)
+                if key == "history_refresh":
+                    button.clicked.connect(self._history_user_refresh)
+                else:
+                    button.clicked.connect(self._show_manual_duel_entry)
+            more = self._button("history_tools", "その他")
+            menu = QMenu(more)
+            self._history_menu_button(menu, "history_duplicates", "重複候補")
+            self._history_menu_button(menu, "history_columns", "列の説明")
+            columns_menu = menu.addMenu("表示する列")
+            self.history_columns_menu = columns_menu
+            more.setMenu(menu)
+            top.addWidget(more)
             layout.addWidget(toolbar)
 
             filters = self._register("history_filter_bar", QFrame())
-            assert isinstance(filters, QFrame)
-            filter_layout = QGridLayout(filters)
+            filter_layout = QVBoxLayout(filters)
             filter_layout.setContentsMargins(0, 0, 0, 0)
-            filter_layout.setColumnStretch(3, 1)
-            filter_layout.addWidget(QLabel("期間"), 0, 0)
+            row = QHBoxLayout()
+            row.addWidget(QLabel("期間"))
             period = self._register("history_period_mode", QComboBox())
-            assert isinstance(period, QComboBox)
             period.addItems(("すべて", "期間指定"))
-            filter_layout.addWidget(period, 0, 1)
-            filter_layout.addWidget(self._date_picker("history_date_from_picker"), 0, 2)
-            filter_layout.addWidget(self._date_picker("history_date_to_picker"), 0, 3)
-            saved_filter = self._register("history_saved_filter", QComboBox())
-            season_filter = self._register("history_season_filter", QComboBox())
-            deck_filter = self._register("history_own_deck_filter", QComboBox())
-            tag_filter = self._register("history_tag_filter", QComboBox())
-            coin_filter = self._register("history_coin_filter", QComboBox())
-            origin_filter = self._register("history_origin_filter", QComboBox())
-            for column, combo in enumerate(
-                (
-                    saved_filter,
-                    season_filter,
-                    deck_filter,
-                    tag_filter,
-                    coin_filter,
-                    origin_filter,
-                ),
-                start=1,
-            ):
-                assert isinstance(combo, QComboBox)
-                combo.setMinimumWidth(92)
-                filter_layout.addWidget(combo, 1 + (column - 1) // 3, 1 + (column - 1) % 3)
-            filter_layout.addWidget(QLabel("条件"), 1, 0)
-            self._populate_history_filter_choices()
-            apply_filter = self._button("history_filter_apply", "適用")
-            clear_filter = self._button("history_filter_clear", "解除")
-            apply_filter.clicked.connect(self._refresh_history)
-            clear_filter.clicked.connect(self._clear_history_filters)
-            filter_layout.addWidget(apply_filter, 0, 4)
-            filter_layout.addWidget(clear_filter, 0, 5)
-            # 旧キーは手動追加へ集約し、重複する操作を表示しない。
-            self.widgets["history_add"] = self.widgets["manual_duel_add"]
-            layout.addWidget(filters)
+            row.addWidget(period)
+            row.addWidget(QLabel("デッキ"))
+            deck = self._register("history_own_deck_filter", QComboBox())
+            row.addWidget(deck, 1)
+            details_button = self._button("history_filter_details", "詳細条件 ▸")
+            details_button.setCheckable(True)
+            row.addWidget(details_button)
+            toggle = self._button("history_incomplete", "未完了のみ")
+            toggle.setCheckable(True)
+            toggle.setIcon(QIcon())
+            toggle.setToolTip("オン: 未作成・編集中のみ / 再クリックで解除。他の条件は保持します")
+            toggle.clicked.connect(self._show_incomplete_duels)
+            row.addWidget(toggle)
+            filter_layout.addLayout(row)
 
-            table = QTableWidget(0, 11)
-            table.setHorizontalHeaderLabels(
-                (
-                    "開始日時",
-                    "デッキ名",
-                    "勝敗",
-                    "先後",
-                    "コイン",
-                    "対戦種別",
-                    "時間",
-                    "サイズ",
-                    "相手デッキ",
-                    "登録元",
-                    "状態",
-                )
+            self.history_date_row = QWidget()
+            dates = QHBoxLayout(self.history_date_row)
+            dates.setContentsMargins(0, 0, 0, 0)
+            dates.addWidget(QLabel("開始日"))
+            dates.addWidget(self._date_picker("history_date_from_picker"))
+            dates.addWidget(QLabel("終了日"))
+            dates.addWidget(self._date_picker("history_date_to_picker"))
+            dates.addStretch(1)
+            filter_layout.addWidget(self.history_date_row)
+            self.history_date_row.hide()
+            self.history_filter_details = QWidget()
+            details = QGridLayout(self.history_filter_details)
+            details.setContentsMargins(0, 0, 0, 0)
+            for i, (key, label) in enumerate((
+                ("history_saved_filter", "保存条件"), ("history_season_filter", "シーズン"),
+                ("history_tag_filter", "タグ"), ("history_coin_filter", "コイン"),
+                ("history_origin_filter", "登録元"),
+            )):
+                combo = self._register(key, QComboBox())
+                r, c = divmod(i, 3)
+                details.addWidget(QLabel(label), r, c * 2)
+                details.addWidget(combo, r, c * 2 + 1)
+                details.setColumnStretch(c * 2 + 1, 1)
+            filter_layout.addWidget(self.history_filter_details)
+            self.history_filter_details.hide()
+            details_button.toggled.connect(self._toggle_history_details)
+            self._populate_history_filter_choices()
+            for key in self._history_filter_keys():
+                widget = self.widgets[key]
+                if isinstance(widget, QComboBox):
+                    widget.activated.connect(self._apply_history_filters)
+                else:
+                    widget.editingFinished.connect(self._apply_history_filters)
+            period.currentTextChanged.connect(
+                lambda value: self.history_date_row.setVisible(value == "期間指定")
             )
+            summary = QHBoxLayout()
+            self.history_summary = QLabel("戦績一覧")
+            self.history_summary.setWordWrap(True)
+            summary.addWidget(self.history_summary, 1)
+            apply_button = self._button("history_filter_apply", "適用")
+            apply_button.clicked.connect(self._apply_history_filters)
+            clear = self._button("history_filter_clear", "条件をクリア")
+            clear.clicked.connect(self._clear_history_filters)
+            details.addWidget(apply_button, 1, 4, 1, 2)
+            summary.addWidget(clear)
+            filter_layout.addLayout(summary)
+            layout.addWidget(filters)
+            self.widgets["history_add"] = self.widgets["manual_duel_add"]
+
+            class HistoryTable(QTableWidget):
+                def mousePressEvent(table_self, event):
+                    index = table_self.indexAt(event.position().toPoint())
+                    if event.button() == Qt.MouseButton.LeftButton and index.isValid() and index.column() == 11:
+                        item = table_self.item(index.row(), 11)
+                        item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked)
+                        event.accept()
+                        return
+                    super().mousePressEvent(event)
+
+            table = HistoryTable(0, 12)
+            labels = ("開始日時", "デッキ名", "勝敗", "先後", "コイン", "対戦種別",
+                      "時間", "サイズ", "相手デッキ", "登録元", "状態", "選択")
+            table.setHorizontalHeaderLabels(labels)
             self._configure_table(
-                table,
-                column_widths=(148, 180, 72, 72, 72, 100, 82, 92, 180, 86, 92),
-                minimum_height=310,
+                table, column_widths=(132, None, 65, 60, 60, 82, 82, 92, 160, 86, 76, 42),
+                stretch_last=False, minimum_height=180,
             )
+            table.setShowGrid(False)
             table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-            table.horizontalHeader().moveSection(10, 1)
-            self._set_table_rows(
-                table,
-                (
-                    (
-                        "2026-08-19 21:40",
-                        "天威相剣",
-                        "勝利",
-                        "先攻",
-                        "表",
-                        "ランク戦",
-                        "08:12",
-                        "621MB",
-                        "スネークアイ",
-                        "録画",
-                    ),
-                    (
-                        "2026-08-19 22:03",
-                        "御巫",
-                        "敗北",
-                        "後攻",
-                        "裏",
-                        "ランク戦",
-                        "-",
-                        "-",
-                        "未設定",
-                        "手動",
-                    ),
-                ),
-            )
-            self._decorate_item_with_color(table.item(0, 1), "#2F6B5F")
-            self._decorate_item_with_color(table.item(1, 1), "#8E4F7A")
-            table.itemSelectionChanged.connect(self._update_history_action_states)
+            table.horizontalHeader().moveSection(table.horizontalHeader().visualIndex(11), 0)
+            for column, label in enumerate(labels[:-1]):
+                action = columns_menu.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(column not in {6, 7, 8, 9})
+                table.setColumnHidden(column, not action.isChecked())
+                action.toggled.connect(lambda checked, c=column: table.setColumnHidden(c, not checked))
+            table.itemSelectionChanged.connect(self._history_selection_changed)
+            table.itemChanged.connect(self._history_checkbox_changed)
+            table.cellDoubleClicked.connect(self._history_double_clicked)
             layout.addWidget(self._register("history_table", table), stretch=1)
+
+            self.history_editor = create_history_editor(self, self.service)
+            layout.addWidget(self.history_editor)
+            self.history_editor.hide()
+            self.history_editor.dirtyChanged.connect(self._update_history_action_states)
+            self.history_selection_bar = QFrame()
+            actions = QHBoxLayout(self.history_selection_bar)
+            actions.setContentsMargins(0, 0, 0, 0)
+            self.history_selection_label = QLabel()
+            actions.addWidget(self.history_selection_label)
+            for key, label in (("history_play", "再生"), ("history_bulk", "一括編集")):
+                button = self._button(key, label)
+                self._connect_history_button(key, button)
+                actions.addWidget(button)
+            other = self._button("history_selected_tools", "その他")
+            selected_menu = QMenu(other)
+            self._history_menu_button(selected_menu, "history_duel", "詳細・レビュー")
+            self._history_menu_button(selected_menu, "history_youtube", "YouTube")
+            selected_menu.addSeparator()
+            self._history_menu_button(selected_menu, "history_delete", "削除…")
+            other.setMenu(selected_menu)
+            actions.addWidget(other)
+            actions.addStretch(1)
+            save = self._button("history_save", "保存", "primary")
+            save.clicked.connect(self._save_history_editor)
+            actions.addWidget(save)
+            next_button = self._button("history_next", "次の未完了へ")
+            next_button.clicked.connect(self._next_incomplete_history)
+            actions.addWidget(next_button)
+            layout.addWidget(self.history_selection_bar)
+            self.history_selection_bar.hide()
+            self.history_style = QStyleFactory.create("Fusion")
+            self.history_style.setParent(layout.parentWidget())
+            for widget in layout.parentWidget().findChildren(QWidget):
+                widget.setStyle(self.history_style)
             self._update_history_action_states()
+
+        def _history_menu_button(self, menu, key, label):
+            # 既存操作のwidget識別子を維持し、メニューから同じ実処理を呼ぶ。
+            button = self._button(key, label)
+            button.setParent(self)
+            button.hide()
+            self._connect_history_button(key, button)
+            action = menu.addAction(label)
+            action.triggered.connect(button.click)
+            self.history_menu_actions[key] = action
+
+        def _toggle_history_details(self, checked):
+            self.history_filter_details.setVisible(checked)
+            self.widgets["history_filter_details"].setText("詳細条件 ▾" if checked else "詳細条件 ▸")
+
+        @staticmethod
+        def _history_filter_keys():
+            return ("history_period_mode", "history_date_from_picker", "history_date_to_picker",
+                    "history_saved_filter", "history_season_filter", "history_own_deck_filter",
+                    "history_tag_filter", "history_coin_filter", "history_origin_filter")
+
+        def _capture_history_filters(self):
+            return {key: ((self.widgets[key].currentData(), self.widgets[key].currentText()) if isinstance(self.widgets[key], QComboBox)
+                          else self.widgets[key].date()) for key in self._history_filter_keys()}
+
+        def _restore_history_filters(self):
+            if self.history_filter_snapshot is not None:
+                for key, value in self.history_filter_snapshot.items():
+                    widget = self.widgets[key]
+                    with QSignalBlocker(widget):
+                        if isinstance(widget, QComboBox):
+                            data, label = value
+                            index = next((i for i in range(widget.count())
+                                          if widget.itemData(i) == data and widget.itemText(i) == label), 0)
+                            widget.setCurrentIndex(index)
+                        else:
+                            widget.setDate(value)
+            self.widgets["history_incomplete"].setChecked(self.history_incomplete_only)
+            self.history_date_row.setVisible(self.widgets["history_period_mode"].currentText() == "期間指定")
+
+        def _allow_history_leave(self):
+            editor = getattr(self, "history_editor", None)
+            if editor is None or not editor.is_dirty():
+                return True
+            choice = QMessageBox.question(
+                self, "未保存の戦績", "戦績の変更を保存しますか？",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if choice == QMessageBox.StandardButton.Cancel:
+                return False
+            if choice == QMessageBox.StandardButton.Save:
+                if not editor.save():
+                    return False
+                old_id = editor.view.row_id
+                editor.view = replace(editor.view, duel_record=editor.record)
+                self.history_views_by_row_id[old_id] = editor.view
+                self.history_selection_ids = tuple(editor.view.row_id if i == old_id else i for i in self.history_selection_ids)
+                return True
+            editor.bind(editor.view)
+            return True
+
+        def _apply_history_filters(self, *_args):
+            if not self._allow_history_leave():
+                self._restore_history_filters()
+                return
+            self._refresh_history()
+
+        def _history_user_refresh(self):
+            if self._allow_history_leave():
+                self._refresh_history()
+
+        def _history_selection_changed(self):
+            if self.history_syncing:
+                return
+            views = self._selected_history_views()
+            ids = tuple(view.row_id for view in views)
+            if ids == self.history_selection_ids and self.history_editor.is_dirty():
+                self._restore_history_selection(ids)
+                return
+            if ids != self.history_selection_ids and not self._allow_history_leave():
+                self._restore_history_selection(self.history_selection_ids)
+                return
+            self.history_selection_ids = ids
+            self._sync_history_editor(views)
+
+        def _restore_history_selection(self, ids):
+            table = self.widgets["history_table"]
+            self.history_syncing = True
+            try:
+                table.clearSelection()
+                table.setCurrentCell(-1, -1)
+                selection = table.selectionModel()
+                for row in range(table.rowCount()):
+                    item = table.item(row, 0)
+                    chosen = item is not None and item.data(Qt.ItemDataRole.UserRole) in ids
+                    if chosen:
+                        selection.select(table.model().index(row, 0),
+                                         QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+                        selection.setCurrentIndex(table.model().index(row, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
+                    checkbox = table.item(row, 11)
+                    if checkbox is not None:
+                        checkbox.setCheckState(Qt.CheckState.Checked if chosen else Qt.CheckState.Unchecked)
+            finally:
+                self.history_syncing = False
+
+        def _sync_history_editor(self, views):
+            self._restore_history_selection(self.history_selection_ids)
+            try:
+                self.history_editor.bind(views[0] if len(views) == 1 else None)
+            except Exception as exc:
+                self.history_editor.bind(None)
+                self._show_warning("戦績編集を開けません", str(exc))
+            self._update_history_action_states()
+
+        def _history_checkbox_changed(self, item):
+            if self.history_syncing or item.column() != 11:
+                return
+            ids = list(self.history_selection_ids)
+            row_id = self.widgets["history_table"].item(item.row(), 0).data(Qt.ItemDataRole.UserRole)
+            if item.checkState() == Qt.CheckState.Checked and row_id not in ids:
+                ids.append(row_id)
+            elif item.checkState() == Qt.CheckState.Unchecked and row_id in ids:
+                ids.remove(row_id)
+            self._restore_history_selection(ids)
+            self._history_selection_changed()
+
+        def _history_double_clicked(self, _row, _column):
+            if self.ui_preferences.history_double_click_action == "play":
+                self._play_selected_history()
+            elif self.history_editor.view is not None:
+                self.history_editor.fields["own_deck"].setFocus()
+
+        def _save_history_editor(self):
+            if self.history_editor.save():
+                self._refresh_history()
+                self.history_summary.setText(self.history_summary.text() + " / 保存しました")
+
+        def _next_incomplete_history(self):
+            current = self.history_editor.view
+            if not self._allow_history_leave():
+                return
+            if not self._refresh_history():
+                return
+            views = list(self.history_views_by_row_id.values())
+            incomplete = [v for v in views if v.duel_record is None or v.duel_record.values.status != "confirmed"]
+            candidates = [v for v in incomplete if current is None or v.row_id != current.row_id]
+            if not candidates:
+                self.history_summary.setText("現在の条件に、次の未完了戦績はありません")
+                return
+            current_index = next((i for i, view in enumerate(views)
+                                  if current is not None and view.row_id == current.row_id), None)
+            if current_index is not None:
+                # 同じ開始日時が複数あっても、一覧順で全候補を巡回する。
+                ordered = views[current_index + 1:] + views[:current_index]
+                candidate_ids = {view.row_id for view in candidates}
+                target = next(view for view in ordered if view.row_id in candidate_ids)
+            else:
+                following = [v for v in candidates if current is None or v.occurred_at <= current.occurred_at]
+                target = (following or candidates)[0]
+            self._restore_history_selection((target.row_id,))
+            self._history_selection_changed()
+            self.widgets["history_table"].scrollToItem(
+                self.widgets["history_table"].item(self.widgets["history_table"].currentRow(), 0))
 
         def _statistics_page(self, layout: QVBoxLayout) -> None:
             summary = self._register("statistics_summary", QFrame())
@@ -3349,20 +3573,12 @@ def _run(args: argparse.Namespace) -> int:
             )
 
         def _clear_history_filters(self) -> None:
+            if not self._allow_history_leave():
+                return
             self.history_incomplete_only = False
-            self.widgets["history_incomplete"].setText("未完了処理")
-            period = self.widgets.get("history_period_mode")
-            if isinstance(period, QComboBox):
-                period.setCurrentText("すべて")
-            for key in (
-                "history_saved_filter",
-                "history_season_filter",
-                "history_own_deck_filter",
-                "history_tag_filter",
-                "history_coin_filter",
-                "history_origin_filter",
-            ):
-                combo = self.widgets.get(key)
+            self.widgets["history_incomplete"].setChecked(False)
+            for key in self._history_filter_keys():
+                combo = self.widgets[key]
                 if isinstance(combo, QComboBox):
                     combo.setCurrentIndex(0)
             self._refresh_history()
@@ -3390,8 +3606,6 @@ def _run(args: argparse.Namespace) -> int:
                 if selection is not None
                 else set()
             )
-            if not rows and table.currentRow() >= 0:
-                rows = [table.currentRow()]
             views: list[object] = []
             for row in rows:
                 item = table.item(row, 0)
@@ -3403,25 +3617,33 @@ def _run(args: argparse.Namespace) -> int:
             return tuple(views)
 
         def _update_history_action_states(self) -> None:
-            selected = self._selected_history_view()
-            has_selection = selected is not None
-            has_recording = bool(getattr(selected, "recording_id", None))
-            write_blocked = self.service.duel_write_block_reason() is not None
-            button_states = {
-                "history_play": has_recording,
-                "history_duel": has_selection,
-                "history_delete": has_selection and not write_blocked,
-                "history_youtube": has_recording,
+            views = self._selected_history_views()
+            single = len(views) == 1
+            has_recording = single and bool(views[0].recording_id)
+            blocked = self.service.duel_write_block_reason() is not None
+            states = {
+                "history_play": has_recording, "history_duel": single,
+                "history_delete": single and not blocked, "history_youtube": has_recording,
+                "history_bulk": len(views) > 1 and not blocked,
+                "history_save": single and not blocked and self.history_editor.view is not None,
+                "history_next": single,
             }
-            for key, enabled in button_states.items():
-                button = self.widgets.get(key)
-                if isinstance(button, QPushButton):
-                    button.setEnabled(enabled)
+            for key, enabled in states.items():
+                self.widgets[key].setEnabled(enabled)
+                if key in self.history_menu_actions:
+                    self.history_menu_actions[key].setEnabled(enabled)
+            self.history_selection_bar.setVisible(bool(views))
+            self.history_selection_label.setText(f"{len(views)}件選択")
+            self.widgets["history_bulk"].setVisible(len(views) > 1)
+            for key in ("history_play", "history_selected_tools", "history_save", "history_next"):
+                self.widgets[key].setVisible(single)
 
         def _show_incomplete_duels(self) -> None:
-            self._clear_history_filters()
-            self.history_incomplete_only = True
-            self.widgets["history_incomplete"].setText("未完了のみ表示中")
+            if not self._allow_history_leave():
+                self.widgets["history_incomplete"].setChecked(self.history_incomplete_only)
+                return
+            self.history_incomplete_only = not self.history_incomplete_only
+            self.widgets["history_incomplete"].setChecked(self.history_incomplete_only)
             self._refresh_history()
 
         def _show_bulk_duel_editor(self) -> None:
@@ -3605,6 +3827,8 @@ def _run(args: argparse.Namespace) -> int:
             dialog.exec()
 
         def _show_manual_duel_entry(self) -> None:
+            if not self._allow_history_leave():
+                return
             block_reason = self.service.duel_write_block_reason()
             if block_reason is not None:
                 self._show_warning("手動戦績を追加できません", block_reason)
@@ -3630,6 +3854,8 @@ def _run(args: argparse.Namespace) -> int:
             )
 
         def _play_selected_history(self) -> None:
+            if not self._allow_history_leave():
+                return
             selected = self._selected_history_view()
             recording_id = getattr(selected, "recording_id", None)
             if not recording_id:
@@ -3675,6 +3901,8 @@ def _run(args: argparse.Namespace) -> int:
                 self.review_windows.remove(window)
 
         def _show_selected_duel_editor(self) -> None:
+            if not self._allow_history_leave():
+                return
             selected = self._selected_history_view()
             if selected is None:
                 self._show_information("戦績編集", "編集する行を選択してください。")
@@ -3918,6 +4146,8 @@ def _run(args: argparse.Namespace) -> int:
             dialog.exec()
 
         def _delete_selected_history(self) -> None:
+            if not self._allow_history_leave():
+                return
             selected = self._selected_history_view()
             if selected is None:
                 self._show_information("削除", "削除する行を選択してください。")
@@ -4067,32 +4297,73 @@ def _run(args: argparse.Namespace) -> int:
                 button.setEnabled(not busy)
             self._append_activity(message)
 
-        def _refresh_history(self) -> None:
-            query = replace(self._history_query(), incomplete_only=self.history_incomplete_only)
-            dashboard = self.service.get_history_dashboard(query=query)
+        def _refresh_history(self) -> bool:
+            if self.history_editor.is_dirty():
+                self.history_summary.setText("一覧の更新があります。編集中の内容を保存または破棄してから更新してください")
+                return False
+            try:
+                query = replace(self._history_query(), incomplete_only=self.history_incomplete_only)
+                if query.occurred_from and query.occurred_to and query.occurred_from > query.occurred_to:
+                    raise ValueError("開始日は終了日以前にしてください")
+                dashboard = self.service.get_history_dashboard(query=query)
+            except Exception as exc:
+                if hasattr(self, "history_applied_query"):
+                    self.history_incomplete_only = self.history_applied_query.incomplete_only
+                self._restore_history_filters()
+                self.history_summary.setText(f"条件を適用できません: {exc}")
+                return False
             table = self.widgets["history_table"]
-            assert isinstance(table, QTableWidget)
-            rows = []
-            deck_colors = []
-            self.history_views_by_row_id = {view.row_id: view for view in dashboard.views}
-            views = dashboard.views
-            for view in views:
-                deck_colors.append(view.own_deck_color)
-                status = duel_choice_label("status", view.duel_record.values.status) if view.duel_record else "未作成"
-                rows.append((*history_table_display_row(view), status))
-            self._set_table_rows(table, rows)
-            for row_index, view in enumerate(views):
-                item = table.item(row_index, 0)
-                if item is not None:
-                    item.setData(Qt.ItemDataRole.UserRole, view.row_id)
-            for row_index, color in enumerate(deck_colors):
-                self._decorate_item_with_color(table.item(row_index, 1), color)
-            incomplete = self.widgets["incomplete_duel_count"]
-            assert isinstance(incomplete, QLabel)
-            incomplete.setText(
-                f"戦績管理 未完了 {dashboard.incomplete_duel_record_count}件"
-            )
-            self._update_history_action_states()
+            scroll = table.verticalScrollBar().value()
+            horizontal = table.horizontalScrollBar().value()
+            selected_ids = self.history_selection_ids
+            if self.history_editor.view is not None and self.history_editor.record is not None:
+                selected_ids = tuple(
+                    self.history_editor.record.duel_id if i == self.history_editor.view.row_id else i
+                    for i in selected_ids
+                )
+            self.history_syncing = True
+            try:
+                self.history_views_by_row_id = {view.row_id: view for view in dashboard.views}
+                rows = []
+                for view in dashboard.views:
+                    status = duel_choice_label("status", view.duel_record.values.status) if view.duel_record else "未作成"
+                    rows.append((*history_table_display_row(view), status, ""))
+                self._set_table_rows(table, rows)
+                for row, view in enumerate(dashboard.views):
+                    table.item(row, 0).setData(Qt.ItemDataRole.UserRole, view.row_id)
+                    self._decorate_item_with_color(table.item(row, 1), view.own_deck_color)
+                    checkbox = table.item(row, 11)
+                    checkbox.setFlags(checkbox.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    checkbox.setCheckState(Qt.CheckState.Unchecked)
+                self.history_selection_ids = tuple(i for i in selected_ids if i in self.history_views_by_row_id)
+            finally:
+                self.history_syncing = False
+            self._restore_history_selection(self.history_selection_ids)
+            self._sync_history_editor(self._selected_history_views())
+            table.verticalScrollBar().setValue(scroll)
+            table.horizontalScrollBar().setValue(horizontal)
+            self.widgets["incomplete_duel_count"].setText(
+                f"戦績管理 未完了 {dashboard.incomplete_duel_record_count}件")
+            self.history_filter_snapshot = self._capture_history_filters()
+            self.history_applied_query = query
+            labels = []
+            for key in self._history_filter_keys():
+                widget = self.widgets[key]
+                if isinstance(widget, QComboBox) and widget.currentIndex() > 0:
+                    labels.append(widget.currentText())
+            if query.occurred_from:
+                labels.append(f"{query.occurred_from}～{query.occurred_to}")
+            saved = self.widgets["history_saved_filter"].currentData() is not None
+            for key in ("history_season_filter", "history_own_deck_filter", "history_tag_filter",
+                        "history_coin_filter", "history_origin_filter"):
+                self.widgets[key].setEnabled(not saved)
+            title = "未完了の戦績" if self.history_incomplete_only else "戦績一覧"
+            count = len(dashboard.views)
+            self.history_summary.setText(
+                f"{title} {count}件" + ("（最大200件）" if count == 200 else "")
+                + (" / " + "・".join(labels) if labels else "")
+                + (" / 条件に一致する戦績はありません" if not count else ""))
+            return True
 
         def _refresh_catalogs(self) -> None:
             deck_table = self.widgets["deck_catalog_table"]

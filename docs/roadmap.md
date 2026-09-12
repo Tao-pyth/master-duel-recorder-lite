@@ -2,6 +2,15 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.12: 戦績管理の上下配置と下部編集
+
+状態: 実装。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.12)、Issue #642〜#644、Milestone V2.7.12。
+
+- 3案目の上部絞り込み・全幅一覧・下部編集へ再構成する
+- 未完了トグルの再解除、全条件保持、未保存保護、次の未完了への移動を実装する
+- 全既存項目の保存、一括編集、再生/レビュー等の既存操作へ到達できる
+- [操作/設計](architecture/pyside-history-redesign.md)、[Release Contract](release-contracts/2.7.12.md)で追跡する
+
 ## V2.7.11: シーズンレポートの詳細閲覧とHTML保存
 
 状態: 実装。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.11)、Issue #641、Milestone V2.7.11。
