@@ -423,6 +423,11 @@ def create_catalog_page(owner, key):
             self.baseline = None
             self.load()
             owner._append_activity(f"{saved.name}を保存しました")
+            if key != "seasons":
+                try:
+                    owner._refresh_catalog_choices()
+                except Exception as exc:
+                    owner._show_warning("保存済み・候補更新に失敗", str(exc))
             if key == "seasons":
                 owner._refresh_active_seasons()
             return True

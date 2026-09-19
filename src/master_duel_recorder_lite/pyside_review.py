@@ -212,6 +212,7 @@ def create_review_window(
     parent: object | None = None,
     initial_tab: str = "marker",
     on_duel_saved: DuelSavedCallback | None = None,
+    on_closed: Callable[[object], None] | None = None,
 ) -> object:
     try:
         from PySide6.QtCore import QSize, QUrl
@@ -249,7 +250,19 @@ def create_review_window(
             f"{model.video.suffix or '不明な形式'}はアプリ内再生対象外です。"
         )
 
-    window = QMainWindow(parent)
+    class ReviewWindow(QMainWindow):
+        def closeEvent(self, event) -> None:
+            # stopだけでは動画ファイルが開いたままになるためsourceも解除する。
+            self.player.stop()
+            self.player.setSource(QUrl())
+            self.player.setVideoOutput(None)
+            self.player.setAudioOutput(None)
+            if on_closed is not None:
+                on_closed(self)
+            super().closeEvent(event)
+
+    window = ReviewWindow(parent)
+    window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
     window.setObjectName("review_window")
     window.setWindowTitle(f"Master Duel Recorder Lite Review - {recording_id}")
     window.setStyleSheet(_review_style_sheet())
@@ -272,8 +285,9 @@ def create_review_window(
     video.setMaximumHeight(420)
     layout.addWidget(video, stretch=1)
 
-    player = QMediaPlayer()
-    audio = QAudioOutput()
+    player = QMediaPlayer(window)
+    window.player = player
+    audio = QAudioOutput(window)
     player.setAudioOutput(audio)
     player.setVideoOutput(video)
     player.setSource(QUrl.fromLocalFile(str(model.video.path)))

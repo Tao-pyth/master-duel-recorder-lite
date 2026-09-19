@@ -1125,6 +1125,7 @@ def _run(args: argparse.Namespace) -> int:
             self.widgets: dict[str, QWidget] = {}
             self.nav_buttons: dict[str, QPushButton] = {}
             self.review_windows: list[QWidget] = []
+            self.history_revision = 0
             self.available_update: UpdateRelease | None = None
             self.history_views_by_row_id: dict[str, object] = {}
             self.catalog_pages = {}
@@ -1196,6 +1197,8 @@ def _run(args: argparse.Namespace) -> int:
                     event.ignore()
                     return
             self.record_state_timer.stop()
+            for review in tuple(self.review_windows):
+                review.close()
             self.background_timer.stop()
             self.background_executor.shutdown(wait=False, cancel_futures=True)
             super().closeEvent(event)
@@ -3015,6 +3018,8 @@ def _run(args: argparse.Namespace) -> int:
             self._set_button_state("record_start", state.start_enabled)
             self._set_button_state("record_stop", state.stop_enabled)
             self._set_button_state("watch_toggle", state.watch_enabled, text=state.watch_text)
+            if self.load_runtime_data and self.service.recording_history_revision != self.history_revision:
+                self._refresh_history()
 
         def _set_label_text(self, key: str, text: str) -> None:
             label = self.widgets.get(key)
@@ -3298,6 +3303,7 @@ def _run(args: argparse.Namespace) -> int:
             assert isinstance(tag_filter, QComboBox)
             assert isinstance(coin_filter, QComboBox)
             assert isinstance(origin_filter, QComboBox)
+            blockers = [QSignalBlocker(combo) for combo in combos]
 
             selected = {
                 key: combo.currentData()
@@ -3362,13 +3368,13 @@ def _run(args: argparse.Namespace) -> int:
             for value in ("recording", "manual", "import"):
                 origin_filter.addItem(history_entry_origin_label(value), value)
             self._restore_combo_data(origin_filter, selected["origin"])
+            del blockers
 
         @staticmethod
         def _reset_combo(combo: QComboBox, label: str, data: object | None) -> None:
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItem(label, data)
-            combo.blockSignals(False)
+            with QSignalBlocker(combo):
+                combo.clear()
+                combo.addItem(label, data)
 
         @staticmethod
         def _restore_combo_data(combo: QComboBox, data: object | None) -> None:
@@ -3739,6 +3745,7 @@ def _run(args: argparse.Namespace) -> int:
                     recording_id=recording_id,
                     parent=self,
                     on_duel_saved=self._refresh_history,
+                    on_closed=self._forget_review_window,
                 )
             except PySideReviewError as exc:
                 self._fallback_to_external_player(recording_id, reason=str(exc))
@@ -3748,9 +3755,6 @@ def _run(args: argparse.Namespace) -> int:
                 self._append_activity("レビュー画面の起動に失敗しました")
                 return
             self.review_windows.append(review_window)
-            review_window.destroyed.connect(
-                lambda _object=None, window=review_window: self._forget_review_window(window)
-            )
             review_window.show()
             self._append_activity(f"レビュー画面を開きました: {recording_id}")
 
@@ -3800,6 +3804,7 @@ def _run(args: argparse.Namespace) -> int:
                         parent=self,
                         initial_tab="duel",
                         on_duel_saved=self._refresh_history,
+                        on_closed=self._forget_review_window,
                     )
                 except PySideReviewError:
                     pass
@@ -3807,9 +3812,6 @@ def _run(args: argparse.Namespace) -> int:
                     self._show_warning("レビュー画面を開けません", str(exc))
                 else:
                     self.review_windows.append(review_window)
-                    review_window.destroyed.connect(
-                        lambda _object=None, window=review_window: self._forget_review_window(window)
-                    )
                     review_window.show()
                     self._append_activity(f"レビュー画面の戦績入力を開きました: {recording_id}")
                     return
@@ -4172,6 +4174,7 @@ def _run(args: argparse.Namespace) -> int:
                 self.history_summary.setText("一覧の更新があります。編集中の内容を保存または破棄してから更新してください")
                 return False
             try:
+                revision = self.service.recording_history_revision
                 query = replace(self._history_query(), incomplete_only=self.history_incomplete_only)
                 if query.occurred_from and query.occurred_to and query.occurred_from > query.occurred_to:
                     raise ValueError("開始日は終了日以前にしてください")
@@ -4216,6 +4219,7 @@ def _run(args: argparse.Namespace) -> int:
                 f"戦績管理 未完了 {dashboard.incomplete_duel_record_count}件")
             self.history_filter_snapshot = self._capture_history_filters()
             self.history_applied_query = query
+            self.history_revision = revision
             labels = []
             for key in self._history_filter_keys():
                 widget = self.widgets[key]
@@ -4238,6 +4242,19 @@ def _run(args: argparse.Namespace) -> int:
         def _refresh_catalogs(self) -> None:
             for key in ("decks", "tags"):
                 self.catalog_pages[key].load()
+
+        def _refresh_catalog_choices(self) -> None:
+            """候補だけ差し替え、選択中の条件と未保存の自由入力を維持する。"""
+            self._populate_history_filter_choices()
+            decks = self.service.list_decks()
+            combos = [self.widgets["watch_default_own_deck"]]
+            combos.extend(self.history_editor.fields[key] for key in ("own_deck", "opponent_deck"))
+            for combo in combos:
+                text = combo.currentText()
+                with QSignalBlocker(combo):
+                    combo.clear()
+                    combo.addItems([deck.name for deck in decks])
+                    combo.setCurrentText(text)
 
         def _refresh_seasons(self) -> None:
             self.catalog_pages["seasons"].load()

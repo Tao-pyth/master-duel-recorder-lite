@@ -1487,6 +1487,7 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         )
         controller.start_from_boundary.assert_called_once_with(observation, boundary)
         self.assertEqual(controller.manual_stop.call_count, 2)
+        self.assertGreaterEqual(service.recording_history_revision, 2)
         diagnostics.transition.assert_any_call(
             "boundary_handoff_started",
             elapsed_ms=0,

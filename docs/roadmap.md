@@ -2,6 +2,15 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.15: 一覧同期とレビュー終了時の録画ファイル解放
+
+状態: 実装・ローカル検証完了、正式公開待ち。公開完了はRelease、Issue #649〜#651、Milestone V2.7.15で確認する。
+
+- 録画完了後の履歴更新と、未保存編集の保護・保留解除
+- デッキ・タグ保存後の管理一覧・関連候補同期
+- レビューcloseとメイン終了時の動画解放、録画付き戦績削除の回帰確認
+- [設計](architecture/gui-refresh-and-review-lifecycle.md)、[Release Contract](release-contracts/2.7.15.md)
+
 ## V2.7.12: 戦績管理の上下配置と下部編集
 
 状態: 実装。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.12)、Issue #642〜#644、Milestone V2.7.12。

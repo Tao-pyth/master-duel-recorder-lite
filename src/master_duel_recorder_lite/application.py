@@ -398,6 +398,13 @@ class RecorderApplicationService:
         )
         self._operation_state = OperationStateMachine()
         self._notifications = WindowsNotificationService()
+        self._recording_history_revision = 0
+
+    @property
+    def recording_history_revision(self) -> int:
+        """録画完了をGUIのポーリング間隔に関係なく伝える。"""
+        with self._lock:
+            return self._recording_history_revision
 
     def operation_snapshot(self) -> OperationSnapshot:
         return self._operation_state.snapshot
@@ -736,6 +743,7 @@ class RecorderApplicationService:
                 self._visual_status = prepared.visual_detection_status
                 prepared.release()
                 self._current = None
+                self._recording_history_revision += 1
                 self._transition_operation(
                     OperationState.IDLE
                     if result is not None and result.state is not RecordingState.FAILED
@@ -2322,6 +2330,7 @@ class RecorderApplicationService:
         self._visual_status = self._current.visual_detection_status
         self._current.release()
         self._current = None
+        self._recording_history_revision += 1
         current = self._operation_state.snapshot.state
         if state is RecordingState.FAILED:
             if current in {
@@ -2426,8 +2435,10 @@ class RecorderApplicationService:
             preparation_service=self._upload_preparation_service(),
         )
 
-    @staticmethod
-    def _emit(callback: EventCallback | None, event: ApplicationEvent) -> None:
+    def _emit(self, callback: EventCallback | None, event: ApplicationEvent) -> None:
+        if event.recording_id and event.kind in {"stopped", "error"}:
+            with self._lock:
+                self._recording_history_revision += 1
         if callback is not None:
             callback(event)
 
