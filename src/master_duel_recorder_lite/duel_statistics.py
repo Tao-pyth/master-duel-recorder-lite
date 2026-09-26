@@ -8,6 +8,7 @@ from pathlib import Path
 import unicodedata
 
 from .history_database import HISTORY_DATABASE_NAME, connect_history_database
+from .duel_records import DUEL_CHOICE_LABELS, DUEL_TYPES
 from .runtime_paths import RuntimePaths
 
 
@@ -27,8 +28,11 @@ class StatisticsFilter:
     season_id: int | None = None
     season_unassigned: bool = False
     result: str | None = None
+    duel_type: str | None = None
 
     def __post_init__(self) -> None:
+        if self.duel_type is not None and self.duel_type not in DUEL_TYPES:
+            raise ValueError(f"未対応の対戦種別です: {self.duel_type}")
         if self.result is not None and self.result not in {"win", "loss", "draw", "unknown"}:
             raise ValueError(f"未対応の勝敗条件です: {self.result}")
         if self.date_from is not None and not isinstance(self.date_from, date):
@@ -105,6 +109,7 @@ class StatisticsDashboard:
     trend: tuple[StatisticsTrendPoint, ...]
     filters: StatisticsFilter
     granularity: str
+    by_duel_type: tuple[StatisticsBreakdown, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -116,6 +121,7 @@ class _StatisticsRow:
     own_deck: str
     own_deck_id: int | None
     season_id: int | None
+    duel_type: str = "other"
 
 
 StatisticsRow = _StatisticsRow
@@ -156,6 +162,7 @@ class DuelStatisticsRepository:
             by_deck_play_order=_breakdown_by_deck_play_order(filtered_rows),
             by_coin_face=_breakdown_by_coin_face(filtered_rows),
             by_season=_breakdown_by_season(filtered_rows, season_labels),
+            by_duel_type=_breakdown_by_choice(filtered_rows, "duel_type", DUEL_CHOICE_LABELS["duel_type"]),
             trend=_trend(filtered_rows, selected, granularity),
             filters=selected,
             granularity=granularity,
@@ -163,7 +170,10 @@ class DuelStatisticsRepository:
 
     def _season_labels(self) -> dict[int, str]:
         with closing(connect_history_database(self.database_path)) as connection:
-            rows = connection.execute("SELECT season_id, name FROM seasons").fetchall()
+            # 管理画面と同じ開催順を保ち、アーカイブ済みも集計対象に含める。
+            rows = connection.execute(
+                "SELECT season_id, name FROM seasons ORDER BY start_date DESC, season_id DESC"
+            ).fetchall()
         return {int(row["season_id"]): str(row["name"]) for row in rows}
 
     def rows(
@@ -198,7 +208,8 @@ class DuelStatisticsRepository:
                     duel.coin_face,
                     duel.own_deck,
                     duel.own_deck_id,
-                    duel.season_id
+                    duel.season_id,
+                    duel.duel_type
                 FROM duel_records AS duel
                 LEFT JOIN recordings AS recording
                     ON recording.recording_id = duel.recording_id
@@ -227,12 +238,15 @@ class DuelStatisticsRepository:
                 own_deck=str(row["own_deck"]),
                 own_deck_id=row["own_deck_id"],
                 season_id=row["season_id"],
+                duel_type=str(row["duel_type"]),
             )
             for row in rows
         )
 
 
 def _matches(row: _StatisticsRow, filters: StatisticsFilter) -> bool:
+    if filters.duel_type is not None and row.duel_type != filters.duel_type:
+        return False
     if filters.result is not None and row.result != filters.result:
         return False
     local_date = statistics_local_date(row.occurred_at)
@@ -331,9 +345,10 @@ def _breakdown_by_season(
     grouped: dict[int | None, list[_StatisticsRow]] = defaultdict(list)
     for row in rows:
         grouped[row.season_id].append(row)
+    season_order = {key: index for index, key in enumerate(labels)}
     ordered = sorted(
         grouped,
-        key=lambda key: (key is None, labels.get(key, "シーズン未設定").casefold()),
+        key=lambda key: (key is None, season_order.get(key, len(labels)), key or 0),
     )
     return tuple(
         StatisticsBreakdown(

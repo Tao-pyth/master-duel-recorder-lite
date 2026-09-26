@@ -1,6 +1,6 @@
 """通常GUIの値・操作・表示領域を隔離DBと実widgetで照合する。"""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import importlib.util
 import os
 from pathlib import Path
@@ -11,6 +11,7 @@ from unittest.mock import patch
 from master_duel_recorder_lite.application import RecorderApplicationService, DuelManagementQuery
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.duel_statistics import StatisticsFilter
+from master_duel_recorder_lite.seasons import SeasonRepository
 
 
 class AuditStatisticsTest(unittest.TestCase):
@@ -34,6 +35,86 @@ class AuditStatisticsTest(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec("PySide6"), "PySide6 is optional")
 class AuditWidgetTest(unittest.TestCase):
+    def test_statistics_duel_type_selection_all_tabs_and_season_order(self):
+        from PySide6.QtCore import QDate
+        from PySide6.QtWidgets import QApplication, QMainWindow
+        from master_duel_recorder_lite import pyside_gui
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            service = RecorderApplicationService(project_root=root, user_data_dir=root / "data")
+            seasons = SeasonRepository.from_runtime_paths(service.paths)
+            old = seasons.add(name="A 前シーズン", season_type="ranked", duel_type="ranked",
+                              start_date=date(2026, 8, 1), end_date=date(2026, 8, 31))
+            new = seasons.add(name="Z 今シーズン", season_type="ranked", duel_type="ranked",
+                              start_date=date(2026, 9, 1), end_date=date(2026, 9, 30))
+            for kind, result, day, season_id in (
+                ("ranked", "win", 1, old.season_id),
+                ("ranked", "loss", 2, new.season_id),
+                ("event", "win", 2, None),
+                ("room", "draw", 2, None),
+                ("solo", "loss", 2, None),
+                ("other", "loss", 2, None),
+            ):
+                service.create_manual_duel_record(
+                    DuelRecordValues(status="confirmed", result=result, duel_type=kind,
+                                     own_deck="青眼", play_order="first", season_id=season_id),
+                    occurred_at=datetime(2026, 9, day, 12, tzinfo=timezone.utc),
+                )
+
+            def inspect(_app):
+                app = QApplication.instance()
+                window = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
+                try:
+                    window.show_page("statistics")
+                    widgets = window.widgets
+                    selector = widgets["statistics_filters"]
+                    self.assertEqual([selector.itemText(i) for i in range(selector.count())],
+                                     ["すべての対戦種別", "ランク戦", "イベント", "ルーム戦", "ソロモード", "その他"])
+                    types = widgets["statistics_duel_type_table"]
+                    self.assertEqual(types.rowCount(), 5)
+                    self.assertEqual([types.item(0, col).text() for col in range(4)], ["ランク戦", "2", "1", "50.0%"])
+                    season_table = widgets["statistics_season_table"]
+                    self.assertEqual([season_table.item(i, 0).text() for i in range(3)],
+                                     ["Z 今シーズン", "A 前シーズン", "シーズン未設定"])
+                    tabs = widgets["statistics_tab_panel"]
+                    capture = os.environ.get("MDRL_STATISTICS_CAPTURE_DIR")
+                    for title in ("対戦種別別", "シーズン別"):
+                        tabs.setCurrentIndex(next(i for i in range(tabs.count()) if tabs.tabText(i) == title))
+                        app.processEvents()
+                        if capture:
+                            self.assertTrue(window.grab().save(str(Path(capture) / f"{title}.png")))
+                    selector.setCurrentIndex(selector.findData("ranked"))
+                    self.assertEqual(window.statistics_cards[0][1].text(), "2勝 / 6戦")
+                    self.assertEqual(window.statistics_cards[1][0].text(), "50.0%")
+                    for key in ("statistics_deck_table", "statistics_order_table", "statistics_coin_table",
+                                "statistics_duel_type_table", "statistics_season_table", "statistics_trend_table"):
+                        table = widgets[key]
+                        self.assertEqual(sum(int(table.item(i, 1).text()) for i in range(table.rowCount())), 2, key)
+                    widgets["statistics_date_from_picker"].setDate(QDate(2026, 9, 2))
+                    widgets["statistics_date_to_picker"].setDate(QDate(2026, 9, 2))
+                    widgets["statistics_period_enabled"].setChecked(True)
+                    self.assertEqual(window.statistics_cards[1][1].text(), "0勝 / 1戦")
+                    self.assertEqual(types.rowCount(), 1)
+                    self.assertEqual(types.item(0, 1).text(), "1")
+                    self.assertEqual(season_table.item(0, 0).text(), "Z 今シーズン")
+                    widgets["statistics_date_to_picker"].setDate(QDate(2030, 1, 1))
+                    widgets["statistics_date_from_picker"].setDate(QDate(2030, 1, 1))
+                    self.assertEqual(types.rowCount(), 0)
+                    self.assertEqual(season_table.rowCount(), 0)
+                    self.assertEqual(len(widgets["statistics_chart"].points), 0)
+                    selector.setCurrentIndex(0)
+                    widgets["statistics_period_enabled"].setChecked(False)
+                    self.assertEqual(types.rowCount(), 5)
+                    self.assertEqual(window.statistics_cards[1][1].text(), "2勝 / 6戦")
+                finally:
+                    window.close()
+                return 0
+
+            platform = os.environ.get("MDRL_TEST_QPA", "offscreen")
+            with patch.dict(os.environ, {"QT_QPA_PLATFORM": platform}), patch.object(QApplication, "exec", inspect):
+                self.assertEqual(pyside_gui.main(["--project-root", str(root), "--user-data-dir", str(root / "data")]), 0)
+
     def test_statistics_deck_play_order_rows_and_filters(self):
         from PySide6.QtCore import QDate
         from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
@@ -53,7 +134,8 @@ class AuditWidgetTest(unittest.TestCase):
             )
             for deck, order, result, day, status in fixtures:
                 service.create_manual_duel_record(
-                    DuelRecordValues(own_deck=deck, play_order=order, result=result, status=status),
+                    DuelRecordValues(own_deck=deck, play_order=order, result=result, status=status,
+                                     duel_type="ranked" if result == "loss" else "event"),
                     occurred_at=datetime(2026, 9, day, 12, tzinfo=timezone.utc),
                 )
 
@@ -89,7 +171,7 @@ class AuditWidgetTest(unittest.TestCase):
                     capture = os.environ.get("MDRL_STATISTICS_CAPTURE")
                     if capture:
                         self.assertTrue(window.grab().save(capture))
-                    widgets["statistics_filters"].setCurrentIndex(2)
+                    widgets["statistics_filters"].setCurrentIndex(widgets["statistics_filters"].findData("ranked"))
                     self.assertEqual(rows(), {
                         "青眼 先攻時": ("1", "0", "0.0%"),
                         "青眼 後攻時": ("1", "0", "0.0%"),
@@ -125,6 +207,7 @@ class AuditWidgetTest(unittest.TestCase):
                 service.create_manual_duel_record(
                     DuelRecordValues(status="confirmed" if index < 10 else "draft",
                                      result="win" if index < 8 else "loss",
+                                     duel_type="ranked" if index < 8 else "event",
                                      play_order="first" if index % 2 else "second"),
                     occurred_at=datetime(2026, 9, 1 + index // 2, tzinfo=timezone.utc),
                 )

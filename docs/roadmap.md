@@ -2,6 +2,14 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.19: 統計の開催日順・対戦種別・絞り込み改善
+
+状態: 実装。公開と配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.19)、Issue #656/#657、Milestone V2.7.19。
+
+- シーズンを開催開始日の新しい順に統一し、未設定は末尾へ。
+- 対戦種別別集計と絞り込みで、期間・種別ごとの勝率を比較する。
+- [操作と変更](releases/2.7.19.md)、[Release Contract](release-contracts/2.7.19.md)。
+
 ## V2.7.18: デッキ別先攻後攻の表示修正
 
 状態: 実装。公開と配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.18)、Issue #655、Milestone V2.7.18。

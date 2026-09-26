@@ -14,7 +14,7 @@ from . import __version__
 from .app_update import AppUpdateService, UpdateRelease, launch_update_after_exit
 from .application import DuelManagementQuery, RecorderApplicationService
 from .config_management import config_values
-from .duel_records import DuelRecordValues, duel_choice_label
+from .duel_records import DUEL_CHOICE_LABELS, DuelRecordValues, duel_choice_label
 from .duel_statistics import StatisticsFilter
 from .duel_workflow import BulkDuelUpdate
 from .gui_feature_parity import (
@@ -2173,7 +2173,7 @@ def _run(args: argparse.Namespace) -> int:
                 summary_layout.addWidget(card)
             layout.addWidget(summary)
 
-            filters = QGroupBox("条件")
+            filters = QGroupBox("集計対象")
             grid = QGridLayout(filters)
             period = self._register("statistics_period_enabled", QCheckBox("期間を指定"))
             grid.addWidget(period, 1, 0, 1, 2)
@@ -2183,8 +2183,11 @@ def _run(args: argparse.Namespace) -> int:
             grid.addWidget(self._date_picker("statistics_date_to_picker"), 0, 3)
             filter_box = self._register("statistics_filters", QComboBox())
             assert isinstance(filter_box, QComboBox)
-            filter_box.addItems(("すべて", "勝利のみ", "敗北のみ"))
-            grid.addWidget(QLabel("条件"), 0, 4)
+            filter_box.addItem("すべての対戦種別", None)
+            for key, label in DUEL_CHOICE_LABELS["duel_type"].items():
+                filter_box.addItem(label, key)
+            filter_box.setToolTip("選んだ対戦種別の勝ち・負け・引き分けを含めて集計します。")
+            grid.addWidget(QLabel("対戦種別"), 0, 4)
             grid.addWidget(filter_box, 0, 5)
             layout.addWidget(filters)
 
@@ -2215,9 +2218,14 @@ def _run(args: argparse.Namespace) -> int:
                 "コイントス別",
             )
             tabs.addTab(
+                self._table_panel("statistics_duel_type_table", ("対戦種別", "対戦", "勝利", "勝率")),
+                "対戦種別別",
+            )
+            tabs.addTab(
                 self._table_panel("statistics_season_table", ("シーズン", "対戦", "勝利", "勝率")),
                 "シーズン別",
             )
+            self.widgets["statistics_season_table"].setToolTip("開催開始日の新しい順。同じ開始日は登録の新しい順。シーズン未設定は最後。")
             layout.addWidget(tabs, stretch=1)
             self.statistics_condition_status = QLabel("全期間・すべての確定済み戦績")
             self.statistics_condition_status.setWordWrap(True)
@@ -4736,7 +4744,7 @@ def _run(args: argparse.Namespace) -> int:
                 filters = StatisticsFilter(
                     date_from=self.widgets["statistics_date_from_picker"].date().toPython() if use_dates else None,
                     date_to=self.widgets["statistics_date_to_picker"].date().toPython() if use_dates else None,
-                    result=(None, "win", "loss")[self.widgets["statistics_filters"].currentIndex()],
+                    duel_type=self.widgets["statistics_filters"].currentData(),
                 )
                 unit = ("day", "week", "month")[self.widgets["statistics_granularity"].currentIndex()]
                 dashboard = self.service.get_statistics_dashboard(filters, granularity=unit)
@@ -4756,8 +4764,8 @@ def _run(args: argparse.Namespace) -> int:
             detail.setText("条件適用後・確定済み戦績")
             period_text = f"{filters.date_from}〜{filters.date_to}" if use_dates else "全期間"
             self.statistics_condition_status.setText(
-                f"適用中: {period_text}・{self.widgets['statistics_filters'].currentText()}・"
-                f"{self.widgets['statistics_granularity'].currentText()}別 / 確定済み戦績を集計（勝敗条件は母集団も絞ります）"
+                f"集計対象: {period_text}・{self.widgets['statistics_filters'].currentText()} / "
+                "勝ち・負け・引き分けの確定済み戦績（全体勝率は全期間・全種別）"
             )
             chart = self.widgets["statistics_chart"]
             assert isinstance(chart, StatisticsTrendChart)
@@ -4771,6 +4779,7 @@ def _run(args: argparse.Namespace) -> int:
             self._set_breakdown_rows("statistics_deck_table", dashboard.by_deck)
             self._set_breakdown_rows("statistics_order_table", dashboard.by_deck_play_order)
             self._set_breakdown_rows("statistics_coin_table", dashboard.by_coin_face)
+            self._set_breakdown_rows("statistics_duel_type_table", dashboard.by_duel_type)
             self._set_breakdown_rows("statistics_season_table", dashboard.by_season)
             self._set_table_rows(self.widgets["statistics_trend_table"], tuple(
                 (point.label, point.metric.matches, point.metric.wins,

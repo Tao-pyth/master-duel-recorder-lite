@@ -57,6 +57,7 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         state: str = "completed",
         season_id: int | None = None,
         coin_face: str = "unknown",
+        duel_type: str = "other",
     ) -> None:
         self.history.register_starting(
             recording_id=recording_id,
@@ -81,6 +82,7 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
                 opponent_deck=opponent_deck,
                 tags=tags,
                 season_id=season_id,
+                duel_type=duel_type,
             ),
             expected_revision=0,
         )
@@ -108,6 +110,7 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual(dashboard.overall.matches, 3)
         self.assertEqual(dashboard.overall.wins, 1)
         self.assertEqual(dashboard.overall.losses, 1)
+        self.assertEqual([(row.key, row.metric.matches) for row in dashboard.by_duel_type], [("other", 3)])
         self.assertEqual(dashboard.overall.draws, 1)
         self.assertAlmostEqual(dashboard.overall.win_rate or 0, 1 / 3)
 
@@ -161,6 +164,58 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
             [("SEASON 56", 1, 1), ("シーズン未設定", 1, 0)],
         )
 
+    def test_season_breakdown_uses_start_date_then_id_with_unassigned_last(self) -> None:
+        seasons = [self.seasons.add(
+            name=name, season_type="event", duel_type="event",
+            start_date=start, end_date=date(2026, 12, 31),
+        ) for name, start in (
+            ("Z newest", date(2026, 9, 1)),
+            ("A oldest", date(2026, 7, 1)),
+            ("B newest tie", date(2026, 9, 1)),
+            ("C middle", date(2026, 8, 1)),
+        )]
+        for index, season in enumerate(seasons):
+            self._record(str(index), occurred_at=datetime(2026, 9, index + 1, 12, tzinfo=timezone.utc),
+                         result="win", play_order="first", deck="青眼", season_id=season.season_id)
+        self.seasons.archive(seasons[0].season_id)
+        self._record("none", occurred_at=datetime(2026, 9, 4, 12, tzinfo=timezone.utc),
+                     result="loss", play_order="second", deck="青眼")
+        dashboard = self.statistics.dashboard()
+        self.assertEqual([row.label for row in dashboard.by_season],
+                         ["B newest tie", "Z newest", "C middle", "A oldest", "シーズン未設定"])
+        self.assertEqual([row.metric.matches for row in dashboard.by_season], [1] * 5)
+        filtered = self.statistics.dashboard(StatisticsFilter(date_from=date(2026, 9, 3)))
+        self.assertEqual([row.label for row in filtered.by_season],
+                         ["B newest tie", "C middle", "シーズン未設定"])
+
+    def test_duel_type_breakdown_filter_and_eligible_results(self) -> None:
+        types = ("ranked", "event", "room", "solo", "other")
+        for kind in types:
+            for day, result in enumerate(("win", "loss", "draw"), 1):
+                self._record(f"{kind}-{day}", occurred_at=datetime(2026, 9, day, 12, tzinfo=timezone.utc),
+                             result=result, play_order="first", deck="青眼", duel_type=kind)
+        for identifier, status, state in (("draft", "draft", "completed"), ("failed", "confirmed", "failed")):
+            self._record(identifier, occurred_at=datetime(2026, 9, 1, 12, tzinfo=timezone.utc),
+                         result="win", play_order="first", deck="青眼", duel_type="ranked", status=status, state=state)
+        dashboard = self.statistics.dashboard()
+        self.assertEqual([row.key for row in dashboard.by_duel_type], list(types))
+        self.assertEqual([row.label for row in dashboard.by_duel_type],
+                         ["ランク戦", "イベント", "ルーム戦", "ソロモード", "その他"])
+        self.assertEqual(dashboard.overall.matches, 15)
+        for row in dashboard.by_duel_type:
+            self.assertEqual((row.metric.matches, row.metric.wins, row.metric.losses, row.metric.draws), (3, 1, 1, 1))
+            self.assertAlmostEqual(row.metric.win_rate, 1 / 3)
+        for kind in types:
+            filtered = self.statistics.dashboard(StatisticsFilter(duel_type=kind, date_to=date(2026, 9, 2)))
+            self.assertEqual(filtered.overall.matches, 15)
+            self.assertEqual((filtered.filtered.matches, filtered.filtered.win_rate), (2, 0.5))
+            self.assertEqual([row.key for row in filtered.by_duel_type], [kind])
+            self.assertEqual(sum(row.metric.matches for row in filtered.trend), 2)
+        loss = self.statistics.dashboard(StatisticsFilter(duel_type="event", result="loss"))
+        self.assertEqual((loss.filtered.matches, loss.filtered.losses), (1, 1))
+        with self.assertRaises(ValueError):
+            StatisticsFilter(duel_type="invalid")
+
     def test_imported_record_is_included_without_recording_row(self) -> None:
         record = self.records.create_manual(
             DuelRecordValues(
@@ -181,6 +236,7 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
 
         self.assertEqual(dashboard.overall.matches, 1)
         self.assertEqual(dashboard.overall.losses, 1)
+        self.assertEqual([(row.key, row.metric.matches) for row in dashboard.by_duel_type], [("other", 1)])
 
     def test_combines_date_deck_tag_and_play_order_filters(self) -> None:
         self._record(
