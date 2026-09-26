@@ -2,6 +2,14 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.16: 映像中心のレビュー画面
+
+状態: 実装。正式公開・配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.16)、Issue #652/#653、Milestone V2.7.16。
+
+- 左映像/右編集、初期戦績入力タブ、右幅固定と映像優先リサイズ。
+- 小画面の編集スクロール、全既存操作と保存データの回帰確認。
+- [操作と設計](architecture/video-first-review.md)、[Release Contract](release-contracts/2.7.16.md)。
+
 ## V2.7.15: 一覧同期とレビュー終了時の録画ファイル解放
 
 状態: 実装・ローカル検証完了、正式公開待ち。公開完了はRelease、Issue #649〜#651、Milestone V2.7.15で確認する。

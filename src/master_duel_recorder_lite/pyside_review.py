@@ -185,7 +185,7 @@ def review_visual_timeline_contract() -> dict[str, object]:
         "kinds": ["duel_start", "manual_marker", "clip_candidate", "timeline_event"],
         "sync": ["current_position", "selected_event", "timeline_table"],
         "fallback_safe": True,
-        "tabs": ["マーカー編集", "戦績入力"],
+        "tabs": ["戦績入力", "マーカー編集"],
         "source_column_visible": False,
     }
 
@@ -210,7 +210,7 @@ def create_review_window(
     service: RecorderApplicationService,
     recording_id: str,
     parent: object | None = None,
-    initial_tab: str = "marker",
+    initial_tab: str = "duel",
     on_duel_saved: DuelSavedCallback | None = None,
     on_closed: Callable[[object], None] | None = None,
 ) -> object:
@@ -230,6 +230,8 @@ def create_review_window(
             QMessageBox,
             QPushButton,
             QSlider,
+            QScrollArea,
+            QSizePolicy,
             QTabWidget,
             QTableWidget,
             QTableWidgetItem,
@@ -261,6 +263,28 @@ def create_review_window(
                 on_closed(self)
             super().closeEvent(event)
 
+    class ElidedLabel(QLabel):
+        """長い補助情報でレビュー領域の最小幅を広げない。"""
+
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            self.setText(text)
+
+        def setText(self, text: str) -> None:
+            self._full_text = text
+            self.setToolTip(text)
+            self._update_text()
+
+        def _update_text(self) -> None:
+            super().setText(self.fontMetrics().elidedText(
+                self._full_text, Qt.TextElideMode.ElideMiddle, self.contentsRect().width()
+            ))
+
+        def resizeEvent(self, event) -> None:
+            super().resizeEvent(event)
+            self._update_text()
+
     window = ReviewWindow(parent)
     window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
     window.setObjectName("review_window")
@@ -268,22 +292,32 @@ def create_review_window(
     window.setStyleSheet(_review_style_sheet())
     root = QWidget()
     layout = QVBoxLayout(root)
-    title = QLabel(f"{model.recording.recording_id} / {model.video.path.name}")
+    title = ElidedLabel(model.video.path.name)
+    title.setToolTip(f"{model.recording.recording_id}\n{model.video.path}")
     title.setObjectName("review_recording_summary")
     layout.addWidget(title)
     duel = model.duel
-    duel_summary = QLabel(
+    duel_summary = ElidedLabel(
         f"戦績: {duel.result or '-'} / {duel.play_order or '-'} / "
         f"{duel.own_deck or '-'} vs {duel.opponent_deck or '-'}"
     )
     duel_summary.setObjectName("review_duel_summary")
     layout.addWidget(duel_summary)
 
+    panes = QHBoxLayout()
+    layout.addLayout(panes, stretch=1)
+    playback = QWidget()
+    playback.setObjectName("review_playback_pane")
+    playback_layout = QVBoxLayout(playback)
+    playback_layout.setContentsMargins(0, 0, 0, 0)
+    panes.addWidget(playback, stretch=1)
+
     video = QVideoWidget()
     video.setObjectName("review_video")
-    video.setMinimumHeight(260)
-    video.setMaximumHeight(420)
-    layout.addWidget(video, stretch=1)
+    video.setMinimumSize(160, 90)
+    video.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+    video.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+    playback_layout.addWidget(video, stretch=1)
 
     player = QMediaPlayer(window)
     window.player = player
@@ -391,24 +425,41 @@ def create_review_window(
     controls.addWidget(play_button)
     controls.addWidget(open_external_button)
     controls.addStretch(1)
-    layout.addLayout(controls)
+    playback_layout.addLayout(controls)
 
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setObjectName("review_position_slider")
     slider.setRange(0, max(0, int((model.recording.duration_seconds or 0) * 1000)))
-    layout.addWidget(slider)
+    playback_layout.addWidget(slider)
     position_label = QLabel("00:00.000 / --:--.---")
     position_label.setObjectName("review_position_label")
-    layout.addWidget(position_label)
+    playback_layout.addWidget(position_label)
     visual_timeline = ReviewVisualTimelineWidget(model.visual_timeline)
-    layout.addWidget(visual_timeline)
+    playback_layout.addWidget(visual_timeline)
 
     tabs = QTabWidget()
     tabs.setObjectName("review_editor_tabs")
+    # 論理pxの固定幅なのでDPIに追従し、拡大分は映像へ渡る。
+    tabs.setFixedWidth(400)
+    panes.addWidget(tabs)
+
+    def scroll_editor(content: QWidget, name: str) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setObjectName(name)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll
+
     marker_tab = QWidget()
     marker_tab.setObjectName("review_marker_tab")
-    marker_layout = QVBoxLayout(marker_tab)
-    marker_controls = QHBoxLayout()
+    marker_outer = QVBoxLayout(marker_tab)
+    marker_outer.setContentsMargins(0, 0, 0, 0)
+    marker_content = QWidget()
+    marker_layout = QVBoxLayout(marker_content)
+    marker_outer.addWidget(scroll_editor(marker_content, "review_marker_scroll"))
+    marker_controls = QGridLayout()
     marker_button = QPushButton("現在位置にマーカー")
     marker_button.setObjectName("review_marker_add")
     marker_edit_button = QPushButton("マーカー編集")
@@ -422,16 +473,15 @@ def create_review_window(
     clip_folder_button = QPushButton("保存先を開く")
     clip_folder_button.setObjectName("review_clip_open_folder")
     clip_folder_button.setEnabled(False)
-    for button in (
+    for index, button in enumerate((
         marker_button,
         marker_edit_button,
         confirm_button,
         reject_button,
         clip_button,
         clip_folder_button,
-    ):
-        marker_controls.addWidget(button)
-    marker_controls.addStretch(1)
+    )):
+        marker_controls.addWidget(button, index // 2, index % 2)
     marker_layout.addLayout(marker_controls)
     clip_hint = QLabel(
         "クリップ出力は、選択行または現在位置を中心に前30秒・後30秒を保存します。"
@@ -448,21 +498,22 @@ def create_review_window(
     timeline.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     timeline.verticalHeader().setVisible(False)
     timeline.horizontalHeader().setStretchLastSection(True)
-    marker_layout.addWidget(timeline)
-    tabs.addTab(marker_tab, "マーカー編集")
+    timeline.setMinimumWidth(0)
+    for column, width in enumerate((72, 80, 52)):
+        timeline.setColumnWidth(column, width)
+    marker_layout.addWidget(timeline, stretch=1)
 
     duel_tab = QWidget()
     duel_tab.setObjectName("review_duel_tab")
-    duel_layout = QVBoxLayout(duel_tab)
+    duel_outer = QVBoxLayout(duel_tab)
+    duel_outer.setContentsMargins(0, 0, 0, 0)
+    duel_content = QWidget()
+    duel_layout = QVBoxLayout(duel_content)
+    duel_outer.addWidget(scroll_editor(duel_content, "review_duel_scroll"), stretch=1)
     duel_layout.setContentsMargins(10, 8, 10, 8)
     duel_layout.setSpacing(8)
-    compact_row = QWidget()
-    compact_layout = QHBoxLayout(compact_row)
-    compact_layout.setContentsMargins(0, 0, 0, 0)
-    compact_layout.setSpacing(8)
     duel_grid = QGridLayout()
     duel_grid.setColumnStretch(1, 1)
-    duel_grid.setColumnStretch(3, 1)
     duel_grid.setVerticalSpacing(8)
     duel_editor_data = service.get_duel_editor_data(recording_id)
 
@@ -472,7 +523,13 @@ def create_review_window(
         choices: tuple[str, ...],
         current: str,
     ) -> QButtonGroup:
-        compact_layout.addWidget(QLabel(label))
+        row = QWidget()
+        compact_layout = QHBoxLayout(row)
+        compact_layout.setContentsMargins(0, 0, 0, 0)
+        compact_layout.setSpacing(4)
+        label_widget = QLabel(label)
+        label_widget.setMinimumWidth(42)
+        compact_layout.addWidget(label_widget)
         group = QButtonGroup(window)
         group.setExclusive(True)
         for choice in choices:
@@ -480,12 +537,15 @@ def create_review_window(
             button.setCheckable(True)
             button.setProperty("segmentButton", True)
             button.setProperty("choiceData", choice)
+            button.setObjectName(f"review_duel_{field}_{choice}")
             if choice == current:
                 button.setChecked(True)
             group.addButton(button)
             compact_layout.addWidget(button)
         if group.checkedButton() is None and group.buttons():
             group.buttons()[0].setChecked(True)
+        compact_layout.addStretch(1)
+        duel_layout.addWidget(row)
         return group
 
     def choice_combo(
@@ -498,6 +558,7 @@ def create_review_window(
     ) -> QComboBox:
         duel_grid.addWidget(QLabel(label), row, column)
         combo = QComboBox()
+        combo.setObjectName(f"review_duel_{field}")
         for choice in choices:
             combo.addItem(duel_choice_label(field, choice), choice)
         index = combo.findData(current)
@@ -508,6 +569,9 @@ def create_review_window(
     def editable_deck_combo(current: str) -> QComboBox:
         combo = QComboBox()
         combo.setEditable(True)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(10)
+        combo.setMinimumWidth(0)
         names: list[str] = []
         for deck in duel_editor_data.decks:
             name = str(getattr(deck, "name", "")).strip()
@@ -532,8 +596,6 @@ def create_review_window(
     coin_group = segmented_choice(
         "コイン", "coin_face", ("unknown", "heads", "tails"), duel_values.coin_face
     )
-    compact_layout.addStretch(1)
-    duel_layout.addWidget(compact_row)
     type_combo = choice_combo(
         0,
         0,
@@ -542,37 +604,43 @@ def create_review_window(
         ("other", "ranked", "event", "room", "solo"),
         duel_values.duel_type,
     )
-    duel_grid.addWidget(QLabel("シーズン"), 0, 2)
+    duel_grid.addWidget(QLabel("シーズン"), 1, 0)
     season_combo = QComboBox()
+    season_combo.setObjectName("review_duel_season")
+    season_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    season_combo.setMinimumContentsLength(10)
     season_combo.addItem("未設定", None)
     for season in duel_editor_data.seasons:
         season_combo.addItem(str(getattr(season, "name", "")), getattr(season, "season_id", None))
     season_index = season_combo.findData(duel_values.season_id)
     season_combo.setCurrentIndex(season_index if season_index >= 0 else 0)
-    duel_grid.addWidget(season_combo, 0, 3)
-    duel_grid.addWidget(QLabel("自分デッキ"), 1, 0)
+    duel_grid.addWidget(season_combo, 1, 1)
+    duel_grid.addWidget(QLabel("自分デッキ"), 2, 0)
     own_deck = editable_deck_combo(duel_values.own_deck)
-    duel_grid.addWidget(own_deck, 1, 1, 1, 3)
-    duel_grid.addWidget(QLabel("相手デッキ"), 2, 0)
+    own_deck.setObjectName("review_duel_own_deck")
+    duel_grid.addWidget(own_deck, 2, 1)
+    duel_grid.addWidget(QLabel("相手デッキ"), 3, 0)
     opponent_deck = editable_deck_combo(duel_values.opponent_deck)
-    duel_grid.addWidget(opponent_deck, 2, 1, 1, 3)
-    duel_grid.addWidget(QLabel("タグ"), 3, 0)
+    opponent_deck.setObjectName("review_duel_opponent_deck")
+    duel_grid.addWidget(opponent_deck, 3, 1)
+    duel_grid.addWidget(QLabel("タグ"), 4, 0)
     tags = QLineEdit(", ".join(duel_values.tags))
+    tags.setObjectName("review_duel_tags")
     tags.setToolTip("複数タグはカンマ区切りで入力します")
-    duel_grid.addWidget(tags, 3, 1, 1, 3)
+    duel_grid.addWidget(tags, 4, 1)
     duel_layout.addLayout(duel_grid)
     duel_layout.addWidget(QLabel("メモ"))
     notes = QTextEdit()
+    notes.setObjectName("review_duel_notes")
     notes.setPlainText(duel_values.notes)
     notes.setMinimumHeight(80)
     duel_layout.addWidget(notes)
     duel_save = QPushButton("戦績を保存")
     duel_save.setObjectName("review_duel_save")
-    duel_layout.addWidget(duel_save)
+    duel_outer.addWidget(duel_save)
     tabs.addTab(duel_tab, "戦績入力")
-    if initial_tab == "duel":
-        tabs.setCurrentWidget(duel_tab)
-    layout.addWidget(tabs, stretch=1)
+    tabs.addTab(marker_tab, "マーカー編集")
+    tabs.setCurrentWidget(marker_tab if initial_tab == "marker" else duel_tab)
 
     event_id_role = Qt.ItemDataRole.UserRole + 1
     event_type_role = Qt.ItemDataRole.UserRole + 2

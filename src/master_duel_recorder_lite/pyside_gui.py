@@ -716,7 +716,7 @@ def smoke_contract(
             "supported_extensions": [".mp4", ".mkv"],
             "fallback": "external_player",
             "visual_timeline": review_visual_timeline_contract(),
-            "tabs": ["マーカー編集", "戦績入力"],
+            "tabs": ["戦績入力", "マーカー編集"],
             "timeline_columns": ["経過", "種別", "状態", "説明"],
             "source_column_visible": False,
             "marker_source": "RecorderApplicationService.add_review_marker",

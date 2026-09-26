@@ -274,7 +274,7 @@ class PySideGuiContractTest(unittest.TestCase):
         self.assertTrue(contract["review_video_contract"]["timeline_user_labels"])
         self.assertEqual(
             contract["review_video_contract"]["tabs"],
-            ["マーカー編集", "戦績入力"],
+            ["戦績入力", "マーカー編集"],
         )
         self.assertEqual(
             contract["review_video_contract"]["duel_compact_segment_fields"],
