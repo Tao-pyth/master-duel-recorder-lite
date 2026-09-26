@@ -34,6 +34,85 @@ class AuditStatisticsTest(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec("PySide6"), "PySide6 is optional")
 class AuditWidgetTest(unittest.TestCase):
+    def test_statistics_deck_play_order_rows_and_filters(self):
+        from PySide6.QtCore import QDate
+        from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
+        from master_duel_recorder_lite import pyside_gui
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            service = RecorderApplicationService(project_root=root, user_data_dir=root / "data")
+            fixtures = (
+                ("青眼", "first", "win", 1, "confirmed"),
+                ("青眼", "first", "loss", 1, "confirmed"),
+                ("青眼", "second", "loss", 2, "confirmed"),
+                ("妖精と魔女", "first", "win", 2, "confirmed"),
+                ("妖精と魔女", "second", "win", 2, "confirmed"),
+                ("", "unknown", "loss", 2, "confirmed"),
+                ("青眼", "first", "win", 1, "draft"),
+            )
+            for deck, order, result, day, status in fixtures:
+                service.create_manual_duel_record(
+                    DuelRecordValues(own_deck=deck, play_order=order, result=result, status=status),
+                    occurred_at=datetime(2026, 9, day, 12, tzinfo=timezone.utc),
+                )
+
+            def inspect(_app):
+                app = QApplication.instance()
+                window = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
+                try:
+                    window.show_page("statistics")
+                    widgets = window.widgets
+                    table = widgets["statistics_order_table"]
+
+                    def rows():
+                        return {
+                            table.item(row, 0).text(): tuple(table.item(row, col).text() for col in range(1, 4))
+                            for row in range(table.rowCount())
+                        }
+
+                    self.assertEqual(table.horizontalHeaderItem(0).text(), "自分デッキ・先後")
+                    expected = {
+                        "青眼 先攻時": ("2", "1", "50.0%"),
+                        "青眼 後攻時": ("1", "0", "0.0%"),
+                        "妖精と魔女 先攻時": ("1", "1", "100.0%"),
+                        "妖精と魔女 後攻時": ("1", "1", "100.0%"),
+                        "未設定 未設定": ("1", "0", "0.0%"),
+                    }
+                    self.assertEqual(rows(), expected)
+                    self.assertEqual(window.statistics_cards[2][0].text(), "先攻 66.7% / 後攻 50.0%")
+                    tabs = next(t for t in window.findChildren(QTabWidget)
+                                if any(t.tabText(i) == "デッキ別・先攻／後攻" for i in range(t.count())))
+                    tabs.setCurrentIndex(next(i for i in range(tabs.count())
+                                              if tabs.tabText(i) == "デッキ別・先攻／後攻"))
+                    app.processEvents()
+                    capture = os.environ.get("MDRL_STATISTICS_CAPTURE")
+                    if capture:
+                        self.assertTrue(window.grab().save(capture))
+                    widgets["statistics_filters"].setCurrentIndex(2)
+                    self.assertEqual(rows(), {
+                        "青眼 先攻時": ("1", "0", "0.0%"),
+                        "青眼 後攻時": ("1", "0", "0.0%"),
+                        "未設定 未設定": ("1", "0", "0.0%"),
+                    })
+                    widgets["statistics_filters"].setCurrentIndex(0)
+                    widgets["statistics_date_from_picker"].setDate(QDate(2026, 9, 2))
+                    widgets["statistics_date_to_picker"].setDate(QDate(2026, 9, 2))
+                    widgets["statistics_period_enabled"].setChecked(True)
+                    self.assertEqual(rows(), {key: value for key, value in expected.items() if key != "青眼 先攻時"})
+                    widgets["statistics_date_to_picker"].setDate(QDate(2030, 1, 1))
+                    widgets["statistics_date_from_picker"].setDate(QDate(2030, 1, 1))
+                    self.assertEqual(table.rowCount(), 0)
+                    widgets["statistics_period_enabled"].setChecked(False)
+                    self.assertEqual(rows(), expected)
+                finally:
+                    window.close()
+                return 0
+
+            platform = os.environ.get("MDRL_TEST_QPA", "offscreen")
+            with patch.dict(os.environ, {"QT_QPA_PLATFORM": platform}), patch.object(QApplication, "exec", inspect):
+                self.assertEqual(pyside_gui.main(["--project-root", str(root), "--user-data-dir", str(root / "data")]), 0)
+
     def test_normal_gui_statistics_settings_and_narrow_layout(self):
         from PySide6.QtCore import QDate, QPoint, QRect
         from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox

@@ -2207,8 +2207,8 @@ def _run(args: argparse.Namespace) -> int:
                 "デッキ別全体",
             )
             tabs.addTab(
-                self._table_panel("statistics_order_table", ("先後", "対戦", "勝利", "勝率")),
-                "デッキ先後別",
+                self._table_panel("statistics_order_table", ("自分デッキ・先後", "対戦", "勝利", "勝率")),
+                "デッキ別・先攻／後攻",
             )
             tabs.addTab(
                 self._table_panel("statistics_coin_table", ("コイン", "対戦", "勝利", "勝率")),
@@ -4769,7 +4769,7 @@ def _run(args: argparse.Namespace) -> int:
                 + f"{overall.wins}勝 / {overall.matches}戦"
             )
             self._set_breakdown_rows("statistics_deck_table", dashboard.by_deck)
-            self._set_breakdown_rows("statistics_order_table", dashboard.by_play_order)
+            self._set_breakdown_rows("statistics_order_table", dashboard.by_deck_play_order)
             self._set_breakdown_rows("statistics_coin_table", dashboard.by_coin_face)
             self._set_breakdown_rows("statistics_season_table", dashboard.by_season)
             self._set_table_rows(self.widgets["statistics_trend_table"], tuple(

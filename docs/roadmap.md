@@ -2,6 +2,14 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.18: デッキ別先攻後攻の表示修正
+
+状態: 実装。公開と配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.18)、Issue #655、Milestone V2.7.18。
+
+- 通常GUIを既存のデッキ別先後集計へ接続し、タブと列の意味を明示する。
+- 複数デッキ、先後、未設定、期間/勝敗条件、空状態を実widgetで検証する。
+- [操作と変更](releases/2.7.18.md)、[Release Contract](release-contracts/2.7.18.md)。
+
 ## V2.7.17: 自動監視の対戦種別初期値
 
 状態: 実装。公開と配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.17)、Issue #654、Milestone V2.7.17。
