@@ -58,6 +58,7 @@ class AutoWatchDuelDefaults:
     own_deck: str = ""
     season_id: int | None = None
     desired_play_order: str = "unknown"
+    duel_type: str = "other"
 
     @classmethod
     def from_config(cls, config: AppConfig) -> AutoWatchDuelDefaults:
@@ -69,6 +70,7 @@ class AutoWatchDuelDefaults:
                 else None
             ),
             desired_play_order=config.auto_watch_default_desired_play_order,
+            duel_type=config.auto_watch_default_duel_type,
         ).normalized()
 
     def normalized(self) -> AutoWatchDuelDefaults:
@@ -76,11 +78,13 @@ class AutoWatchDuelDefaults:
             own_deck=self.own_deck,
             season_id=self.season_id,
             play_order=self.desired_play_order,
+            duel_type=self.duel_type,
         ).normalized()
         return AutoWatchDuelDefaults(
             own_deck=values.own_deck,
             season_id=values.season_id,
             desired_play_order=values.play_order,
+            duel_type=values.duel_type,
         )
 
 
@@ -547,6 +551,7 @@ def _automatic_duel_record_values(
         coin_face=coin_face,
         own_deck=normalized_defaults.own_deck,
         season_id=normalized_defaults.season_id,
+        duel_type=normalized_defaults.duel_type,
     ).normalized()
 
 

@@ -129,6 +129,7 @@ class PySideGuiContractTest(unittest.TestCase):
                 "watch_default_own_deck",
                 "watch_default_season",
                 "watch_default_desired_play_order",
+                "watch_default_duel_type",
             ],
         )
         self.assertEqual(

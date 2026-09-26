@@ -2,6 +2,14 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.17: 自動監視の対戦種別初期値
+
+状態: 実装。公開と配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.17)、Issue #654、Milestone V2.7.17。
+
+- 対戦種別の選択・保存・開始時固定・新規自動録画draftへの適用。
+- 旧設定互換と失敗時保護、既存戦績/手動録画を維持。
+- [設計と操作](architecture/auto-watch-duel-type.md)、[Release Contract](release-contracts/2.7.17.md)。
+
 ## V2.7.16: 映像中心のレビュー画面
 
 状態: 実装。正式公開・配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.16)、Issue #652/#653、Milestone V2.7.16。

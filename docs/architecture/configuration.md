@@ -65,6 +65,7 @@ tray_enabled = true
 auto_watch_default_own_deck = ""
 auto_watch_default_season_id = 0
 auto_watch_default_desired_play_order = "unknown"
+auto_watch_default_duel_type = "other"
 
 [runtime]
 auto_create_user_data = true
@@ -114,3 +115,5 @@ python -m master_duel_recorder_lite watch
 ```
 
 `config init`は必要なフォルダと既定設定を作りますが、既存`app.toml`を上書きしません。`config reset --yes`だけが既存設定を既定値へ戻し、その直前内容を`app.toml.previous`へ保持します。V0.7以前の`--init-user-data`、`--write-default-config`、`--show-config`は互換用に残しますが、新しい操作では`config`コマンドを使用します。いずれも録画データやDBを削除しません。
+
+V2.7.17では `auto_watch_default_duel_type` に `other/ranked/event/room/solo` を指定できます。省略時は `other` です。他の初期値と同じく監視開始時に保存・固定し、新規成功録画の戦績下書きへ適用します。[保存・互換・復元設計](auto-watch-duel-type.md)を参照してください。

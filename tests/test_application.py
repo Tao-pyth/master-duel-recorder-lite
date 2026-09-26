@@ -1139,6 +1139,7 @@ class RecorderApplicationServiceTest(unittest.TestCase):
                     own_deck=" 青眼 ",
                     season_id=7,
                     desired_play_order="second",
+                    duel_type="ranked",
                 )
             )
             try:
@@ -1148,6 +1149,7 @@ class RecorderApplicationServiceTest(unittest.TestCase):
                         "interaction.auto_watch_default_own_deck": "御巫",
                         "interaction.auto_watch_default_season_id": "8",
                         "interaction.auto_watch_default_desired_play_order": "first",
+                        "interaction.auto_watch_default_duel_type": "event",
                     }
                 )
                 self.assertEqual(
@@ -1156,6 +1158,7 @@ class RecorderApplicationServiceTest(unittest.TestCase):
                         own_deck="青眼",
                         season_id=7,
                         desired_play_order="second",
+                        duel_type="ranked",
                     ),
                 )
             finally:

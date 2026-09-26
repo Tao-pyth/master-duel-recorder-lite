@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from master_duel_recorder_lite.config import AppConfig, AppConfigError, load_app_config, save_app_config
 from master_duel_recorder_lite.config_management import (
@@ -13,6 +14,53 @@ from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensur
 
 
 class ConfigManagementTest(unittest.TestCase):
+    def test_watch_duel_type_choices_roundtrip_and_snapshot_from_config(self) -> None:
+        from master_duel_recorder_lite.recorder import AutoWatchDuelDefaults
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = default_runtime_paths(user_data_dir=Path(temporary))
+            for value in ("other", "ranked", "event", "room", "solo"):
+                with self.subTest(value=value):
+                    config = updated_config(AppConfig(), "interaction.auto_watch_default_duel_type",
+                                            f" {value.upper()} ")
+                    save_app_config(paths=paths, config=config)
+                    loaded = load_app_config(user_data_dir=paths.root).config
+                    self.assertEqual(loaded.auto_watch_default_duel_type, value)
+                    self.assertEqual(AutoWatchDuelDefaults.from_config(loaded).duel_type, value)
+
+    def test_watch_duel_type_invalid_values_preserve_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = default_runtime_paths(user_data_dir=Path(temporary))
+            path = save_app_config(paths=paths, config=AppConfig(auto_watch_default_duel_type="ranked"))
+            original = path.read_bytes()
+            for invalid in ("invalid", "", 42, None):
+                with self.subTest(value=invalid), self.assertRaises(ValueError):
+                    save_app_config(paths=paths, config=AppConfig(auto_watch_default_duel_type=invalid))
+                self.assertEqual(path.read_bytes(), original)
+            path.write_text('[interaction]\nauto_watch_default_duel_type = "invalid"\n', encoding="utf-8")
+            with self.assertRaises(AppConfigError):
+                load_app_config(user_data_dir=paths.root)
+
+    def test_watch_duel_type_atomic_failure_keeps_original_and_backup(self) -> None:
+        import os
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = default_runtime_paths(user_data_dir=Path(temporary))
+            path = save_app_config(paths=paths, config=AppConfig(auto_watch_default_duel_type="ranked"))
+            original = path.read_bytes()
+            replace = os.replace
+
+            def fail_config_replace(source, destination):
+                if destination == path:
+                    raise OSError("write failed")
+                replace(source, destination)
+
+            with patch("master_duel_recorder_lite.config.os.replace", side_effect=fail_config_replace):
+                with self.assertRaises(AppConfigError):
+                    save_app_config(paths=paths, config=AppConfig(auto_watch_default_duel_type="event"))
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(path.with_name("app.toml.previous").read_bytes(), original)
+            self.assertEqual(load_app_config(user_data_dir=paths.root).config.auto_watch_default_duel_type, "ranked")
+            self.assertEqual(list(path.parent.glob(".*.tmp")), [])
+
     def test_lists_only_supported_non_secret_keys(self) -> None:
         values = config_values(AppConfig())
 

@@ -35,6 +35,7 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.auto_watch_default_own_deck, "")
         self.assertEqual(loaded.config.auto_watch_default_season_id, 0)
         self.assertEqual(loaded.config.auto_watch_default_desired_play_order, "unknown")
+        self.assertEqual(loaded.config.auto_watch_default_duel_type, "other")
 
     def test_save_and_load_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -77,6 +78,7 @@ class AppConfigTest(unittest.TestCase):
                     auto_watch_default_own_deck="青眼",
                     auto_watch_default_season_id=12,
                     auto_watch_default_desired_play_order="first",
+                    auto_watch_default_duel_type="ranked",
                     upload_privacy_status="unlisted",
                     auto_create_user_data=False,
                 ),
@@ -115,6 +117,7 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.auto_watch_default_own_deck, "青眼")
         self.assertEqual(loaded.config.auto_watch_default_season_id, 12)
         self.assertEqual(loaded.config.auto_watch_default_desired_play_order, "first")
+        self.assertEqual(loaded.config.auto_watch_default_duel_type, "ranked")
         self.assertEqual(loaded.config.upload_privacy_status, "unlisted")
         self.assertFalse(loaded.config.auto_create_user_data)
 
@@ -155,6 +158,7 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(loaded.config.auto_watch_default_own_deck, "")
         self.assertEqual(loaded.config.auto_watch_default_season_id, 0)
         self.assertEqual(loaded.config.auto_watch_default_desired_play_order, "unknown")
+        self.assertEqual(loaded.config.auto_watch_default_duel_type, "other")
 
     def test_invalid_auto_watch_defaults_fail_fast(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

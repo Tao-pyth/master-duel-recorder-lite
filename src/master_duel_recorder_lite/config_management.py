@@ -116,6 +116,9 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
         "interaction.auto_watch_default_desired_play_order": ConfigField(
             "auto_watch_default_desired_play_order", _lower_text
         ),
+        "interaction.auto_watch_default_duel_type": ConfigField(
+            "auto_watch_default_duel_type", _lower_text
+        ),
         "runtime.auto_create_user_data": ConfigField("auto_create_user_data", _boolean),
     }
 )

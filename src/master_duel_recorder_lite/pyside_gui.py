@@ -199,6 +199,7 @@ UI_USABILITY_WIDGETS: tuple[str, ...] = (
     "watch_default_own_deck",
     "watch_default_season",
     "watch_default_desired_play_order",
+    "watch_default_duel_type",
     "record_manual_duel_add",
     "record_diagnostics_export",
     "history_table",
@@ -810,6 +811,7 @@ def smoke_contract(
                 "watch_default_own_deck",
                 "watch_default_season",
                 "watch_default_desired_play_order",
+                "watch_default_duel_type",
             ],
             "save_source": "RecorderApplicationService.save_settings",
             "start_source": "RecorderApplicationService.start_watch",
@@ -1669,6 +1671,7 @@ def _run(args: argparse.Namespace) -> int:
             default_own_deck = ""
             default_season_id = 0
             default_desired_order = "unknown"
+            default_duel_type = "other"
             decks: tuple[object, ...] = ()
             seasons: tuple[object, ...] = ()
             try:
@@ -1676,6 +1679,7 @@ def _run(args: argparse.Namespace) -> int:
                 default_own_deck = config.auto_watch_default_own_deck
                 default_season_id = config.auto_watch_default_season_id
                 default_desired_order = config.auto_watch_default_desired_play_order
+                default_duel_type = config.auto_watch_default_duel_type
                 if (self.service.paths.db / HISTORY_DATABASE_NAME).exists():
                     decks = self.service.list_decks()
                     seasons = self.service.list_seasons(include_archived=True)
@@ -1720,6 +1724,14 @@ def _run(args: argparse.Namespace) -> int:
             desired_order.setCurrentIndex(desired_index if desired_index >= 0 else 0)
             desired_order.setToolTip("検出した実際の先後と比較してコイン表裏を自動入力します")
             defaults_grid.addWidget(desired_order, 1, 1)
+            defaults_grid.addWidget(QLabel("対戦種別"), 1, 2)
+            watch_duel_type = self._register("watch_default_duel_type", QComboBox())
+            assert isinstance(watch_duel_type, QComboBox)
+            for value in ("other", "ranked", "event", "room", "solo"):
+                watch_duel_type.addItem(duel_choice_label("duel_type", value), value)
+            type_index = watch_duel_type.findData(default_duel_type)
+            watch_duel_type.setCurrentIndex(type_index if type_index >= 0 else 0)
+            defaults_grid.addWidget(watch_duel_type, 1, 3)
             defaults_layout.addLayout(defaults_grid)
             layout.addWidget(defaults_section)
 
@@ -3117,6 +3129,7 @@ def _run(args: argparse.Namespace) -> int:
             self.service.save_settings(
                 {
                     "interaction.auto_watch_default_own_deck": defaults.own_deck,
+                    "interaction.auto_watch_default_duel_type": defaults.duel_type,
                     "interaction.auto_watch_default_season_id": str(
                         defaults.season_id or 0
                     ),
@@ -3131,6 +3144,7 @@ def _run(args: argparse.Namespace) -> int:
             own_deck = ""
             season_id: int | None = None
             desired_play_order = "unknown"
+            duel_type = "other"
             own_deck_widget = self.widgets.get("watch_default_own_deck")
             if isinstance(own_deck_widget, QComboBox):
                 own_deck = own_deck_widget.currentText()
@@ -3144,10 +3158,14 @@ def _run(args: argparse.Namespace) -> int:
                 value = desired_widget.currentData()
                 if value in {"unknown", "first", "second"}:
                     desired_play_order = str(value)
+            type_widget = self.widgets.get("watch_default_duel_type")
+            if isinstance(type_widget, QComboBox):
+                duel_type = str(type_widget.currentData())
             return AutoWatchDuelDefaults(
                 own_deck=own_deck,
                 season_id=season_id,
                 desired_play_order=desired_play_order,
+                duel_type=duel_type,
             ).normalized()
 
         def refresh_recording_targets(self, *_args: object) -> None:

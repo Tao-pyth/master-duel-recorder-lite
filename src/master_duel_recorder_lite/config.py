@@ -77,6 +77,7 @@ class AppConfig:
     auto_watch_default_own_deck: str = ""
     auto_watch_default_season_id: int = 0
     auto_watch_default_desired_play_order: str = "unknown"
+    auto_watch_default_duel_type: str = "other"
     auto_create_user_data: bool = True
 
 
@@ -298,6 +299,13 @@ def load_app_config(
                     AppConfig.auto_watch_default_desired_play_order,
                 )
             ),
+            auto_watch_default_duel_type=_auto_watch_duel_type(
+                _string_value(
+                    interaction_table,
+                    "auto_watch_default_duel_type",
+                    AppConfig.auto_watch_default_duel_type,
+                )
+            ),
             auto_create_user_data=_bool_value(
                 runtime_table, "auto_create_user_data", AppConfig.auto_create_user_data
             ),
@@ -431,6 +439,7 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"auto_watch_default_own_deck = {_toml_string(config.auto_watch_default_own_deck)}",
                 f"auto_watch_default_season_id = {config.auto_watch_default_season_id}",
                 f"auto_watch_default_desired_play_order = {_toml_string(config.auto_watch_default_desired_play_order)}",
+                f"auto_watch_default_duel_type = {_toml_string(config.auto_watch_default_duel_type)}",
                 "",
                 "[runtime]",
                 f"auto_create_user_data = {_toml_bool(config.auto_create_user_data)}",
@@ -684,6 +693,15 @@ def _auto_watch_desired_play_order(value: str) -> str:
     return normalized
 
 
+def _auto_watch_duel_type(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("auto_watch_default_duel_type は文字列で指定してください")
+    normalized = value.strip().casefold()
+    if normalized not in {"other", "ranked", "event", "room", "solo"}:
+        raise ValueError("auto_watch_default_duel_type はother、ranked、event、room、soloのいずれかで指定してください")
+    return normalized
+
+
 def _auto_watch_default_values(config: AppConfig) -> None:
     if not isinstance(config.auto_watch_default_own_deck, str):
         raise ValueError("auto_watch_default_own_deck は文字列である必要があります")
@@ -696,6 +714,7 @@ def _auto_watch_default_values(config: AppConfig) -> None:
     if config.auto_watch_default_season_id < 0:
         raise ValueError("auto_watch_default_season_id は0以上の整数で指定してください")
     _auto_watch_desired_play_order(config.auto_watch_default_desired_play_order)
+    _auto_watch_duel_type(config.auto_watch_default_duel_type)
 
 
 def _toml_string(value: str) -> str:

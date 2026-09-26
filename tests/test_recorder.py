@@ -119,7 +119,7 @@ class RecorderPreparationTest(unittest.TestCase):
                 attempts=(),
             )
             with patch("master_duel_recorder_lite.recorder.discover_ffmpeg", return_value=discovery):
-                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop"))
+                prepared = prepare_recording(paths=paths, config=AppConfig(ffmpeg_path=str(executable), capture_mode="desktop", auto_watch_default_duel_type="ranked"))
             prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
             try:
                 state = prepared.start(source="manual", detection_reason="test")
@@ -140,6 +140,7 @@ class RecorderPreparationTest(unittest.TestCase):
         self.assertEqual(entry.detection_reason, "test")
         assert duel_record is not None
         self.assertEqual(duel_record.values.status, "draft")
+        self.assertEqual(duel_record.values.duel_type, "other")
         assert persisted is not None
         self.assertEqual(persisted.value.state, "completed")
 
@@ -169,6 +170,7 @@ class RecorderPreparationTest(unittest.TestCase):
                         own_deck=" 青眼 ",
                         season_id=None,
                         desired_play_order="first",
+                        duel_type="ranked",
                     ),
                 )
             prepared.session = FakeLifecycleSession(prepared.target.path)  # type: ignore[assignment]
@@ -185,6 +187,7 @@ class RecorderPreparationTest(unittest.TestCase):
 
         assert duel_record is not None
         self.assertEqual(duel_record.values.own_deck, "青眼")
+        self.assertEqual(duel_record.values.duel_type, "ranked")
         self.assertEqual(duel_record.values.result, "win")
         self.assertEqual(duel_record.values.play_order, "first")
         self.assertEqual(duel_record.values.coin_face, "heads")
@@ -348,6 +351,7 @@ class RecorderPreparationTest(unittest.TestCase):
                     ),
                     auto_watch_duel_defaults=AutoWatchDuelDefaults(
                         own_deck="上書きされない",
+                        duel_type="ranked",
                         desired_play_order="first",
                     ),
                 )
@@ -356,7 +360,7 @@ class RecorderPreparationTest(unittest.TestCase):
                 prepared.start(source="auto")
                 DuelRecordRepository(prepared.history.database_path).save(
                     prepared.target.recording_id,
-                    DuelRecordValues(own_deck="既存", play_order="second"),
+                    DuelRecordValues(own_deck="既存", play_order="second", duel_type="event"),
                     expected_revision=0,
                     source="user",
                 )
@@ -370,6 +374,7 @@ class RecorderPreparationTest(unittest.TestCase):
 
         assert duel_record is not None
         self.assertEqual(duel_record.values.own_deck, "既存")
+        self.assertEqual(duel_record.values.duel_type, "event")
         self.assertEqual(duel_record.values.play_order, "second")
         self.assertEqual(duel_record.values.coin_face, "unknown")
 
