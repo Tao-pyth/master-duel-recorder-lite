@@ -9,6 +9,7 @@ from master_duel_recorder_lite.duel_catalog import DuelCatalogRepository
 from master_duel_recorder_lite.duel_records import DuelRecordRepository, DuelRecordValues
 from master_duel_recorder_lite.duel_statistics import (
     DuelStatisticsRepository,
+    StatisticsDashboard,
     StatisticsFilter,
     statistics_local_date,
 )
@@ -113,6 +114,7 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual([(row.key, row.metric.matches) for row in dashboard.by_duel_type], [("other", 3)])
         self.assertEqual(dashboard.overall.draws, 1)
         self.assertAlmostEqual(dashboard.overall.win_rate or 0, 1 / 3)
+        self.assertEqual(sum(row.metric.matches for row in dashboard.by_matchup), 3)
 
     def test_manual_record_is_included_without_recording_row(self) -> None:
         occurred_at = datetime(2026, 8, 3, 12, tzinfo=timezone.utc)
@@ -131,6 +133,8 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertIsNone(record.recording_id)
         self.assertEqual(dashboard.overall.matches, 1)
         self.assertEqual(dashboard.overall.wins, 1)
+        self.assertEqual(dashboard.by_matchup[0].own_deck, "手入力デッキ")
+        self.assertEqual(dashboard.by_matchup[0].metric.matches, 1)
         self.assertEqual(dashboard.trend[0].period_start, date(2026, 8, 1))
 
     def test_season_breakdown_includes_named_and_unassigned_records(self) -> None:
@@ -237,6 +241,7 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual(dashboard.overall.matches, 1)
         self.assertEqual(dashboard.overall.losses, 1)
         self.assertEqual([(row.key, row.metric.matches) for row in dashboard.by_duel_type], [("other", 1)])
+        self.assertEqual(dashboard.by_matchup[0].metric.losses, 1)
 
     def test_combines_date_deck_tag_and_play_order_filters(self) -> None:
         self._record(
@@ -352,6 +357,87 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual(
             [item.label for item in dashboard.by_deck_play_order], ["青眼 後攻時"]
         )
+        self.assertEqual(
+            [(row.opponent_deck, row.own_deck, row.metric.matches) for row in dashboard.by_matchup],
+            [("非表示デッキ", "青眼", 1)],
+        )
+
+    def test_matchups_separate_both_decks_and_include_draws(self) -> None:
+        base = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+        for index, (own, opponent, result) in enumerate((
+            ("青眼", "烙印", "win"),
+            ("青眼", "烙印", "loss"),
+            ("青眼", "烙印", "draw"),
+            ("青眼", "神碑", "win"),
+            ("白き森", "烙印", "loss"),
+        )):
+            self._record(str(index), occurred_at=base, result=result, play_order="first",
+                         deck=own, opponent_deck=opponent)
+
+        dashboard = self.statistics.dashboard()
+        matchups = {(row.opponent_deck, row.own_deck): row.metric for row in dashboard.by_matchup}
+
+        self.assertEqual(len(matchups), 3)
+        metric = matchups[("烙印", "青眼")]
+        self.assertEqual((metric.matches, metric.wins, metric.losses, metric.draws), (3, 1, 1, 1))
+        self.assertAlmostEqual(metric.win_rate, 1 / 3)
+        self.assertEqual(matchups[("神碑", "青眼")].win_rate, 1)
+        self.assertEqual(matchups[("烙印", "白き森")].win_rate, 0)
+        self.assertEqual(sum(row.metric.matches for row in dashboard.by_matchup), dashboard.filtered.matches)
+
+    def test_matchup_normalization_unset_and_separator_names(self) -> None:
+        base = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+        pairs = (
+            ("ＢＬＵＥ", "ＲＥＤ"), ("blue", "red"),
+            ("", ""), ("未設定", ""), ("青眼", ""), ("", "烙印"),
+            ("自分", "相手|中"), ("中|自分", "相手"),
+        )
+        for index, (own, opponent) in enumerate(pairs):
+            self._record(str(index), occurred_at=base, result="win", play_order="first",
+                         deck=own, opponent_deck=opponent)
+
+        dashboard = self.statistics.dashboard()
+
+        self.assertEqual(len(dashboard.by_matchup), 7)
+        self.assertEqual(dashboard.by_matchup[0].metric.matches, 2)
+        self.assertEqual(dashboard.by_matchup[0].metric.wins, 2)
+        self.assertEqual(sum(row.metric.matches for row in dashboard.by_matchup), 8)
+        labels = [(row.opponent_deck, row.own_deck) for row in dashboard.by_matchup]
+        self.assertEqual(labels.count(("未設定", "未設定")), 2)
+        self.assertIn(("未設定", "青眼"), labels)
+        self.assertIn(("烙印", "未設定"), labels)
+        self.assertIn(("相手|中", "自分"), labels)
+        self.assertIn(("相手", "中|自分"), labels)
+
+    def test_matchups_follow_combined_filters_and_empty_population(self) -> None:
+        for index, (day, kind, result) in enumerate((
+            (1, "ranked", "win"), (2, "ranked", "loss"),
+            (2, "ranked", "draw"), (2, "event", "win"),
+        )):
+            self._record(str(index), occurred_at=datetime(2026, 8, day, 12, tzinfo=timezone.utc),
+                         result=result, play_order="first", deck="青眼", opponent_deck="烙印",
+                         duel_type=kind)
+
+        selected = self.statistics.dashboard(StatisticsFilter(
+            date_from=date(2026, 8, 2), date_to=date(2026, 8, 2), duel_type="ranked"
+        ))
+        self.assertEqual(selected.overall.matches, 4)
+        self.assertEqual((selected.filtered.matches, selected.filtered.losses, selected.filtered.draws), (2, 1, 1))
+        self.assertEqual(selected.by_matchup[0].metric, selected.filtered)
+        self.assertEqual(self.statistics.dashboard().by_matchup[0].metric.matches, 4)
+        empty = self.statistics.dashboard(StatisticsFilter(date_from=date(2030, 1, 1)))
+        self.assertEqual(empty.by_matchup, ())
+        self.assertIsNone(empty.filtered.win_rate)
+
+    def test_legacy_dashboard_constructor_keeps_new_breakdowns_optional(self) -> None:
+        dashboard = self.statistics.dashboard()
+        legacy = StatisticsDashboard(
+            dashboard.overall, dashboard.filtered, dashboard.by_deck, dashboard.by_play_order,
+            dashboard.by_deck_play_order, dashboard.by_coin_face, dashboard.by_season,
+            dashboard.trend, dashboard.filters, dashboard.granularity,
+        )
+        self.assertEqual(legacy.by_duel_type, ())
+        self.assertEqual(legacy.by_matchup, ())
 
     def test_coin_face_filter_and_breakdown(self) -> None:
         base = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)

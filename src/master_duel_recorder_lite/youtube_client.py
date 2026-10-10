@@ -243,10 +243,10 @@ class HttpYouTubeClient(YouTubeClient):
 
 
 def _classified_http_error(error: urllib.error.HTTPError) -> YouTubeClientError:
-    detail = redact_youtube_diagnostics(error.read().decode("utf-8", errors="replace"))[-1000:]
+    detail = str(redact_youtube_diagnostics(error.read().decode("utf-8", errors="replace")))
     reason, message = _google_error_details(detail)
     normalized = f"{reason} {message} {detail}".casefold()
-    if error.code == 401:
+    if error.code == 401 or (error.code == 400 and reason == "invalid_grant"):
         kind = YouTubeUploadFailureKind.REAUTHORIZE
     elif error.code in {403, 429} and (
         "quota" in normalized
@@ -260,14 +260,17 @@ def _classified_http_error(error: urllib.error.HTTPError) -> YouTubeClientError:
         kind = YouTubeUploadFailureKind.RETRIABLE
     else:
         kind = YouTubeUploadFailureKind.PERMANENT
-    return YouTubeClientError(f"HTTP {error.code}: {detail}", kind=kind)
+    return YouTubeClientError(f"HTTP {error.code}: {detail[-1000:]}", kind=kind)
 
 
 def user_action_message(kind: YouTubeUploadFailureKind) -> str:
     action = _default_user_action(kind)
     return {
         YouTubeUserAction.RETRY: "通信状態を確認して再試行してください。",
-        YouTubeUserAction.REAUTHORIZE: "YouTube連携をやり直してください。",
+        YouTubeUserAction.REAUTHORIZE: (
+            "YouTube連携の期限切れ・取り消しなどで認証できません。"
+            "設定 → YouTube →「連携する」で再認証してから、投稿を再試行してください。"
+        ),
         YouTubeUserAction.WAIT_QUOTA: "YouTube APIのquotaまたはrate制限が戻ってから再試行してください。",
         YouTubeUserAction.CHECK_PERMISSION: "YouTubeチャンネル、OAuth審査、投稿権限を確認してください。",
         YouTubeUserAction.MANUAL_REVIEW: "YouTube Studioで投稿状態を確認してから再試行または手動処理してください。",
@@ -286,6 +289,12 @@ def redact_youtube_diagnostics(value: object) -> object:
     if isinstance(value, list):
         return [redact_youtube_diagnostics(item) for item in value]
     if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            return json.dumps(redact_youtube_diagnostics(parsed), ensure_ascii=False)
         redacted = value
         redacted = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", redacted)
         redacted = re.sub(
@@ -326,6 +335,9 @@ def _google_error_details(content: str) -> tuple[str, str]:
     if not isinstance(parsed, dict):
         return "", content
     error = parsed.get("error")
+    if isinstance(error, str):
+        description = parsed.get("error_description", "")
+        return error, description if isinstance(description, str) else ""
     if not isinstance(error, dict):
         return "", content
     message = error.get("message", "")

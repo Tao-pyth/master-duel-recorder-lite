@@ -2,6 +2,14 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.20: YouTube再連携修復とデッキ相性統計
+
+状態: 実装・ローカル検証完了。公開と配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.20)、Issue #658/#659/#660、Milestone V2.7.20。
+
+- YouTube認証失効の分類を修正し、GUIから実際に再連携できるようにする。
+- 統計内に相手デッキ×自分デッキの自分勝率を表示する「デッキ相性」タブを追加する。
+- 追跡: Issue #658/#659/#660、Milestone V2.7.20。[操作説明](releases/2.7.20.md)、[設計](architecture/youtube-reconnect-and-deck-matchups.md)、[Release Contract](release-contracts/2.7.20.md)、[検証記録](validation/2.7.20.md)。
+
 ## V2.7.19: 統計の開催日順・対戦種別・絞り込み改善
 
 状態: 実装。公開と配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.19)、Issue #656/#657、Milestone V2.7.19。

@@ -85,6 +85,13 @@ class StatisticsBreakdown:
 
 
 @dataclass(frozen=True)
+class StatisticsMatchup:
+    opponent_deck: str
+    own_deck: str
+    metric: StatisticsMetric
+
+
+@dataclass(frozen=True)
 class StatisticsTrendPoint:
     period_start: date
     label: str
@@ -110,6 +117,7 @@ class StatisticsDashboard:
     filters: StatisticsFilter
     granularity: str
     by_duel_type: tuple[StatisticsBreakdown, ...] = ()
+    by_matchup: tuple[StatisticsMatchup, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,6 +130,7 @@ class _StatisticsRow:
     own_deck_id: int | None
     season_id: int | None
     duel_type: str = "other"
+    opponent_deck: str = ""
 
 
 StatisticsRow = _StatisticsRow
@@ -163,6 +172,7 @@ class DuelStatisticsRepository:
             by_coin_face=_breakdown_by_coin_face(filtered_rows),
             by_season=_breakdown_by_season(filtered_rows, season_labels),
             by_duel_type=_breakdown_by_choice(filtered_rows, "duel_type", DUEL_CHOICE_LABELS["duel_type"]),
+            by_matchup=_breakdown_by_matchup(filtered_rows),
             trend=_trend(filtered_rows, selected, granularity),
             filters=selected,
             granularity=granularity,
@@ -208,6 +218,7 @@ class DuelStatisticsRepository:
                     duel.coin_face,
                     duel.own_deck,
                     duel.own_deck_id,
+                    duel.opponent_deck,
                     duel.season_id,
                     duel.duel_type
                 FROM duel_records AS duel
@@ -237,6 +248,7 @@ class DuelStatisticsRepository:
                 coin_face=str(row["coin_face"]),
                 own_deck=str(row["own_deck"]),
                 own_deck_id=row["own_deck_id"],
+                opponent_deck=str(row["opponent_deck"]),
                 season_id=row["season_id"],
                 duel_type=str(row["duel_type"]),
             )
@@ -305,6 +317,27 @@ def _breakdown_by_play_order(
         for key in ("first", "second", "unknown")
         if key in grouped
     )
+
+
+def _breakdown_by_matchup(
+    rows: tuple[_StatisticsRow, ...],
+) -> tuple[StatisticsMatchup, ...]:
+    grouped: dict[tuple[str, str], list[_StatisticsRow]] = defaultdict(list)
+    labels: dict[tuple[str, str], tuple[str, str]] = {}
+    for row in rows:
+        key = (_normalized(row.opponent_deck), _normalized(row.own_deck))
+        grouped[key].append(row)
+        labels.setdefault(
+            key,
+            (row.opponent_deck.strip() or "未設定", row.own_deck.strip() or "未設定"),
+        )
+    items = (
+        StatisticsMatchup(*labels[key], _metric(values))
+        for key, values in grouped.items()
+    )
+    return tuple(sorted(items, key=lambda item: (
+        -item.metric.matches, item.opponent_deck.casefold(), item.own_deck.casefold()
+    )))
 
 
 def _breakdown_by_deck_play_order(

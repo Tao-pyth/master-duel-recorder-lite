@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import Mock
 
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
@@ -14,7 +15,7 @@ from master_duel_recorder_lite.youtube_client import (
 )
 from master_duel_recorder_lite.youtube_oauth import MemoryCredentialStore, YouTubeCredentials
 from master_duel_recorder_lite.youtube_service import YouTubeUploadService
-from master_duel_recorder_lite.youtube_uploads import YouTubeUploadRepository, YouTubeUploadState
+from master_duel_recorder_lite.youtube_uploads import YouTubeUploadError, YouTubeUploadRepository, YouTubeUploadState
 
 
 class YouTubeUploadServiceTest(unittest.TestCase):
@@ -133,6 +134,37 @@ class YouTubeUploadServiceTest(unittest.TestCase):
 
         self.assertEqual(outcome.upload.state, YouTubeUploadState.FAILED)
         self.assertIn("OAuth", outcome.message)
+
+    def test_reauthorization_failure_keeps_media_and_credentials_then_can_recover(self) -> None:
+        self._completed_prepare()
+        original_credentials = self.credentials.read()
+        export = self.paths.exports / "rec-1" / "prepared.mp4"
+        original_queue = (self.paths.queue / "upload-preparation.json").read_bytes()
+        client = FakeYouTubeClient(failures=(YouTubeUploadFailureKind.REAUTHORIZE,))
+        sleep = Mock()
+        service = YouTubeUploadService(
+            paths=self.paths, upload_repository=self.uploads, queue=self.queue,
+            credential_store=self.credentials, youtube_client=client, sleep=sleep,
+        )
+
+        failed = service.upload_recording(recording_id="rec-1", metadata=UploadMetadata("title"))
+
+        self.assertEqual(failed.upload.state, YouTubeUploadState.FAILED)
+        self.assertEqual(failed.upload.attempts, 1)
+        self.assertIn("設定 → YouTube", failed.message)
+        sleep.assert_not_called()
+        self.assertEqual(self.credentials.read(), original_credentials)
+        self.assertEqual(self.source.read_bytes(), b"video")
+        self.assertEqual(export.read_bytes(), b"video")
+        self.assertEqual((self.paths.queue / "upload-preparation.json").read_bytes(), original_queue)
+
+        self.credentials.write(YouTubeCredentials("client", "secret", "new-refresh"))
+        recovered = service.upload_recording(recording_id="rec-1", metadata=UploadMetadata("title"))
+        self.assertEqual(recovered.upload.state, YouTubeUploadState.COMPLETED)
+        self.assertEqual(len(client.uploaded), 1)
+        with self.assertRaises(YouTubeUploadError):
+            service.upload_recording(recording_id="rec-1", metadata=UploadMetadata("title"))
+        self.assertEqual(len(client.uploaded), 1)
 
 
 if __name__ == "__main__":

@@ -91,6 +91,8 @@ class AuditWidgetTest(unittest.TestCase):
                                 "statistics_duel_type_table", "statistics_season_table", "statistics_trend_table"):
                         table = widgets[key]
                         self.assertEqual(sum(int(table.item(i, 1).text()) for i in range(table.rowCount())), 2, key)
+                    matchups = widgets["statistics_matchup_table"]
+                    self.assertEqual(sum(int(matchups.item(i, 2).text()) for i in range(matchups.rowCount())), 2)
                     widgets["statistics_date_from_picker"].setDate(QDate(2026, 9, 2))
                     widgets["statistics_date_to_picker"].setDate(QDate(2026, 9, 2))
                     widgets["statistics_period_enabled"].setChecked(True)

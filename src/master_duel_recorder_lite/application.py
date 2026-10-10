@@ -1046,7 +1046,13 @@ class RecorderApplicationService:
                 "YouTubeは未連携です",
                 can_connect=True,
             )
-        return YouTubeConnectionStatus("connected", "YouTubeは連携済みです", credentials.scope)
+        return YouTubeConnectionStatus(
+            "connected",
+            "YouTube資格情報は保存済みです。有効性は投稿時に確認します。"
+            "認証エラーが出た場合は「連携する」で再認証してください。",
+            credentials.scope,
+            can_connect=client_configured,
+        )
 
     def connect_youtube(self, *, timeout_seconds: float = 180.0) -> YouTubeConnectionStatus:
         try:

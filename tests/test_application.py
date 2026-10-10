@@ -403,6 +403,36 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertEqual(connectable_status.state, "disconnected")
         self.assertTrue(connectable_status.can_connect)
 
+    def test_youtube_reauthorization_keeps_previous_credentials_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = MemoryCredentialStore()
+            original = YouTubeCredentials("client", "secret", "old-refresh")
+            store.write(original)
+            service = RecorderApplicationService(
+                user_data_dir=Path(tmp_dir) / "user_data", youtube_credential_store=store,
+                youtube_oauth_environ={"MDRL_YOUTUBE_OAUTH_CLIENT_ID": "fake-client"},
+            )
+            with patch("master_duel_recorder_lite.application.load_distributed_oauth_client"), patch(
+                "master_duel_recorder_lite.application.authorize_with_loopback",
+                side_effect=RuntimeError("ブラウザ認証が拒否されました"),
+            ):
+                with self.assertRaises(ApplicationOperationError):
+                    service.connect_youtube()
+            self.assertEqual(store.read(), original)
+            saved = service.youtube_connection_status()
+            self.assertIn("保存済み", saved.message)
+            self.assertIn("有効性は投稿時", saved.message)
+            self.assertTrue(saved.can_connect)
+
+            renewed = YouTubeCredentials("client", "secret", "renewed-refresh")
+            with patch("master_duel_recorder_lite.application.load_distributed_oauth_client"), patch(
+                "master_duel_recorder_lite.application.authorize_with_loopback",
+                return_value=SimpleNamespace(credentials=renewed),
+            ):
+                connected = service.connect_youtube()
+            self.assertEqual(store.read(), renewed)
+            self.assertEqual(connected.state, "connected")
+
     def test_manual_duel_write_is_rejected_during_watch(self) -> None:
         service = RecorderApplicationService()
         service._watch_thread = SimpleNamespace(is_alive=lambda: True)

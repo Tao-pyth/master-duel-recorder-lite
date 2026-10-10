@@ -208,6 +208,7 @@ UI_USABILITY_WIDGETS: tuple[str, ...] = (
     "statistics_chart",
     "statistics_date_from_picker",
     "statistics_date_to_picker",
+    "statistics_matchup_table",
     "deck_catalog_table",
     "tag_catalog_table",
     "season_table",
@@ -1146,6 +1147,8 @@ def _run(args: argparse.Namespace) -> int:
                 tuple[str, concurrent.futures.Future[object], Any]
             ] = []
             self.youtube_upload_running = False
+            self.youtube_connection_running = False
+            self.youtube_connection_status_cache = None
             self.background_timer = QTimer(self)
             self.background_timer.setInterval(300)
             self.background_timer.timeout.connect(self._poll_background_tasks)
@@ -1181,6 +1184,13 @@ def _run(args: argparse.Namespace) -> int:
             return widget
 
         def closeEvent(self, event: object) -> None:
+            if self.youtube_connection_running:
+                self._set_youtube_background_status(
+                    True,
+                    "ブラウザ認証中です。認証完了または約3分の待機終了後に終了できます。",
+                )
+                event.ignore()
+                return
             if not self._allow_catalog_leave():
                 event.ignore()
                 return
@@ -2193,6 +2203,8 @@ def _run(args: argparse.Namespace) -> int:
 
             tabs = self._register("statistics_tab_panel", QTabWidget())
             assert isinstance(tabs, QTabWidget)
+            tabs.setUsesScrollButtons(True)
+            tabs.tabBar().setExpanding(False)
             trend = QWidget()
             trend_layout = QVBoxLayout(trend)
             trend_controls = QHBoxLayout()
@@ -2213,6 +2225,24 @@ def _run(args: argparse.Namespace) -> int:
                 self._table_panel("statistics_order_table", ("自分デッキ・先後", "対戦", "勝利", "勝率")),
                 "デッキ別・先攻／後攻",
             )
+            matchup = QWidget()
+            matchup_layout = QVBoxLayout(matchup)
+            matchup_layout.setContentsMargins(0, 0, 0, 0)
+            guidance = QLabel("自分勝率 = 勝利数 ÷ 対戦数（敗北・引分を含む）。相手と自分のデッキの組合せごとに集計します。")
+            guidance.setWordWrap(True)
+            matchup_layout.addWidget(guidance)
+            self.statistics_matchup_status = QLabel("読み込み前")
+            self.statistics_matchup_status.setWordWrap(True)
+            matchup_layout.addWidget(self.statistics_matchup_status)
+            matchup_table = self._table(
+                "statistics_matchup_table",
+                ("相手デッキ", "自分デッキ", "対戦", "勝利", "敗北", "引分", "自分勝率"),
+                column_widths=(240, 240, 76, 76, 76, 76, 112),
+            )
+            matchup_table.horizontalHeader().setStretchLastSection(False)
+            matchup_table.setToolTip("長いデッキ名はセルにマウスを置くと全文を確認できます。列幅の変更や横スクロールもできます。")
+            matchup_layout.addWidget(matchup_table, 1)
+            tabs.addTab(matchup, "デッキ相性")
             tabs.addTab(
                 self._table_panel("statistics_coin_table", ("コイン", "対戦", "勝利", "勝率")),
                 "コイントス別",
@@ -2695,7 +2725,7 @@ def _run(args: argparse.Namespace) -> int:
             for key, text, action in (
                 ("settings_youtube_connect", "連携する", self.connect_youtube),
                 ("settings_youtube_disconnect", "切断する", self.disconnect_youtube),
-                ("settings_youtube_refresh", "接続確認", self.refresh_youtube_status),
+                ("settings_youtube_refresh", "保存状態を確認", self.refresh_youtube_status),
                 (
                     "settings_youtube_test_upload",
                     "最新録画でprivateテスト投稿",
@@ -3525,7 +3555,8 @@ def _run(args: argparse.Namespace) -> int:
             blocked = self.service.duel_write_block_reason() is not None
             states = {
                 "history_play": has_recording, "history_duel": single,
-                "history_delete": single and not blocked, "history_youtube": has_recording,
+                "history_delete": single and not blocked,
+                "history_youtube": has_recording and not self._youtube_operation_busy(),
                 "history_bulk": len(views) > 1 and not blocked,
                 "history_save": single and not blocked and self.history_editor.view is not None,
                 "history_next": single,
@@ -4096,9 +4127,9 @@ def _run(args: argparse.Namespace) -> int:
             if not recording_id:
                 self._show_information("YouTube", "録画がある行を選択してください。")
                 return
-            if self.youtube_upload_running:
+            if self._youtube_operation_busy():
                 self._show_information(
-                    "YouTube", "YouTube投稿をバックグラウンドで実行中です。"
+                    "YouTube", "YouTubeの連携または投稿を実行中です。完了してから操作してください。"
                 )
                 return
             try:
@@ -4122,6 +4153,8 @@ def _run(args: argparse.Namespace) -> int:
             self._start_youtube_upload(dialog)
 
         def _start_youtube_upload(self, dialog: object) -> None:
+            if self._youtube_operation_busy():
+                return
             self.youtube_upload_running = True
             self._set_youtube_background_status(
                 True, f"YouTube投稿中: {getattr(dialog, 'title')}"
@@ -4136,23 +4169,31 @@ def _run(args: argparse.Namespace) -> int:
                     privacy=str(getattr(dialog, "privacy")),
                 )
 
-            self._submit_background_task(
-                "YouTube投稿",
-                operation,
-                self._youtube_upload_completed,
-            )
+            try:
+                self._submit_background_task(
+                    "YouTube投稿",
+                    operation,
+                    self._youtube_upload_completed,
+                )
+            except Exception as exc:
+                self.youtube_upload_running = False
+                self._set_youtube_background_status(
+                    False, f"YouTube投稿を開始できません: {exc}"
+                )
 
         def _youtube_upload_completed(self, result: object) -> None:
             upload = getattr(result, "upload", None)
             url = getattr(upload, "watch_url", None)
-            message = getattr(result, "message", "YouTube投稿が完了しました")
+            state = getattr(upload, "state", None)
+            completed = getattr(state, "value", state) == "completed"
+            message = getattr(result, "message", "YouTube投稿結果を確認できません")
             self.youtube_upload_running = False
-            self._set_youtube_background_status(
-                False,
-                f"YouTube投稿完了: {url or message}",
-            )
             self._refresh_history()
             self._refresh_youtube()
+            self._set_youtube_background_status(
+                False,
+                f"YouTube投稿完了: {url or message}" if completed else f"YouTube投稿に失敗しました: {message}",
+            )
 
         def _submit_background_task(
             self, label: str, operation: Any, on_success: Any | None = None
@@ -4176,6 +4217,8 @@ def _run(args: argparse.Namespace) -> int:
                         self._set_youtube_background_status(
                             False, f"YouTube投稿に失敗しました: {exc}"
                         )
+                    elif label == "YouTube連携":
+                        self._youtube_connection_failed(exc)
                     self._append_activity(f"{label}に失敗しました")
                     continue
                 if on_success is not None:
@@ -4187,13 +4230,33 @@ def _run(args: argparse.Namespace) -> int:
                 self.background_timer.stop()
 
         def _set_youtube_background_status(self, busy: bool, message: str) -> None:
-            status = self.widgets.get("youtube_status")
-            if isinstance(status, QLabel):
-                status.setText(message)
-            button = self.widgets.get("history_youtube")
-            if isinstance(button, QPushButton):
-                button.setEnabled(not busy)
+            for key in ("youtube_status", "settings_youtube_status"):
+                status = self.widgets.get(key)
+                if isinstance(status, QLabel):
+                    status.setText(message)
+            self._update_youtube_action_states()
             self._append_activity(message)
+
+        def _youtube_operation_busy(self) -> bool:
+            return self.youtube_upload_running or self.youtube_connection_running
+
+        def _update_youtube_action_states(self, status: object | None = None) -> None:
+            if status is not None:
+                self.youtube_connection_status_cache = status
+            saved = self.youtube_connection_status_cache
+            busy = self._youtube_operation_busy()
+            connected = getattr(saved, "state", "") == "connected"
+            enabled = {
+                "settings_youtube_connect": not busy and bool(getattr(saved, "can_connect", False)),
+                "settings_youtube_disconnect": not busy and connected,
+                "settings_youtube_refresh": not busy,
+                "settings_youtube_test_upload": not busy and connected,
+            }
+            for key, allowed in enabled.items():
+                button = self.widgets.get(key)
+                if isinstance(button, QPushButton):
+                    button.setEnabled(allowed)
+            self._update_history_action_states()
 
         def _refresh_history(self) -> bool:
             if self.history_editor.is_dirty():
@@ -4597,13 +4660,15 @@ def _run(args: argparse.Namespace) -> int:
 
         def _refresh_youtube(self) -> None:
             status = self.service.youtube_connection_status()
+            self._update_youtube_action_states(status)
             status_label = self.widgets["youtube_status"]
             assert isinstance(status_label, QLabel)
-            status_label.setText(
-                f"YouTube連携: {status.message}。接続管理は設定画面で行います。"
-            )
+            if not self._youtube_operation_busy():
+                status_label.setText(
+                    f"YouTube連携: {status.message} 接続管理は設定画面で行います。"
+                )
             settings_status = self.widgets.get("settings_youtube_status")
-            if isinstance(settings_status, QLabel):
+            if isinstance(settings_status, QLabel) and not self._youtube_operation_busy():
                 settings_status.setText(f"YouTube: {status.message}")
             settings_scope = self.widgets.get("settings_youtube_scope")
             if isinstance(settings_scope, QLabel):
@@ -4778,6 +4843,21 @@ def _run(args: argparse.Namespace) -> int:
             )
             self._set_breakdown_rows("statistics_deck_table", dashboard.by_deck)
             self._set_breakdown_rows("statistics_order_table", dashboard.by_deck_play_order)
+            matchup_table = self.widgets["statistics_matchup_table"]
+            self._set_table_rows(matchup_table, tuple(
+                (row.opponent_deck, row.own_deck, row.metric.matches, row.metric.wins,
+                 row.metric.losses, row.metric.draws, self._format_rate(row.metric.win_rate))
+                for row in dashboard.by_matchup
+            ))
+            for row in range(matchup_table.rowCount()):
+                for column in (0, 1):
+                    item = matchup_table.item(row, column)
+                    if item is not None:
+                        item.setToolTip(item.text())
+            self.statistics_matchup_status.setText(
+                f"{len(dashboard.by_matchup)}組合せ / {dashboard.filtered.matches}戦（条件適用後）"
+                if dashboard.by_matchup else "表示できる確定済み対戦がありません。期間・対戦種別や、戦績の勝敗・確定状態を確認してください。"
+            )
             self._set_breakdown_rows("statistics_coin_table", dashboard.by_coin_face)
             self._set_breakdown_rows("statistics_duel_type_table", dashboard.by_duel_type)
             self._set_breakdown_rows("statistics_season_table", dashboard.by_season)
@@ -5008,6 +5088,8 @@ def _run(args: argparse.Namespace) -> int:
                 status.setText(result.message)
 
         def _refresh_youtube_settings(self) -> None:
+            if self._youtube_operation_busy():
+                return
             try:
                 status = self.service.youtube_connection_status()
             except Exception as exc:
@@ -5015,6 +5097,7 @@ def _run(args: argparse.Namespace) -> int:
                 if isinstance(label, QLabel):
                     label.setText(f"YouTube連携状態を確認できません: {exc}")
                 return
+            self._update_youtube_action_states(status)
             label = self.widgets.get("settings_youtube_status")
             if isinstance(label, QLabel):
                 label.setText(f"YouTube: {status.message}")
@@ -5023,16 +5106,58 @@ def _run(args: argparse.Namespace) -> int:
                 scope.setText(f"scope: {status.scope or '未接続'}")
 
         def refresh_youtube_status(self, *_args: object) -> None:
+            if self._youtube_operation_busy():
+                return
             self._refresh_youtube_settings()
             self._refresh_youtube()
 
         def connect_youtube(self, *_args: object) -> None:
-            self._show_information(
-                "YouTube連携",
-                "ブラウザ認証を開始します。認可コードやtokenは画面・設定・DBへ保存しません。",
+            if self._youtube_operation_busy():
+                return
+            try:
+                status = self.service.youtube_connection_status()
+            except Exception as exc:
+                self._youtube_connection_failed(exc)
+                return
+            self._update_youtube_action_states(status)
+            if not status.can_connect:
+                self._set_youtube_background_status(False, "このビルドではYouTube連携を開始できません。")
+                return
+            self.youtube_connection_running = True
+            self._set_youtube_background_status(
+                True, "ブラウザでYouTube連携を認証してください。完了を待っています。"
+            )
+            try:
+                self._submit_background_task(
+                    "YouTube連携", self.service.connect_youtube, self._youtube_connection_completed
+                )
+            except Exception as exc:
+                self._youtube_connection_failed(exc)
+
+        def _youtube_connection_completed(self, status: object) -> None:
+            self.youtube_connection_running = False
+            self._update_youtube_action_states(status)
+            if getattr(status, "state", "") != "connected":
+                self._set_youtube_background_status(
+                    False, f"YouTube連携結果を確認できません: {getattr(status, 'message', '')}"
+                )
+                return
+            self._set_youtube_background_status(
+                False, f"YouTube連携を更新しました。{getattr(status, 'message', '')}"
+            )
+            scope = self.widgets.get("settings_youtube_scope")
+            if isinstance(scope, QLabel):
+                scope.setText(f"scope: {getattr(status, 'scope', '') or '未接続'}")
+
+        def _youtube_connection_failed(self, error: Exception) -> None:
+            self.youtube_connection_running = False
+            self._set_youtube_background_status(
+                False, f"YouTube連携に失敗しました: {error} 保存済みの資格情報は保持しています。"
             )
 
         def disconnect_youtube(self, *_args: object) -> None:
+            if self._youtube_operation_busy():
+                return
             try:
                 status = self.service.disconnect_youtube()
             except Exception as exc:
@@ -5040,8 +5165,11 @@ def _run(args: argparse.Namespace) -> int:
                 return
             self._show_information("YouTube連携", status.message)
             self._refresh_youtube_settings()
+            self._refresh_youtube()
 
         def open_latest_youtube_test_upload(self, *_args: object) -> None:
+            if self._youtube_operation_busy():
+                return
             self._show_information(
                 "privateテスト投稿",
                 "最新録画のprivateテスト投稿は、戦績管理またはテンプレート画面の投稿導線から実行します。",
