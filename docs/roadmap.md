@@ -2,6 +2,15 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V2.7.21: 統計の視認性と相性絞り込み改善
+
+状態: 実装・ローカル検証完了。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.21)、Issue #661〜#664、Milestone V2.7.21。
+
+- 数値右揃え・数値順・勝率バー・少数表示と推移日付の可読性を改善する。
+- 上部を圧縮し、条件後を主表示、全体を全期間・全種別の比較基準として維持する。
+- 相性の自分デッキ・相手名・未設定・最低件数による局所絞り込みを追加し、母集団を区別する。
+- [操作](releases/2.7.21.md)、[設計](architecture/statistics-usability.md)、[Release Contract](release-contracts/2.7.21.md)、[検証](validation/2.7.21.md)。
+
 ## V2.7.20: YouTube再連携修復とデッキ相性統計
 
 状態: 実装・ローカル検証完了。公開と配布検証・closureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.20)、Issue #658/#659/#660、Milestone V2.7.20。

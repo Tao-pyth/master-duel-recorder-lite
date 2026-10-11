@@ -404,6 +404,13 @@ class DuelStatisticsRepositoryTest(unittest.TestCase):
         self.assertEqual(sum(row.metric.matches for row in dashboard.by_matchup), 8)
         labels = [(row.opponent_deck, row.own_deck) for row in dashboard.by_matchup]
         self.assertEqual(labels.count(("未設定", "未設定")), 2)
+        unassigned = [row for row in dashboard.by_matchup
+                      if row.opponent_deck_unassigned and row.own_deck_unassigned]
+        self.assertEqual(len(unassigned), 1)
+        named = [row for row in dashboard.by_matchup
+                 if (row.opponent_deck, row.own_deck) == ("未設定", "未設定")
+                 and row.opponent_deck_unassigned and not row.own_deck_unassigned]
+        self.assertEqual(len(named), 1)
         self.assertIn(("未設定", "青眼"), labels)
         self.assertIn(("烙印", "未設定"), labels)
         self.assertIn(("相手|中", "自分"), labels)

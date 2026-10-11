@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+import unicodedata
 
 from . import __version__
 from .app_update import AppUpdateService, UpdateRelease, launch_update_after_exit
@@ -970,7 +971,7 @@ def _run(args: argparse.Namespace) -> int:
     if not availability.available:
         raise PySideGuiError(availability.message)
     try:
-        from PySide6.QtCore import QDate, QItemSelectionModel, QPointF, QSignalBlocker, QSize, Qt, QTimer
+        from PySide6.QtCore import QDate, QItemSelectionModel, QPointF, QRectF, QSignalBlocker, QSize, Qt, QTimer
         from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
         from PySide6.QtWidgets import (
             QAbstractScrollArea,
@@ -1000,6 +1001,8 @@ def _run(args: argparse.Namespace) -> int:
             QScrollArea,
             QSizePolicy,
             QStackedWidget,
+            QStyledItemDelegate,
+            QSpinBox,
             QStyleFactory,
             QTabWidget,
             QTableWidget,
@@ -1010,6 +1013,42 @@ def _run(args: argparse.Namespace) -> int:
         )
     except Exception as exc:  # pragma: no cover - depends on local Qt installation
         raise PySideGuiError(f"PySide6 GUIの読み込みに失敗しました: {exc}") from exc
+
+    class StatisticsNumberItem(QTableWidgetItem):
+        def __init__(self, value: object) -> None:
+            super().__init__(str(value))
+            try:
+                numeric = float(str(value).strip().removesuffix("%").replace(",", ""))
+            except (TypeError, ValueError):
+                numeric = None
+            self.setData(Qt.ItemDataRole.UserRole, numeric)
+            self.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        def __lt__(self, other: QTableWidgetItem) -> bool:
+            own = self.data(Qt.ItemDataRole.UserRole)
+            theirs = other.data(Qt.ItemDataRole.UserRole)
+            if own is None or theirs is None:
+                return own is None and theirs is not None
+            return own < theirs
+
+    class StatisticsRateDelegate(QStyledItemDelegate):
+        @staticmethod
+        def bar_fraction(index: object) -> float | None:
+            value = index.data(Qt.ItemDataRole.UserRole)
+            return None if value is None else max(0.0, min(float(value) / 100, 1.0))
+
+        def paint(self, painter: QPainter, option: object, index: object) -> None:
+            super().paint(painter, option, index)
+            fraction = self.bar_fraction(index)
+            if fraction is None or option.rect.height() < option.fontMetrics.height() + 8:
+                return
+            painter.save()
+            bar = QRectF(option.rect.left() + 8, option.rect.bottom() - 4,
+                         max(option.rect.width() - 16, 0), 3)
+            painter.fillRect(bar, QColor("#dce9e5"))
+            painter.fillRect(QRectF(bar.left(), bar.top(), bar.width() * fraction, bar.height()),
+                             QColor("#4f8f82"))
+            painter.restore()
 
     class StatisticsTrendChart(QWidget):
         def __init__(self) -> None:
@@ -1024,15 +1063,43 @@ def _run(args: argparse.Namespace) -> int:
             self.points = points
             self.update()
 
+        def _chart_rects(self) -> tuple[object, object]:
+            frame = self.rect().adjusted(14, 12, -14, -14)
+            bottom_margin = max(58, self.fontMetrics().height() * 2 + 24)
+            return frame, frame.adjusted(44, 28, -48, -bottom_margin)
+
+        def date_label_rectangles(self) -> tuple[tuple[int, str, QRectF], ...]:
+            if not self.points:
+                return ()
+            frame, plot = self._chart_rects()
+            metrics = self.fontMetrics()
+            count = len(self.points)
+            step = plot.width() / count
+
+            def label(index: int) -> tuple[int, str, QRectF]:
+                text = str(getattr(self.points[index], "label", ""))
+                width = metrics.horizontalAdvance(text) + 8
+                center = plot.left() + step * (index + 0.5)
+                left = max(frame.left() + 4, min(center - width / 2, frame.right() - 4 - width))
+                return index, text, QRectF(left, plot.bottom() + 8, width, metrics.height())
+
+            selected = [label(0)]
+            if count > 1:
+                selected.append(label(count - 1))
+            for index in range(1, count - 1):
+                candidate = label(index)
+                if all(not candidate[2].adjusted(-4, 0, 4, 0).intersects(item[2]) for item in selected):
+                    selected.append(candidate)
+            return tuple(sorted(selected, key=lambda item: item[0]))
+
         def paintEvent(self, _event: object) -> None:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            rect = self.rect().adjusted(14, 12, -14, -14)
+            rect, plot = self._chart_rects()
             painter.fillRect(rect, QColor("#ffffff"))
             painter.setPen(QPen(QColor("#c8d0d8"), 1))
             painter.drawRect(rect)
 
-            plot = rect.adjusted(44, 28, -48, -58)
             painter.setPen(QColor("#4b5563"))
             painter.drawText(rect.left() + 10, rect.top() + 18, "勝利数")
             painter.drawText(rect.right() - 72, rect.top() + 18, "累積勝率")
@@ -1079,16 +1146,9 @@ def _run(args: argparse.Namespace) -> int:
                 if rate is not None:
                     y = plot.bottom() - rate * plot.height()
                     line_points.append(QPointF(center_x, y))
-                if count <= 12 or index in {0, count - 1}:
-                    painter.setPen(QColor("#4b5563"))
-                    painter.drawText(
-                        int(center_x - step / 2),
-                        plot.bottom() + 8,
-                        int(step),
-                        18,
-                        int(Qt.AlignmentFlag.AlignCenter),
-                        str(getattr(point, "label", "")),
-                    )
+            painter.setPen(QColor("#4b5563"))
+            for _index, text, label_rect in self.date_label_rectangles():
+                painter.drawText(label_rect, int(Qt.AlignmentFlag.AlignCenter), text)
 
             if len(line_points) >= 2:
                 painter.setPen(QPen(QColor("#2759a5"), 2))
@@ -2163,42 +2223,51 @@ def _run(args: argparse.Namespace) -> int:
             summary_layout = QHBoxLayout(summary)
             summary_layout.setContentsMargins(0, 0, 0, 0)
             self.statistics_cards = []
-            for title, value, detail in (
-                ("全体勝率", "—", "読み込み前"),
-                ("条件適用後", "—", "読み込み前"),
-                ("先後別", "—", "読み込み前"),
-            ):
+            for index, (title, value, detail) in enumerate((
+                ("全体（全期間・全種別）", "—", "読み込み前"),
+                ("条件適用後の勝率", "—", "読み込み前"),
+                ("先攻／後攻（条件適用後）", "—", "読み込み前"),
+            )):
                 card = QFrame()
-                card.setProperty("class", "metricCard")
+                card.setProperty("class", "statisticsMetric")
                 card_layout = QVBoxLayout(card)
+                card_layout.setContentsMargins(12, 8, 12, 8)
+                card_layout.setSpacing(2)
                 card_layout.addWidget(QLabel(title))
                 metric = QLabel(value)
-                metric.setObjectName("metricValue")
-                metric.setWordWrap(True)
+                metric.setObjectName("statisticsPrimary" if index == 1 else "statisticsValue")
                 card_layout.addWidget(metric)
                 detail_label = QLabel(detail)
-                detail_label.setWordWrap(True)
                 card_layout.addWidget(detail_label)
                 self.statistics_cards.append((metric, detail_label))
                 summary_layout.addWidget(card)
+            summary_layout.insertWidget(0, summary_layout.takeAt(1).widget())
             layout.addWidget(summary)
 
-            filters = QGroupBox("集計対象")
+            filters = self._register("statistics_common_filters", QGroupBox("共通の集計条件"))
             grid = QGridLayout(filters)
+            grid.setContentsMargins(10, 18, 10, 8)
+            grid.setVerticalSpacing(4)
             period = self._register("statistics_period_enabled", QCheckBox("期間を指定"))
-            grid.addWidget(period, 1, 0, 1, 2)
-            grid.addWidget(QLabel("開始日"), 0, 0)
-            grid.addWidget(self._date_picker("statistics_date_from_picker"), 0, 1)
-            grid.addWidget(QLabel("終了日"), 0, 2)
-            grid.addWidget(self._date_picker("statistics_date_to_picker"), 0, 3)
+            grid.addWidget(period, 0, 0)
+            from_picker = self._date_picker("statistics_date_from_picker")
+            from_picker.setAccessibleName("統計の開始日")
+            grid.addWidget(from_picker, 0, 1)
+            grid.addWidget(QLabel("〜"), 0, 2)
+            to_picker = self._date_picker("statistics_date_to_picker")
+            to_picker.setAccessibleName("統計の終了日")
+            grid.addWidget(to_picker, 0, 3)
             filter_box = self._register("statistics_filters", QComboBox())
             assert isinstance(filter_box, QComboBox)
             filter_box.addItem("すべての対戦種別", None)
             for key, label in DUEL_CHOICE_LABELS["duel_type"].items():
                 filter_box.addItem(label, key)
             filter_box.setToolTip("選んだ対戦種別の勝ち・負け・引き分けを含めて集計します。")
+            filter_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            filter_box.setMinimumContentsLength(8)
             grid.addWidget(QLabel("対戦種別"), 0, 4)
             grid.addWidget(filter_box, 0, 5)
+            grid.setColumnStretch(5, 1)
             layout.addWidget(filters)
 
             tabs = self._register("statistics_tab_panel", QTabWidget())
@@ -2218,50 +2287,81 @@ def _run(args: argparse.Namespace) -> int:
             trend_layout.addWidget(self._register("statistics_chart", chart))
             tabs.addTab(trend, "勝利数・勝率推移")
             tabs.addTab(
-                self._table_panel("statistics_deck_table", ("デッキ", "対戦", "勝利", "勝率")),
+                self._table_panel("statistics_deck_table", ("デッキ", "対戦", "勝利", "勝率", "参考")),
                 "デッキ別全体",
             )
             tabs.addTab(
-                self._table_panel("statistics_order_table", ("自分デッキ・先後", "対戦", "勝利", "勝率")),
+                self._table_panel("statistics_order_table", ("自分デッキ・先後", "対戦", "勝利", "勝率", "参考")),
                 "デッキ別・先攻／後攻",
             )
             matchup = QWidget()
             matchup_layout = QVBoxLayout(matchup)
             matchup_layout.setContentsMargins(0, 0, 0, 0)
-            guidance = QLabel("自分勝率 = 勝利数 ÷ 対戦数（敗北・引分を含む）。相手と自分のデッキの組合せごとに集計します。")
-            guidance.setWordWrap(True)
-            matchup_layout.addWidget(guidance)
+            controls = QGridLayout()
+            controls.setContentsMargins(6, 4, 6, 0)
+            own = self._register("statistics_matchup_own_deck", QComboBox())
+            own.addItem("すべての自分デッキ", None)
+            own.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            own.setMinimumContentsLength(8)
+            own.setAccessibleName("相性一覧の自分デッキ")
+            search = self._register("statistics_matchup_search", QLineEdit())
+            search.setPlaceholderText("相手デッキ名を検索")
+            search.setAccessibleName("相性一覧の相手デッキ検索")
+            search.setMinimumWidth(100)
+            show_unknown = self._register("statistics_matchup_show_unassigned", QCheckBox("相手未設定も表示"))
+            show_unknown.setChecked(True)
+            minimum = self._register("statistics_matchup_min_matches", QSpinBox())
+            minimum.setRange(0, 1000000)
+            minimum.setSpecialValueText("制限なし")
+            minimum.setSuffix("戦以上")
+            minimum.setAccessibleName("相性一覧の最低対戦数")
+            reset = self._button("statistics_matchup_reset", "解除")
+            reset.setToolTip("相性一覧の絞り込みだけを解除します。期間と対戦種別は維持します。")
+            controls.addWidget(own, 0, 0)
+            controls.addWidget(search, 0, 1)
+            controls.addWidget(show_unknown, 0, 2)
+            controls.addWidget(minimum, 0, 3)
+            controls.addWidget(reset, 0, 4)
+            controls.setColumnStretch(0, 1)
+            controls.setColumnStretch(1, 1)
+            matchup_layout.addLayout(controls)
+            self.statistics_matchups = ()
+            own.currentIndexChanged.connect(self._refresh_matchup_rows)
+            search.textChanged.connect(self._refresh_matchup_rows)
+            show_unknown.toggled.connect(self._refresh_matchup_rows)
+            minimum.valueChanged.connect(self._refresh_matchup_rows)
+            reset.clicked.connect(self._reset_matchup_filters)
             self.statistics_matchup_status = QLabel("読み込み前")
             self.statistics_matchup_status.setWordWrap(True)
             matchup_layout.addWidget(self.statistics_matchup_status)
             matchup_table = self._table(
                 "statistics_matchup_table",
-                ("相手デッキ", "自分デッキ", "対戦", "勝利", "敗北", "引分", "自分勝率"),
-                column_widths=(240, 240, 76, 76, 76, 76, 112),
+                ("相手デッキ", "自分デッキ", "対戦", "勝利", "敗北", "引分", "自分勝率", "参考"),
+                column_widths=(220, 220, 64, 64, 64, 64, 112, 64),
             )
             matchup_table.horizontalHeader().setStretchLastSection(False)
-            matchup_table.setToolTip("長いデッキ名はセルにマウスを置くと全文を確認できます。列幅の変更や横スクロールもできます。")
+            matchup_table.setToolTip("自分勝率 = 勝利数 ÷ 対戦数（敗北・引分を含む）。相性の絞り込みはこの一覧だけに適用します。長い名前はマウスを置くと全文表示。10戦未満は参考の少数表示です。")
             matchup_layout.addWidget(matchup_table, 1)
             tabs.addTab(matchup, "デッキ相性")
             tabs.addTab(
-                self._table_panel("statistics_coin_table", ("コイン", "対戦", "勝利", "勝率")),
+                self._table_panel("statistics_coin_table", ("コイン", "対戦", "勝利", "勝率", "参考")),
                 "コイントス別",
             )
             tabs.addTab(
-                self._table_panel("statistics_duel_type_table", ("対戦種別", "対戦", "勝利", "勝率")),
+                self._table_panel("statistics_duel_type_table", ("対戦種別", "対戦", "勝利", "勝率", "参考")),
                 "対戦種別別",
             )
             tabs.addTab(
-                self._table_panel("statistics_season_table", ("シーズン", "対戦", "勝利", "勝率")),
+                self._table_panel("statistics_season_table", ("シーズン", "対戦", "勝利", "勝率", "参考")),
                 "シーズン別",
             )
             self.widgets["statistics_season_table"].setToolTip("開催開始日の新しい順。同じ開始日は登録の新しい順。シーズン未設定は最後。")
             layout.addWidget(tabs, stretch=1)
             self.statistics_condition_status = QLabel("全期間・すべての確定済み戦績")
             self.statistics_condition_status.setWordWrap(True)
-            grid.addWidget(self.statistics_condition_status, 2, 0, 1, 6)
+            grid.addWidget(self.statistics_condition_status, 1, 0, 1, 7)
             refresh = self._button("statistics_refresh", "更新")
-            grid.addWidget(refresh, 1, 4, 1, 2)
+            grid.addWidget(refresh, 0, 6)
             refresh.clicked.connect(self._refresh_statistics)
             period.toggled.connect(self._refresh_statistics)
             filter_box.currentIndexChanged.connect(self._refresh_statistics)
@@ -2270,7 +2370,7 @@ def _run(args: argparse.Namespace) -> int:
                 self.widgets[key].setEnabled(False)
                 self.widgets[key].dateChanged.connect(self._refresh_statistics)
             tabs.addTab(
-                self._table_panel("statistics_trend_table", ("期間", "対戦", "勝利", "勝率", "累積勝率")),
+                self._table_panel("statistics_trend_table", ("期間", "対戦", "勝利", "勝率", "累積勝率", "参考")),
                 "推移の数値",
             )
 
@@ -2974,12 +3074,26 @@ def _run(args: argparse.Namespace) -> int:
             panel = QWidget()
             layout = QVBoxLayout(panel)
             layout.setContentsMargins(0, 0, 0, 0)
+            statistics = key.startswith("statistics_") and key.endswith("_table")
+            rate_headers = {"勝率", "自分勝率", "累積勝率"}
+            values = tuple(
+                headers[0] if index == 0 else
+                "" if header == "参考" else
+                "50.0%" if header in rate_headers else
+                2 if header in {"対戦", "対戦数"} else 1
+                for index, header in enumerate(headers)
+            ) if statistics else (headers[0], 2, 1, "50.0%")
+            widths = tuple(
+                None if index == 0 else 64 if header == "参考" else
+                112 if header in rate_headers else 76
+                for index, header in enumerate(headers)
+            ) if statistics else (None, 82, 82, 96)
             layout.addWidget(
                 self._table(
                     key,
                     headers,
-                    ((headers[0], 2, 1, "50.0%"),),
-                    column_widths=(None, 82, 82, 96),
+                    (values,),
+                    column_widths=widths,
                 )
             )
             return panel
@@ -2994,12 +3108,37 @@ def _run(args: argparse.Namespace) -> int:
         ) -> QTableWidget:
             table = QTableWidget(0, len(headers))
             table.setHorizontalHeaderLabels(headers)
+            if key.startswith("statistics_") and key.endswith("_table"):
+                numeric_headers = {"対戦", "対戦数", "勝利", "敗北", "引分", "勝率", "自分勝率", "累積勝率"}
+                rate_headers = {"勝率", "自分勝率", "累積勝率"}
+                table.setProperty("statistics_numeric_columns", [
+                    index for index, header in enumerate(headers) if header in numeric_headers
+                ])
+                table.horizontalHeader().setSectionsClickable(True)
+                table.horizontalHeader().setSortIndicatorShown(False)
+                table.horizontalHeader().sectionClicked.connect(
+                    lambda column, current=table: self._enable_statistics_sorting(current, column)
+                )
+                for column, header in enumerate(headers):
+                    if header in rate_headers:
+                        table.setItemDelegateForColumn(column, StatisticsRateDelegate(table))
+                    if header == "参考":
+                        table.horizontalHeaderItem(column).setToolTip("10戦未満の目安です。勝率の確かさを保証するものではありません。")
             self._configure_table(table, column_widths=column_widths)
+            if key.startswith("statistics_") and key.endswith("_table"):
+                table.horizontalHeader().setStretchLastSection(False)
             table.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
             self._set_table_rows(table, rows)
             return self._register(key, table)  # type: ignore[return-value]
+
+        @staticmethod
+        def _enable_statistics_sorting(table: QTableWidget, column: int) -> None:
+            if not table.isSortingEnabled():
+                table.horizontalHeader().setSortIndicator(column, Qt.SortOrder.AscendingOrder)
+                table.setSortingEnabled(True)
+                table.horizontalHeader().setSortIndicatorShown(True)
 
         def _load_runtime_dashboard(self) -> None:
             loaders = (
@@ -4826,11 +4965,18 @@ def _run(args: argparse.Namespace) -> int:
                 f"{label} {self._format_rate(orders[key].win_rate) if key in orders else '—'}"
                 for key, label in (("first", "先攻"), ("second", "後攻"))
             ))
-            detail.setText("条件適用後・確定済み戦績")
+            detail.setText(" / ".join(
+                f"{label} {orders[key].matches if key in orders else 0}戦"
+                for key, label in (("first", "先攻"), ("second", "後攻"))
+            ))
             period_text = f"{filters.date_from}〜{filters.date_to}" if use_dates else "全期間"
             self.statistics_condition_status.setText(
-                f"集計対象: {period_text}・{self.widgets['statistics_filters'].currentText()} / "
-                "勝ち・負け・引き分けの確定済み戦績（全体勝率は全期間・全種別）"
+                f"共通条件: {period_text}・{self.widgets['statistics_filters'].currentText()} "
+                "｜ 全体は全期間・全種別"
+            )
+            self.statistics_condition_status.setToolTip(
+                "条件後の勝率・先後・全タブは期間と対戦種別を反映します。勝ち・負け・引分の確定済み戦績が対象。"
+                "相性の絞り込みは相性一覧だけに作用します。"
             )
             chart = self.widgets["statistics_chart"]
             assert isinstance(chart, StatisticsTrendChart)
@@ -4843,27 +4989,16 @@ def _run(args: argparse.Namespace) -> int:
             )
             self._set_breakdown_rows("statistics_deck_table", dashboard.by_deck)
             self._set_breakdown_rows("statistics_order_table", dashboard.by_deck_play_order)
-            matchup_table = self.widgets["statistics_matchup_table"]
-            self._set_table_rows(matchup_table, tuple(
-                (row.opponent_deck, row.own_deck, row.metric.matches, row.metric.wins,
-                 row.metric.losses, row.metric.draws, self._format_rate(row.metric.win_rate))
-                for row in dashboard.by_matchup
-            ))
-            for row in range(matchup_table.rowCount()):
-                for column in (0, 1):
-                    item = matchup_table.item(row, column)
-                    if item is not None:
-                        item.setToolTip(item.text())
-            self.statistics_matchup_status.setText(
-                f"{len(dashboard.by_matchup)}組合せ / {dashboard.filtered.matches}戦（条件適用後）"
-                if dashboard.by_matchup else "表示できる確定済み対戦がありません。期間・対戦種別や、戦績の勝敗・確定状態を確認してください。"
-            )
+            self.statistics_matchups = dashboard.by_matchup
+            self._refresh_matchup_choices()
+            self._refresh_matchup_rows()
             self._set_breakdown_rows("statistics_coin_table", dashboard.by_coin_face)
             self._set_breakdown_rows("statistics_duel_type_table", dashboard.by_duel_type)
             self._set_breakdown_rows("statistics_season_table", dashboard.by_season)
             self._set_table_rows(self.widgets["statistics_trend_table"], tuple(
                 (point.label, point.metric.matches, point.metric.wins,
-                 self._format_rate(point.metric.win_rate), self._format_rate(point.cumulative_win_rate))
+                 self._format_rate(point.metric.win_rate), self._format_rate(point.cumulative_win_rate),
+                 self._sample_note(point.metric.matches))
                 for point in points
             ))
 
@@ -4878,9 +5013,96 @@ def _run(args: argparse.Namespace) -> int:
                         getattr(row, "metric").matches,
                         getattr(row, "metric").wins,
                         self._format_rate(getattr(row, "metric").win_rate),
+                        self._sample_note(getattr(row, "metric").matches),
                     )
                     for row in rows
                 ),
+            )
+
+        @staticmethod
+        def _sample_note(matches: int) -> str:
+            return "少数" if 0 < matches < 10 else ""
+
+        @staticmethod
+        def _matchup_name_key(name: str) -> str:
+            return unicodedata.normalize("NFKC", name).strip().casefold()
+
+        @staticmethod
+        def _matchup_display_name(name: str, unassigned: bool) -> str:
+            return "未設定（デッキ名）" if name == "未設定" and not unassigned else name
+
+        def _refresh_matchup_choices(self) -> None:
+            selector = self.widgets["statistics_matchup_own_deck"]
+            selected = selector.currentData()
+            selected_label = selector.currentText()
+            choices = {}
+            for row in self.statistics_matchups:
+                key = (self._matchup_name_key(row.own_deck), row.own_deck_unassigned)
+                choices.setdefault(key, self._matchup_display_name(row.own_deck, row.own_deck_unassigned))
+            # 共通条件の変更で一時的に0件でも、利用者のデッキ選択を維持する。
+            if selected is not None and selected not in choices:
+                choices[selected] = selected_label
+            with QSignalBlocker(selector):
+                selector.clear()
+                selector.addItem("すべての自分デッキ", None)
+                for key, label in sorted(choices.items(), key=lambda item: (item[0][1], item[0][0])):
+                    selector.addItem(label, key)
+                selected_index = next((index for index in range(selector.count())
+                                       if selector.itemData(index) == selected), 0)
+                selector.setCurrentIndex(selected_index)
+            selector.setToolTip(selector.currentText())
+
+        def _reset_matchup_filters(self) -> None:
+            keys = ("statistics_matchup_own_deck", "statistics_matchup_search",
+                    "statistics_matchup_show_unassigned", "statistics_matchup_min_matches")
+            blockers = [QSignalBlocker(self.widgets[key]) for key in keys]
+            try:
+                self.widgets[keys[0]].setCurrentIndex(0)
+                self.widgets[keys[1]].clear()
+                self.widgets[keys[2]].setChecked(True)
+                self.widgets[keys[3]].setValue(0)
+            finally:
+                for blocker in blockers:
+                    blocker.unblock()
+            self._refresh_matchup_rows()
+
+        def _refresh_matchup_rows(self) -> None:
+            selector = self.widgets["statistics_matchup_own_deck"]
+            own = selector.currentData()
+            selector.setToolTip(selector.currentText())
+            search = self._matchup_name_key(self.widgets["statistics_matchup_search"].text())
+            include_unknown = self.widgets["statistics_matchup_show_unassigned"].isChecked()
+            minimum = self.widgets["statistics_matchup_min_matches"].value()
+            candidates = tuple(row for row in self.statistics_matchups
+                               if (own is None or own == (self._matchup_name_key(row.own_deck), row.own_deck_unassigned))
+                               and search in self._matchup_name_key(row.opponent_deck))
+            unknown = tuple(row for row in candidates if row.opponent_deck_unassigned)
+            shown = tuple(row for row in candidates
+                          if (include_unknown or not row.opponent_deck_unassigned)
+                          and row.metric.matches >= minimum)
+            table = self.widgets["statistics_matchup_table"]
+            self._set_table_rows(table, tuple(
+                (self._matchup_display_name(row.opponent_deck, row.opponent_deck_unassigned),
+                 self._matchup_display_name(row.own_deck, row.own_deck_unassigned),
+                 row.metric.matches, row.metric.wins, row.metric.losses, row.metric.draws,
+                 self._format_rate(row.metric.win_rate), self._sample_note(row.metric.matches))
+                for row in shown
+            ))
+            for index in range(table.rowCount()):
+                for column in (0, 1):
+                    item = table.item(index, column)
+                    if item is not None:
+                        item.setToolTip(item.text())
+                table.item(index, 7).setToolTip("10戦未満の参考値です。勝率の確かさを保証する基準ではありません。")
+            common_matches = sum(row.metric.matches for row in self.statistics_matchups)
+            self.statistics_matchup_status.setText(
+                f"表示 {len(shown)}組合せ / {sum(row.metric.matches for row in shown)}戦（相性の絞り込み）"
+                f" ｜ 共通条件 {len(self.statistics_matchups)}組合せ / {common_matches}戦"
+                f" ｜ 相手未設定 {len(unknown)}組合せ / {sum(row.metric.matches for row in unknown)}戦"
+                + ("（折り畳み中）" if not include_unknown else "")
+                + ("\n表示できる確定済み対戦がありません。期間・対戦種別や、戦績の勝敗・確定状態を確認してください。"
+                   if not self.statistics_matchups else
+                   "\n相性の絞り込みに一致する対戦がありません。解除するか条件を変更してください。" if not shown else "")
             )
 
         @staticmethod
@@ -5464,23 +5686,33 @@ def _run(args: argparse.Namespace) -> int:
             table: QTableWidget,
             rows: tuple[tuple[object, ...], ...] | list[tuple[object, ...]],
         ) -> None:
-            table.setRowCount(len(rows))
-            for row_index, row_values in enumerate(rows):
-                for column, value in enumerate(row_values):
-                    item = QTableWidgetItem(str(value))
-                    header_item = table.horizontalHeaderItem(column)
-                    header_text = header_item.text() if header_item is not None else ""
-                    if header_text in {"カラー", "現在色"}:
-                        color = QColor(str(value))
-                        if color.isValid():
-                            item.setText("")
-                            item.setData(
-                                Qt.ItemDataRole.DecorationRole,
-                                self._color_swatch_pixmap(color),
-                            )
-                            item.setToolTip(f"登録カラー: {color.name().upper()}")
-                    table.setItem(row_index, column, item)
-                table.setRowHeight(row_index, TABLE_FIXED_ROW_HEIGHT)
+            numeric_columns = table.property("statistics_numeric_columns")
+            sorted_statistics = numeric_columns is not None and table.isSortingEnabled()
+            if sorted_statistics:
+                # 入力途中の行移動で、名称と件数が別の行へ混ざることを防ぐ。
+                table.setSortingEnabled(False)
+            try:
+                table.setRowCount(len(rows))
+                for row_index, row_values in enumerate(rows):
+                    for column, value in enumerate(row_values):
+                        item = (StatisticsNumberItem(value)
+                                if column in (numeric_columns or ()) else QTableWidgetItem(str(value)))
+                        header_item = table.horizontalHeaderItem(column)
+                        header_text = header_item.text() if header_item is not None else ""
+                        if header_text in {"カラー", "現在色"}:
+                            color = QColor(str(value))
+                            if color.isValid():
+                                item.setText("")
+                                item.setData(
+                                    Qt.ItemDataRole.DecorationRole,
+                                    self._color_swatch_pixmap(color),
+                                )
+                                item.setToolTip(f"登録カラー: {color.name().upper()}")
+                        table.setItem(row_index, column, item)
+                    table.setRowHeight(row_index, TABLE_FIXED_ROW_HEIGHT)
+            finally:
+                if sorted_statistics:
+                    table.setSortingEnabled(True)
 
         @staticmethod
         def _color_swatch_pixmap(color: QColor) -> QPixmap:
@@ -5641,6 +5873,9 @@ def _style_sheet() -> str:
         font-weight: 700;
     }
     #metricValue { color: #007c7a; font-size: 24px; font-weight: 700; }
+    QFrame[class="statisticsMetric"] { background: #ffffff; border: 1px solid #edf1f4; }
+    #statisticsPrimary { color: #007c7a; font-size: 24px; font-weight: 700; }
+    #statisticsValue { color: #007c7a; font-size: 18px; font-weight: 600; }
     QPushButton {
         min-height: 36px;
         padding: 6px 14px;

@@ -54,7 +54,7 @@ class MatchupStatisticsWidgetTest(unittest.TestCase):
                     tab_index = next(i for i in range(tabs.count()) if tabs.tabText(i) == "デッキ相性")
                     self.assertEqual(
                         [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())],
-                        ["相手デッキ", "自分デッキ", "対戦", "勝利", "敗北", "引分", "自分勝率"],
+                        ["相手デッキ", "自分デッキ", "対戦", "勝利", "敗北", "引分", "自分勝率", "参考"],
                     )
 
                     def rows():

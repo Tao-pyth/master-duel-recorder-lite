@@ -89,6 +89,8 @@ class StatisticsMatchup:
     opponent_deck: str
     own_deck: str
     metric: StatisticsMetric
+    opponent_deck_unassigned: bool = False
+    own_deck_unassigned: bool = False
 
 
 @dataclass(frozen=True)
@@ -332,7 +334,7 @@ def _breakdown_by_matchup(
             (row.opponent_deck.strip() or "未設定", row.own_deck.strip() or "未設定"),
         )
     items = (
-        StatisticsMatchup(*labels[key], _metric(values))
+        StatisticsMatchup(*labels[key], _metric(values), not key[0], not key[1])
         for key, values in grouped.items()
     )
     return tuple(sorted(items, key=lambda item: (
