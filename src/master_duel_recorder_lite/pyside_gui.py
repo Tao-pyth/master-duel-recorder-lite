@@ -384,6 +384,8 @@ SMOKE_WIDGETS: tuple[str, ...] = tuple(
         | {widget for widgets in OPERATIONAL_ACTION_WIDGETS.values() for widget in widgets}
         | {
             "incomplete_duel_count",
+            "settings_card_analysis_enabled",
+            "settings_card_analysis_fps",
         }
     )
 )
@@ -985,6 +987,7 @@ def _run(args: argparse.Namespace) -> int:
             QDialog,
             QDialogButtonBox,
             QFileDialog,
+            QFormLayout,
             QFrame,
             QGridLayout,
             QGroupBox,
@@ -1257,6 +1260,16 @@ def _run(args: argparse.Namespace) -> int:
             if not self._allow_history_leave():
                 event.ignore()
                 return
+            if hasattr(self, "card_target_panel") and not self.card_target_panel.request_leave():
+                event.ignore()
+                return
+            for review in tuple(self.review_windows):
+                panel = getattr(review, "card_panel", None)
+                if panel is not None:
+                    if not panel.request_leave():
+                        event.ignore()
+                        return
+                    panel.load_observation(panel.current)
             if self._settings_dirty():
                 choice = QMessageBox.question(
                     self, "未保存の設定", "設定の変更を保存して終了しますか？",
@@ -1268,6 +1281,12 @@ def _run(args: argparse.Namespace) -> int:
                 ):
                     event.ignore()
                     return
+            try:
+                self.service.close()
+            except Exception as exc:
+                self._show_warning("終了できません", str(exc))
+                event.ignore()
+                return
             self.record_state_timer.stop()
             for review in tuple(self.review_windows):
                 review.close()
@@ -1345,6 +1364,10 @@ def _run(args: argparse.Namespace) -> int:
             if hasattr(self, "history_editor") and self.stack.currentWidget() == self.pages.get("history") and key != "history":
                 if not self._allow_history_leave():
                     return
+            if hasattr(self, "card_target_panel") and self.stack.currentWidget() == self.pages.get("settings") and key != "settings":
+                if not self.card_target_panel.request_leave():
+                    return
+                self.card_target_panel.load_target(self.card_target_panel.current)
             self.stack.setCurrentWidget(self.pages[key])
             for page, button in self.nav_buttons.items():
                 button.setChecked(page == key)
@@ -1359,6 +1382,10 @@ def _run(args: argparse.Namespace) -> int:
                     self.load_settings()
                 self._refresh_youtube_settings()
                 self._refresh_data_protection()
+                if self.load_runtime_data and not self.card_target_panel.request_leave():
+                    return
+                if self.load_runtime_data:
+                    self.card_target_panel.reload()
 
         def _page(self, key: str) -> QWidget:
             page = QWidget()
@@ -2373,6 +2400,21 @@ def _run(args: argparse.Namespace) -> int:
                 self._table_panel("statistics_trend_table", ("期間", "対戦", "勝利", "勝率", "累積勝率", "参考")),
                 "推移の数値",
             )
+            from .pyside_card_analysis import CardStatisticsPanel
+
+            self.card_statistics_panel = CardStatisticsPanel(
+                self.service, filters=self._card_statistics_filters,
+                parent=self, autoload=self.load_runtime_data,
+            )
+            tabs.addTab(self.card_statistics_panel, "使用カード・初動")
+
+        def _card_statistics_filters(self) -> StatisticsFilter:
+            use_dates = self.widgets["statistics_period_enabled"].isChecked()
+            return StatisticsFilter(
+                date_from=self.widgets["statistics_date_from_picker"].date().toPython() if use_dates else None,
+                date_to=self.widgets["statistics_date_to_picker"].date().toPython() if use_dates else None,
+                duel_type=self.widgets["statistics_filters"].currentData(),
+            )
 
         def _catalog_page(self, layout: QVBoxLayout, key: str) -> None:
             from .pyside_catalog_editor import create_catalog_page
@@ -2455,6 +2497,22 @@ def _run(args: argparse.Namespace) -> int:
             tabs.addTab(self._scroll_page(self._csv_settings_tab()), "CSV入出力")
             tabs.addTab(self._scroll_page(self._display_settings_tab()), "戦績表示設定")
             tabs.addTab(self._scroll_page(self._update_settings_tab()), "アプリ更新")
+            from .pyside_card_analysis import CardTargetPanel
+
+            card_settings = QWidget()
+            card_layout = QVBoxLayout(card_settings)
+            card_layout.addWidget(self._settings_check(
+                "settings_card_analysis_enabled", "card_analysis.enabled",
+                "録画完了後に使用カードを解析する", False,
+            ))
+            card_form = QFormLayout()
+            card_form.addRow("解析のフレーム数（0.25～2fps）", self._settings_field(
+                "settings_card_analysis_fps", "card_analysis.fps", 2.0,
+            ))
+            card_layout.addLayout(card_form)
+            self.card_target_panel = CardTargetPanel(self.service, self, autoload=self.load_runtime_data)
+            card_layout.addWidget(self.card_target_panel)
+            tabs.addTab(self._scroll_page(card_settings), "使用カード分析")
             layout.addWidget(tabs, stretch=1)
             layout.addWidget(self.settings_actions)
             layout.addWidget(self.settings_status_label)
@@ -4941,6 +4999,9 @@ def _run(args: argparse.Namespace) -> int:
                 self.close()
 
         def _refresh_statistics(self) -> None:
+            if hasattr(self, "card_statistics_panel"):
+                self.card_statistics_panel.reload_targets()
+                self.card_statistics_panel.refresh()
             use_dates = self.widgets["statistics_period_enabled"].isChecked()
             for key in ("statistics_date_from_picker", "statistics_date_to_picker"):
                 self.widgets[key].setEnabled(use_dates)
@@ -5780,7 +5841,10 @@ def _run(args: argparse.Namespace) -> int:
         window.close()
         app.processEvents()
         return 0
-    return int(app.exec())
+    try:
+        return int(app.exec())
+    finally:
+        service.close()
 
 
 def _style_sheet() -> str:

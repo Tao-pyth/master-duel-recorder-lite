@@ -1,5 +1,38 @@
 # Third-party notices
 
+## RapidOCR / PaddleOCR generic OCR models
+
+The optional card analysis uses RapidOCR 3.10.0 and two generic PP-OCRv6 small
+ONNX models derived from official PaddleOCR models. The CLI and GUI distributions
+include these models and their license and provenance documents under
+`licenses/card-ocr/`. The updater does not include the OCR runtime or models.
+
+RapidOCR source code and engineering components are copyright RapidOCR Authors
+and licensed under Apache License 2.0. The upstream model weights are copyright
+Baidu and/or the applicable PaddleOCR rights holders, under Apache License 2.0.
+RapidOCR converted and packaged the upstream models for ONNX Runtime. The upstream
+ownership and license terms are retained. No affiliation or endorsement is implied.
+
+- `PP-OCRv6_det_small.onnx`: SHA-256
+  `090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f`
+- `PP-OCRv6_rec_small.onnx`: SHA-256
+  `6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884`
+
+See `licenses/card-ocr/APACHE-2.0.txt`, `PaddleOCR-LICENSE.txt`,
+`RapidOCR-LICENSE.txt`, `RapidOCR-MODEL_LICENSES.md` and `MODEL_SOURCES.json`.
+The full upstream texts and exact source URLs are preserved there. Only generic
+OCR weights and configuration are bundled; game images, extracted templates,
+recordings and a full official card database are not distribution assets.
+
+## ONNX Runtime and OCR Python dependencies
+
+ONNX Runtime 1.31.0 is copyright Microsoft Corporation, distributed under the
+MIT License. The complete text is in `licenses/card-ocr/ONNXRuntime-LICENSE.txt`.
+Release builds retain the installed distribution metadata, license files and
+copyright notices of RapidOCR, ONNX Runtime and their Python dependencies,
+including OpenCV, NumPy, Shapely, PyClipper and Pillow. These components retain
+their individual license terms; the project's MIT license does not replace them.
+
 ## PySide6 / Qt for Python
 
 The optional in-app review preview uses PySide6 / Qt for Python when the

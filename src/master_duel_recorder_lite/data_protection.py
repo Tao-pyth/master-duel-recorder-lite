@@ -36,6 +36,11 @@ COUNT_TABLES = {
     "tags": "duel_catalog_entries WHERE kind = 'tag'",
     "seasons": "seasons",
     "filters": "saved_duel_filters",
+    "card_targets": "card_targets",
+    "card_analysis_jobs": "card_analysis_jobs",
+    "card_observations": "card_observations",
+    "card_nonuse_confirmations": "card_nonuse_confirmations",
+    "card_opener_confirmations": "card_opener_confirmations",
 }
 
 

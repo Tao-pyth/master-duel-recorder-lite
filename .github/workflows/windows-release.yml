@@ -62,6 +62,8 @@ jobs:
           ./scripts/smoke_windows_updater.ps1 `
             -ExePath ./dist/master-duel-recorder-lite-updater.exe `
             -ExpectedVersion $env:MDRL_VERSION
+      - name: Smoke bundled Japanese OCR
+        run: python scripts/smoke_card_ocr.py --cli dist/master-duel-recorder-lite.exe --gui dist/master-duel-recorder-lite-gui.exe --output build/card-ocr-smoke.json
       - name: Create SHA-256 files
         shell: pwsh
         run: |
@@ -150,3 +152,8 @@ jobs:
           ./scripts/smoke_windows_updater.ps1 `
             -ExePath "$download/master-duel-recorder-lite-updater.exe" `
             -ExpectedVersion $env:MDRL_VERSION
+          python scripts/smoke_card_ocr.py `
+            --cli "$download/master-duel-recorder-lite.exe" `
+            --gui "$download/master-duel-recorder-lite-gui.exe" `
+            --output build/downloaded-card-ocr-smoke.json
+          if ($LASTEXITCODE -ne 0) { throw "downloaded OCR smoke failed" }

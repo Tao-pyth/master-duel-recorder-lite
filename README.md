@@ -29,10 +29,13 @@ V2.7.11では、次の中核機能を提供します。
 - Master Duelだけのゲーム音声を映像対象と独立して取得するプロセス単体音声
 - スプレッドシートの既存戦績を安全に移行・再出力するCSV入出力
 - GUI非依存のレビュー用ViewModel、通常GUI内動画レビュー、PySide6通常配布GUI
+- 正常完了した録画の対象カード解析、候補の確認・訂正、使用カード・初動と勝敗の統計
 
 ## 現在の状態
 
-このソースのバージョンは `2.7.21`、「統計の視認性と相性絞り込み改善」です。正式公開の状態は[GitHub Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/latest)で確認できます。`master-duel-recorder-lite-gui.exe`はPySide6 GUIを起動し、録画、戦績管理、統計、デッキ名、タグ、シーズン、YouTubeテンプレート、設定、データ保全、CSV/更新、主要ダイアログ、動画レビューの状態を管理・表示できます。信頼性確認は主要ナビではなく設定内の「録画診断・信頼性」へ統合し、MP4準備はYouTube投稿時の内部処理として扱います。既存DB、戦績、録画履歴、デッキ、タグ、シーズン、設定、バックアップ操作を更新後も通常GUIから扱えることを優先します。
+V3.0.0では設定のカード分析をONにすると、正常完了した録画を後から解析します。レビューの「使用カード」で候補を確認・訂正し、統計の「使用カード・初動」で勝敗との関係を確認できます。認識結果は確認前の候補です。0件を未使用へ置き換えません。ソース版のカード解析はPython3.12以上が必要です（検証3.13）。[操作と認識の限界](docs/releases/3.0.0.md)、[データ保護](docs/architecture/card-analysis.md)、[検証](docs/validation/3.0.0.md)を参照してください。
+
+このソースのバージョンは `3.0.0`、「使用カード分析の初期実装」です。正式公開の状態は[GitHub Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/latest)で確認できます。`master-duel-recorder-lite-gui.exe`はPySide6 GUIを起動し、録画、戦績管理、統計、デッキ名、タグ、シーズン、YouTubeテンプレート、設定、データ保全、CSV/更新、主要ダイアログ、動画レビューの状態を管理・表示できます。信頼性確認は主要ナビではなく設定内の「録画診断・信頼性」へ統合し、MP4準備はYouTube投稿時の内部処理として扱います。既存DB、戦績、録画履歴、デッキ、タグ、シーズン、設定、バックアップ操作を更新後も通常GUIから扱えることを優先します。
 
 V2.7.17では、自動監視の戦績初期値に「対戦種別」を追加しました。希望先後の右で、その他・ランク戦・イベント・ルーム戦・ソロモードを選べます。監視開始時に保存し、その監視中に作られる新しい戦績下書きへ反映します。開始後の変更は次の監視開始から適用されます。[操作と互換性](docs/architecture/auto-watch-duel-type.md)を参照してください。
 
@@ -328,6 +331,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 python -m pip install -e ".[review]"
+python -m pip install -e ".[card-analysis]"
 python -m master_duel_recorder_lite
 python -m master_duel_recorder_lite --version
 python -m master_duel_recorder_lite config init

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,33 @@ APP_ICON = Path("assets/mdrl.ico")
 YOUTUBE_OAUTH_CLIENT_ASSET = Path("assets/youtube-oauth-client.json")
 YOUTUBE_OAUTH_CLIENT_ID_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_ID"
 YOUTUBE_OAUTH_CLIENT_SECRET_ENV = "MDRL_YOUTUBE_OAUTH_CLIENT_SECRET"
+OCR_LICENSE_FILES = (
+    "APACHE-2.0.txt", "PaddleOCR-LICENSE.txt", "RapidOCR-LICENSE.txt",
+    "RapidOCR-MODEL_LICENSES.md", "ONNXRuntime-LICENSE.txt", "MODEL_SOURCES.json",
+)
+
+
+def card_ocr_bundle_data(project_root: Path) -> tuple[tuple[Path, str], ...]:
+    from master_duel_recorder_lite.card_ocr import diagnose_ocr_models, resolve_ocr_models
+
+    diagnose_ocr_models()
+    models = resolve_ocr_models()
+    spec = importlib.util.find_spec("rapidocr")
+    if spec is None or spec.origin is None:
+        raise RuntimeError("配布用RapidOCRを取得できません")
+    package_root = Path(spec.origin).parent
+    data = [(path, "card_ocr_models") for path in models.values()]
+    for name in ("config.yaml", "default_models.yaml"):
+        path = package_root / name
+        if not path.is_file():
+            raise RuntimeError(f"配布用OCR設定がありません: {name}")
+        data.append((path, "rapidocr"))
+    for name in OCR_LICENSE_FILES:
+        path = project_root / "licenses" / "card-ocr" / name
+        if not path.is_file():
+            raise RuntimeError(f"配布用OCRライセンスがありません: {name}")
+        data.append((path, "licenses/card-ocr"))
+    return tuple(data)
 
 
 def read_project_version(project_root: Path = PROJECT_ROOT) -> str:
@@ -91,6 +119,7 @@ def build_command(
     youtube_oauth_client_asset: Path | None = None,
     extra_binaries: tuple[tuple[Path, str], ...] = (),
     include_pyside_review: bool = False,
+    include_card_ocr: bool = False,
 ) -> tuple[str, ...]:
     command = [
         sys.executable,
@@ -129,6 +158,21 @@ def build_command(
                 "PySide6.QtMultimediaWidgets",
             ]
         )
+    if include_card_ocr:
+        command.extend([
+            "--hidden-import", "master_duel_recorder_lite.card_analysis_worker",
+            "--hidden-import", "rapidocr.inference_engine.onnxruntime",
+            "--recursive-copy-metadata", "rapidocr",
+            "--recursive-copy-metadata", "onnxruntime",
+        ])
+        # 利用しないGPU/別backendを配布へ巻き込まない。
+        for module in ("paddle", "paddleocr", "torch", "openvino", "mnn", "tensorrt"):
+            command.extend(["--exclude-module", module])
+        for source, destination in card_ocr_bundle_data(project_root):
+            command.extend(["--add-data", f"{source};{destination}"])
+    elif executable_name == UPDATER_EXECUTABLE_NAME:
+        for module in ("rapidocr", "onnxruntime", "cv2", "numpy"):
+            command.extend(["--exclude-module", module])
     helper = project_root / NATIVE_HELPER_OUTPUT
     if helper.is_file():
         command.extend(["--add-binary", f"{helper};native"])
@@ -317,6 +361,7 @@ def build_windows_executable(
         version_file,
         youtube_oauth_client_asset=youtube_oauth_client_asset,
         include_pyside_review=True,
+        include_card_ocr=True,
     )
     completed = subprocess.run(command, cwd=project_root, env=pyinstaller_environment(), check=False)
     if completed.returncode != 0:
@@ -396,6 +441,7 @@ def build_windows_executables(
         youtube_oauth_client_asset=youtube_oauth_client_asset,
         extra_binaries=((updater_executable, "."),),
         include_pyside_review=True,
+        include_card_ocr=True,
     )
     completed = subprocess.run(command, cwd=project_root, env=pyinstaller_environment(), check=False)
     if completed.returncode != 0:

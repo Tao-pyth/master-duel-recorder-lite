@@ -53,6 +53,11 @@ REVIEW_WIDGETS: tuple[str, ...] = (
     "review_duel_tab",
     "review_duel_save",
     "review_timeline_table",
+    "review_cards_tab",
+    "review_cards_analyze",
+    "review_cards_table",
+    "review_card_confirm",
+    "review_card_nonuse_confirm",
 )
 
 MARKER_KIND_CHOICES: tuple[str, ...] = (
@@ -72,6 +77,7 @@ REVIEW_EVENT_TYPE_LABELS: dict[str, str] = {
     "turn_change": "ターン切替",
     "recording_start": "録画開始",
     "recording_end": "録画終了",
+    "card_use": "カード使用",
 }
 
 REVIEW_EVENT_STATUS_LABELS: dict[str, str] = {
@@ -87,6 +93,7 @@ REVIEW_EVENT_SOURCE_LABELS: dict[str, str] = {
     "auto": "自動判定",
     "import": "取込",
     "system": "システム",
+    "card_analysis": "カード解析",
 }
 
 
@@ -182,10 +189,10 @@ def review_visual_timeline_contract() -> dict[str, object]:
     return {
         "widget": "review_visual_timeline",
         "source": "ReviewViewModel.visual_timeline",
-        "kinds": ["duel_start", "manual_marker", "clip_candidate", "timeline_event"],
+        "kinds": ["duel_start", "manual_marker", "clip_candidate", "timeline_event", "card_usage", "card_usage_rejected"],
         "sync": ["current_position", "selected_event", "timeline_table"],
         "fallback_safe": True,
-        "tabs": ["戦績入力", "マーカー編集"],
+        "tabs": ["戦績入力", "マーカー編集", "使用カード"],
         "source_column_visible": False,
     }
 
@@ -254,6 +261,9 @@ def create_review_window(
 
     class ReviewWindow(QMainWindow):
         def closeEvent(self, event) -> None:
+            if hasattr(self, "card_panel") and not self.card_panel.request_leave():
+                event.ignore()
+                return
             # stopだけでは動画ファイルが開いたままになるためsourceも解除する。
             self.player.stop()
             self.player.setSource(QUrl())
@@ -412,6 +422,8 @@ def create_review_window(
         colors = {
             "duel_start": QColor("#16a34a"),
             "manual_marker": QColor("#2563eb"),
+            "card_usage": QColor("#7c3aed"),
+            "card_usage_rejected": QColor("#9ca3af"),
             "clip_candidate": QColor("#f59e0b"),
             "timeline_event": QColor("#6b7280"),
         }
@@ -640,6 +652,15 @@ def create_review_window(
     duel_outer.addWidget(duel_save)
     tabs.addTab(duel_tab, "戦績入力")
     tabs.addTab(marker_tab, "マーカー編集")
+    from .pyside_card_analysis import CardReviewPanel
+
+    card_panel = CardReviewPanel(
+        service, recording_id, seek=player.setPosition,
+        on_changed=lambda: reload_timeline(),
+        duration_seconds=model.recording.duration_seconds, parent=window,
+    )
+    window.card_panel = card_panel
+    tabs.addTab(card_panel, "使用カード")
     tabs.setCurrentWidget(marker_tab if initial_tab == "marker" else duel_tab)
 
     event_id_role = Qt.ItemDataRole.UserRole + 1
@@ -699,7 +720,7 @@ def create_review_window(
 
     def update_timeline_action_state() -> None:
         selected = selected_timeline_event()
-        is_candidate = selected is not None and selected[3] == "candidate"
+        is_candidate = selected is not None and selected[3] == "candidate" and selected[1] != "card_use"
         is_manual_marker = (
             selected is not None and selected[1] == "marker" and selected[2] == "manual"
         )
@@ -918,6 +939,13 @@ def create_review_window(
             return
         visual_timeline.set_selected_event(str(item.data(event_id_role)))
         player.setPosition(int(item.data(Qt.ItemDataRole.UserRole)))
+        if item.data(event_type_role) == "card_use":
+            tabs.setCurrentWidget(card_panel)
+            card_id = str(item.data(event_id_role)).removeprefix("card:")
+            for card_row in range(card_panel.table.rowCount()):
+                if card_panel.table.item(card_row, 0).data(Qt.ItemDataRole.UserRole) == card_id:
+                    card_panel.table.selectRow(card_row)
+                    break
         update_timeline_action_state()
 
     def select_timeline_event(item: ReviewVisualTimelineItem) -> None:
@@ -927,6 +955,7 @@ def create_review_window(
                 continue
             if event_id_item.data(event_id_role) == item.event_id:
                 timeline.selectRow(row)
+                seek_to_timeline_row(row)
                 break
         player.setPosition(item.elapsed_ms)
 

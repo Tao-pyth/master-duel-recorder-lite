@@ -2,6 +2,16 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V3.0.0: 使用カード分析の初期実装
+
+状態: 実装・検証中。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v3.0.0)、[親Issue #665](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/665)、子Issue #666〜#671、Milestone V3.0.0。
+
+- 正常完了録画の対象限定OCR、録画優先の永続ジョブと途中再開を実装する。
+- 対象の追加・編集・無効化、候補の訂正・確認・却下、非使用と初動の明示確認を提供する。
+- 使用カードと初動を1対戦単位の勝敗へ関連付け、不明と候補を区別する。
+- 汎用モデルの同梱、移行・失敗復元、実録画・負荷・GUI・CLI・公開配布検証までを完了条件とする。
+- [操作](releases/3.0.0.md)、[設計](architecture/card-analysis.md)、[Release Contract](release-contracts/3.0.0.md)、[検証](validation/3.0.0.md)。全カード網羅認識と改善手の提案は後続検討。
+
 ## V2.7.21: 統計の視認性と相性絞り込み改善
 
 状態: 実装・ローカル検証完了。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v2.7.21)、Issue #661〜#664、Milestone V2.7.21。

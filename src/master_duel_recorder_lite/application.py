@@ -30,6 +30,10 @@ from .capture_targets import (
     resolve_configured_capture,
 )
 from .clip_export import ClipExportResult, ClipExportService
+from .card_analysis_jobs import CARD_ANALYZER_VERSION, CardAnalysisManager
+from .card_analysis_models import CardInputFingerprint
+from .card_analysis_repository import CardAnalysisError, CardAnalysisRepository
+from .card_analysis_statistics import CardAnalysisStatisticsRepository
 from .config import (
     AppConfig,
     LoadedAppConfig,
@@ -399,6 +403,13 @@ class RecorderApplicationService:
         self._operation_state = OperationStateMachine()
         self._notifications = WindowsNotificationService()
         self._recording_history_revision = 0
+        self._card_repository: CardAnalysisRepository | None = None
+        self._card_manager: CardAnalysisManager | None = None
+        self._closed = False
+        self._card_recording_starting = False
+        self.card_analysis_error = ""
+        if self.load_config().config.card_analysis_enabled:
+            self._ensure_card_manager()
 
     @property
     def recording_history_revision(self) -> int:
@@ -433,7 +444,146 @@ class RecorderApplicationService:
         loaded = self.load_config()
         config = updated_config_values(loaded.config, values)
         save_app_config(paths=self.paths, config=config)
+        if config.card_analysis_enabled:
+            self._ensure_card_manager().wake()
+        elif self._card_manager is not None:
+            self._card_manager.interrupt()
         return config
+
+    def _get_card_repository(self) -> CardAnalysisRepository:
+        with self._lock:
+            if self._card_repository is None:
+                self._card_repository = CardAnalysisRepository.from_runtime_paths(self.paths)
+                self._card_repository.seed_presets()
+            return self._card_repository
+
+    def _card_analysis_can_run(self) -> bool:
+        # workerからはアプリlockを取得せず、録画開始側とのlock逆転を避ける。
+        return (not self._closed and not self._manual_starting and not self._card_recording_starting
+                and self._current is None
+                and self._operation_state.snapshot.state in {
+                    OperationState.IDLE, OperationState.WATCH_WAITING, OperationState.FAILED,
+                })
+
+    def _ensure_card_manager(self) -> CardAnalysisManager:
+        with self._lock:
+            if self._closed:
+                raise CardAnalysisError("終了後はカード分析を開始できません")
+            if self._card_manager is None:
+                self._card_manager = CardAnalysisManager(
+                    paths=self.paths, repository=self._get_card_repository(),
+                    settings=lambda: self.load_config().config,
+                    can_run=self._card_analysis_can_run,
+                )
+            self._card_manager.start()
+            return self._card_manager
+
+    def _interrupt_card_analysis(self) -> None:
+        if self._card_manager is not None:
+            self._card_manager.interrupt()
+
+    def list_card_targets(self, *, include_disabled: bool = True):
+        return self._get_card_repository().list_targets(include_disabled=include_disabled)
+
+    def save_card_target(self, *, name: str, aliases=(), purpose: str = "", enabled: bool = True,
+                         target_id: str | None = None, expected_revision: int | None = None):
+        return self._get_card_repository().save_target(
+            name=name, aliases=tuple(aliases), purpose=purpose, enabled=enabled,
+            target_id=target_id, expected_revision=expected_revision,
+        )
+
+    def get_card_analysis_review(self, recording_id: str):
+        return self._get_card_repository().get_review(recording_id)
+
+    def get_card_analysis_jobs(self, recording_id: str | None = None):
+        return self._get_card_repository().list_jobs(recording_id)
+
+    def get_card_analysis_job(self, job_id: str):
+        return self._get_card_repository().get_job(job_id)
+
+    def request_card_analysis(self, recording_id: str, *, reanalyse: bool = False):
+        config = self.load_config().config
+        if not config.card_analysis_enabled:
+            raise CardAnalysisError("設定でカード分析をONにしてください")
+        history = self.get_history(recording_id)
+        if history.state != "completed":
+            raise CardAnalysisError("正常完了した録画だけを分析できます")
+        repository = self._get_card_repository()
+        review = repository.get_review(recording_id)
+        if not reanalyse and review.successful_job is not None:
+            return review.successful_job
+        path = self.resolve_recording(recording_id).path.resolve()
+        stat = path.stat()
+        # 大きな動画のSHAは低優先workerで計算し、録画完了を待たせない。
+        job = repository.create_job(
+            recording_id, fingerprint=CardInputFingerprint(str(path), stat.st_size, stat.st_mtime_ns),
+            analyzer_version=CARD_ANALYZER_VERSION, sample_fps=config.card_analysis_fps,
+        )
+        if not self._closed:
+            self._ensure_card_manager().wake()
+        return job
+
+    def _enqueue_completed_card_analysis(self, recording_id: str) -> None:
+        try:
+            if not self.load_config().config.card_analysis_enabled:
+                return
+            self.request_card_analysis(recording_id)
+            self.card_analysis_error = ""
+        except Exception as exc:
+            # 分析の失敗は録画の正常完了と分けて扱う。
+            self.card_analysis_error = str(exc)
+
+    def update_card_observation(self, event_id: str, *, expected_revision: int,
+                                status: str | None = None, is_opener: bool | None = None,
+                                opener_expected_revision: int | None = None, **changes):
+        repository = self._get_card_repository()
+        current = repository.get_observation(event_id)
+        if current is None:
+            raise CardAnalysisError("カード観測がありません")
+        aliases = {"card_target_id": "target_id", "actual_use_ms": "actual_ms", "name": "card_name"}
+        values = replace(current.values, **{aliases.get(key, key): value for key, value in changes.items()})
+        if status == "confirmed":
+            if values.actor == "unknown" or values.action == "unknown":
+                raise CardAnalysisError("使用を確定するには使用者と行動を選んでください")
+            values = replace(values, evidence={**values.evidence, "supports_use": True,
+                                               "manually_confirmed_use": True})
+        return repository.review_observation(
+            event_id, expected_revision=expected_revision, values=values, status=status,
+            is_opener=is_opener, opener_expected_revision=opener_expected_revision,
+        )
+
+    def confirm_card_observation(self, event_id: str, *, expected_revision: int):
+        return self.update_card_observation(event_id, expected_revision=expected_revision, status="confirmed")
+
+    def reject_card_observation(self, event_id: str, *, expected_revision: int):
+        return self.update_card_observation(event_id, expected_revision=expected_revision, status="rejected")
+
+    def set_card_nonuse(self, recording_id: str, target_id: str, actor: str, confirmed: bool = True,
+                       *, expected_revision: int | None = None):
+        return self._get_card_repository().set_nonuse(
+            recording_id, target_id, actor, confirmed, expected_revision=expected_revision,
+        )
+
+    def set_card_opener(self, recording_id: str, actor: str, *, event_id: str | None = None,
+                       target_id: str | None = None, status: str = "confirmed",
+                       expected_revision: int | None = None):
+        return self._get_card_repository().set_opener(
+            recording_id, actor, event_id=event_id, target_id=target_id, status=status,
+            expected_revision=expected_revision,
+        )
+
+    def get_card_statistics(self, filters: StatisticsFilter | None = None, *, target_id: str | None = None,
+                            actor: str = "self", opener_target_id: str | None = None,
+                            include_candidates: bool = False):
+        if target_id is None:
+            targets = self.list_card_targets(include_disabled=False)
+            if not targets:
+                raise CardAnalysisError("有効な対象カードを追加してください")
+            target_id = targets[0].target_id
+        return CardAnalysisStatisticsRepository.from_runtime_paths(self.paths).dashboard(
+            filters, target_id=target_id, actor=actor, opener_target_id=opener_target_id,
+            include_candidates=include_candidates,
+        )
 
     def list_capture_targets(self) -> tuple[CaptureTarget, ...]:
         config = self.load_config().config
@@ -625,6 +775,7 @@ class RecorderApplicationService:
                 raise ApplicationOperationError(str(exc)) from exc
             self._manual_starting = True
             self._transition_operation(OperationState.MANUAL_STARTING, "手動録画を開始しています")
+            self._interrupt_card_analysis()
 
         prepared: PreparedRecording | None = None
         try:
@@ -753,6 +904,8 @@ class RecorderApplicationService:
                     else "録画停止に失敗しました",
                 )
             assert result is not None
+            if result.state is RecordingState.COMPLETED:
+                self._enqueue_completed_card_analysis(prepared.target.recording_id)
             self._notify(
                 "recording_stopped"
                 if result.state is not RecordingState.FAILED
@@ -1631,6 +1784,7 @@ class RecorderApplicationService:
             duel_record=self.get_duel_record(recording_id),
             timeline=self.list_timeline(recording_id),
             youtube_watch_url=upload.watch_url if upload is not None else None,
+            card_observations=self.get_card_analysis_review(recording_id).observations,
         )
 
     def add_review_marker(self, request: ReviewMarkerRequest) -> DuelEvent:
@@ -1756,6 +1910,10 @@ class RecorderApplicationService:
             except RuntimeError as exc:
                 raise ApplicationOperationError(str(exc)) from exc
             self._transition_operation(OperationState.CLOSING, "終了処理中")
+            self._closed = True
+            self._interrupt_card_analysis()
+        if self._card_manager is not None:
+            self._card_manager.close()
         if self.watch_active:
             self.stop_watch()
         with self._lock:
@@ -1968,40 +2126,45 @@ class RecorderApplicationService:
                 observation: DuelObservation,
             ) -> PreparedRecording:
                 nonlocal reserved_audio, preroll_buffer, preroll_target_key
-                reservation = reserved_audio
-                frozen_preroll: FrozenPreroll | None = None
-                if (
-                    watch_config.preroll_enabled
-                    and preroll_buffer is not None
-                    and preroll_target_key == observation.capture_target_key
-                ):
-                    frozen_preroll = preroll_buffer.freeze()
-                    preroll_buffer = None
-                    preroll_target_key = None
+                self._card_recording_starting = True
                 try:
-                    prepared = prepare_recording(
-                        paths=self.paths,
-                        config=watch_config,
-                        capture_input=_automatic_capture_input(observation),
-                        visual_frame_capture=capture_current_window,
-                        visual_analysis_callback=record_analysis,
-                        visual_source=frame_stream.source_description,
-                        visual_restart_counter=lambda: frame_stream.restart_count,
-                        visual_frame_generation=lambda: frame_stream.generation,
-                        audio_process_id=observation.capture_process_id,
-                        reserved_process_audio=reservation,
-                        frozen_preroll=frozen_preroll,
-                        auto_watch_duel_defaults=watch_duel_defaults,
-                    )
-                except Exception:
-                    discard_frozen_preroll(frozen_preroll)
+                    self._interrupt_card_analysis()
+                    reservation = reserved_audio
+                    frozen_preroll: FrozenPreroll | None = None
+                    if (
+                        watch_config.preroll_enabled
+                        and preroll_buffer is not None
+                        and preroll_target_key == observation.capture_target_key
+                    ):
+                        frozen_preroll = preroll_buffer.freeze()
+                        preroll_buffer = None
+                        preroll_target_key = None
+                    try:
+                        prepared = prepare_recording(
+                            paths=self.paths,
+                            config=watch_config,
+                            capture_input=_automatic_capture_input(observation),
+                            visual_frame_capture=capture_current_window,
+                            visual_analysis_callback=record_analysis,
+                            visual_source=frame_stream.source_description,
+                            visual_restart_counter=lambda: frame_stream.restart_count,
+                            visual_frame_generation=lambda: frame_stream.generation,
+                            audio_process_id=observation.capture_process_id,
+                            reserved_process_audio=reservation,
+                            frozen_preroll=frozen_preroll,
+                            auto_watch_duel_defaults=watch_duel_defaults,
+                        )
+                    except Exception:
+                        discard_frozen_preroll(frozen_preroll)
+                        if reservation is not None:
+                            reservation.stop()
+                            reserved_audio = None
+                        raise
                     if reservation is not None:
-                        reservation.stop()
                         reserved_audio = None
-                    raise
-                if reservation is not None:
-                    reserved_audio = None
-                return prepared
+                    return prepared
+                finally:
+                    self._card_recording_starting = False
 
             controller = AutoRecordingController(
                 state_machine=DuelDetectionStateMachine(
@@ -2334,6 +2497,7 @@ class RecorderApplicationService:
         if state not in {RecordingState.COMPLETED, RecordingState.FAILED}:
             return
         self._visual_status = self._current.visual_detection_status
+        recording_id = self._current.target.recording_id
         self._current.release()
         self._current = None
         self._recording_history_revision += 1
@@ -2348,6 +2512,8 @@ class RecorderApplicationService:
         elif current is OperationState.MANUAL_RECORDING:
             self._transition_operation(OperationState.STOPPING, "録画を終了しています")
             self._transition_operation(OperationState.IDLE, "待機中")
+        if state is RecordingState.COMPLETED:
+            self._enqueue_completed_card_analysis(recording_id)
 
     def _publish_visual_status(
         self,
@@ -2445,6 +2611,8 @@ class RecorderApplicationService:
         if event.recording_id and event.kind in {"stopped", "error"}:
             with self._lock:
                 self._recording_history_revision += 1
+        if event.recording_id and event.kind == "stopped" and event.state == "completed":
+            self._enqueue_completed_card_analysis(event.recording_id)
         if callback is not None:
             callback(event)
 

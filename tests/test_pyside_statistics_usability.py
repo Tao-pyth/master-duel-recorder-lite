@@ -214,7 +214,8 @@ class StatisticsUsabilityWidgetTest(unittest.TestCase):
             table = widgets["statistics_matchup_table"]
             tabs = widgets["statistics_tab_panel"]
             page = window.pages["statistics"]
-            self.assertEqual(tabs.count(), 8)
+            self.assertEqual(tabs.count(), 9)
+            self.assertEqual(tabs.tabText(8), "使用カード・初動")
             self.assertEqual([table.horizontalHeaderItem(col).text() for col in range(table.columnCount())],
                              ["相手デッキ", "自分デッキ", "対戦", "勝利", "敗北", "引分", "自分勝率", "参考"])
             self.assertTrue(all(table.item(row, 7).text() == "少数" for row in range(table.rowCount())))

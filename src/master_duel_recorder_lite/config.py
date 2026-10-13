@@ -79,6 +79,8 @@ class AppConfig:
     auto_watch_default_desired_play_order: str = "unknown"
     auto_watch_default_duel_type: str = "other"
     auto_create_user_data: bool = True
+    card_analysis_enabled: bool = False
+    card_analysis_fps: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,7 @@ def load_app_config(
         upload_table = _table(raw, "upload")
         interaction_table = _table(raw, "interaction")
         runtime_table = _table(raw, "runtime")
+        card_analysis_table = _table(raw, "card_analysis")
 
         legacy_audio_input = _optional_string_value(
             recorder_table, "audio_input", AppConfig.audio_input
@@ -309,9 +312,16 @@ def load_app_config(
             auto_create_user_data=_bool_value(
                 runtime_table, "auto_create_user_data", AppConfig.auto_create_user_data
             ),
+            card_analysis_enabled=_bool_value(
+                card_analysis_table, "enabled", AppConfig.card_analysis_enabled
+            ),
+            card_analysis_fps=_float_value(
+                card_analysis_table, "fps", AppConfig.card_analysis_fps
+            ),
         )
         _recording_number_values(config)
         _detection_values(config)
+        _card_analysis_values(config)
     except (OSError, tomllib.TOMLDecodeError, TypeError, ValueError) as exc:
         raise AppConfigError(f"設定ファイルを読み込めません: {config_path}: {exc}") from exc
 
@@ -337,6 +347,7 @@ def validate_app_config(config: AppConfig) -> None:
     _encoder_name(config.video_encoder)
     _recording_number_values(config)
     _detection_values(config)
+    _card_analysis_values(config)
     _privacy_status(config.upload_privacy_status)
     if config.readiness_check_seconds < 5 or config.readiness_check_seconds > 120:
         raise ValueError("readiness_check_seconds は5から120の整数である必要があります")
@@ -440,6 +451,10 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 f"auto_watch_default_season_id = {config.auto_watch_default_season_id}",
                 f"auto_watch_default_desired_play_order = {_toml_string(config.auto_watch_default_desired_play_order)}",
                 f"auto_watch_default_duel_type = {_toml_string(config.auto_watch_default_duel_type)}",
+                "",
+                "[card_analysis]",
+                f"enabled = {_toml_bool(config.card_analysis_enabled)}",
+                f"fps = {config.card_analysis_fps}",
                 "",
                 "[runtime]",
                 f"auto_create_user_data = {_toml_bool(config.auto_create_user_data)}",
@@ -677,6 +692,14 @@ def _detection_values(config: AppConfig) -> None:
         raise ValueError("preroll_max_megabytes は整数である必要があります")
     if not 64 <= config.preroll_max_megabytes <= 4096:
         raise ValueError("preroll_max_megabytes は64から4096である必要があります")
+
+
+def _card_analysis_values(config: AppConfig) -> None:
+    if not isinstance(config.card_analysis_enabled, bool):
+        raise ValueError("card_analysis.enabled はtrueまたはfalseで指定してください")
+    fps = config.card_analysis_fps
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not 0.25 <= fps <= 2.0:
+        raise ValueError("card_analysis.fps は0.25から2.0の有限な数値で指定してください")
 
 
 def _visual_detection_language(value: str) -> str:

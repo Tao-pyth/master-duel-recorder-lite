@@ -10,7 +10,7 @@ import sqlite3
 import uuid
 
 
-CURRENT_SCHEMA_VERSION = 17
+CURRENT_SCHEMA_VERSION = 18
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -824,6 +824,113 @@ def _migrate_to_v17(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v18(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE card_targets (
+            target_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            aliases_json TEXT NOT NULL,
+            roles_json TEXT NOT NULL,
+            enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE card_analysis_jobs (
+            job_id TEXT PRIMARY KEY,
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            generation INTEGER NOT NULL CHECK (generation >= 1),
+            state TEXT NOT NULL CHECK (
+                state IN ('queued', 'running', 'waiting', 'completed', 'failed', 'cancelled')
+            ),
+            fingerprint_json TEXT NOT NULL,
+            target_snapshot_json TEXT NOT NULL,
+            analyzer_version TEXT NOT NULL,
+            sample_fps REAL NOT NULL CHECK (sample_fps >= 0.25 AND sample_fps <= 2),
+            progress REAL NOT NULL CHECK (progress >= 0 AND progress <= 1),
+            error TEXT NOT NULL DEFAULT '',
+            result_metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (recording_id, generation)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE UNIQUE INDEX card_analysis_active_recording_idx "
+        "ON card_analysis_jobs(recording_id) WHERE state IN ('queued', 'running', 'waiting')"
+    )
+    connection.execute(
+        """
+        CREATE TABLE card_observations (
+            event_id TEXT PRIMARY KEY,
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            job_id TEXT REFERENCES card_analysis_jobs(job_id) ON DELETE RESTRICT,
+            generation INTEGER NOT NULL CHECK (generation >= 0),
+            target_id TEXT REFERENCES card_targets(target_id) ON DELETE RESTRICT,
+            card_name TEXT NOT NULL,
+            actor TEXT NOT NULL CHECK (actor IN ('self', 'opponent', 'unknown')),
+            action TEXT NOT NULL CHECK (
+                action IN ('activate', 'normal_summon', 'special_summon', 'unknown')
+            ),
+            observed_ms INTEGER NOT NULL CHECK (observed_ms >= 0),
+            actual_ms INTEGER CHECK (actual_ms IS NULL OR actual_ms >= 0),
+            time_kind TEXT NOT NULL CHECK (
+                time_kind IN ('log_observed', 'detail_observed', 'actual_use')
+            ),
+            evidence_json TEXT NOT NULL,
+            confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+            source_key TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('candidate', 'confirmed', 'rejected')),
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            manual_locked INTEGER NOT NULL CHECK (manual_locked IN (0, 1)),
+            original_values_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (recording_id, source_key)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX card_observations_recording_idx "
+        "ON card_observations(recording_id, observed_ms, event_id)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE card_nonuse_confirmations (
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            target_id TEXT NOT NULL REFERENCES card_targets(target_id) ON DELETE RESTRICT,
+            actor TEXT NOT NULL CHECK (actor IN ('self', 'opponent')),
+            confirmed INTEGER NOT NULL CHECK (confirmed IN (0, 1)),
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (recording_id, target_id, actor)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE card_opener_confirmations (
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            actor TEXT NOT NULL CHECK (actor IN ('self', 'opponent')),
+            event_id TEXT REFERENCES card_observations(event_id) ON DELETE RESTRICT,
+            status TEXT NOT NULL CHECK (status IN ('confirmed', 'unknown')),
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            updated_at TEXT NOT NULL,
+            CHECK ((status = 'confirmed' AND event_id IS NOT NULL)
+                   OR (status = 'unknown' AND event_id IS NULL)),
+            PRIMARY KEY (recording_id, actor)
+        )
+        """
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -842,6 +949,7 @@ _MIGRATIONS: dict[int, Migration] = {
     15: _migrate_to_v15,
     16: _migrate_to_v16,
     17: _migrate_to_v17,
+    18: _migrate_to_v18,
 }
 
 
@@ -1222,6 +1330,25 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
         "updated_at",
     }.issubset(goal_columns):
         raise HistoryDatabaseError("録画履歴DBに必須のpractice_goalsスキーマがありません")
+    card_columns = {
+        "card_targets": {"target_id", "name", "normalized_name", "aliases_json", "roles_json",
+                         "enabled", "revision", "created_at", "updated_at"},
+        "card_analysis_jobs": {"job_id", "recording_id", "generation", "state", "fingerprint_json",
+                               "target_snapshot_json", "analyzer_version", "sample_fps", "progress",
+                               "error", "result_metadata_json", "created_at", "updated_at"},
+        "card_observations": {"event_id", "recording_id", "job_id", "generation", "target_id",
+                              "card_name", "actor", "action", "observed_ms", "actual_ms", "time_kind",
+                              "evidence_json", "confidence", "source_key", "status", "revision",
+                              "manual_locked", "original_values_json", "created_at", "updated_at"},
+        "card_nonuse_confirmations": {"recording_id", "target_id", "actor", "confirmed", "revision",
+                                      "updated_at"},
+        "card_opener_confirmations": {"recording_id", "actor", "event_id", "status", "revision",
+                                      "updated_at"},
+    }
+    for table, required in card_columns.items():
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if not required.issubset(columns):
+            raise HistoryDatabaseError(f"録画履歴DBに必須の{table}スキーマがありません")
     quick_check = connection.execute("PRAGMA quick_check").fetchone()
     if quick_check is None or quick_check[0] != "ok":
         detail = quick_check[0] if quick_check else "結果なし"

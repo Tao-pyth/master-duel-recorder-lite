@@ -8,6 +8,7 @@ from pathlib import Path
 from master_duel_recorder_lite.history_database import (
     CURRENT_SCHEMA_VERSION,
     HistoryDatabaseError,
+    _MIGRATIONS,
     _migrate_to_v1,
     _migrate_to_v2,
     _migrate_to_v3,
@@ -109,6 +110,7 @@ class HistoryDatabaseTest(unittest.TestCase):
             path = root / "history.sqlite3"
             create_version_six_database(path)
             migrations = {
+                **_MIGRATIONS,
                 1: _migrate_to_v1,
                 2: _migrate_to_v2,
                 3: _migrate_to_v3,
@@ -207,6 +209,7 @@ class HistoryDatabaseTest(unittest.TestCase):
                 initialize_history_database(
                     path,
                     migrations={
+                        **_MIGRATIONS,
                         1: lambda _connection: None,
                         2: lambda _connection: None,
                         3: lambda _connection: None,

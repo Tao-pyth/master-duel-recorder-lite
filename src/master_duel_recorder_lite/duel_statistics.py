@@ -133,6 +133,8 @@ class _StatisticsRow:
     season_id: int | None
     duel_type: str = "other"
     opponent_deck: str = ""
+    duel_id: str = ""
+    recording_id: str | None = None
 
 
 StatisticsRow = _StatisticsRow
@@ -214,6 +216,8 @@ class DuelStatisticsRepository:
             rows = connection.execute(
                 f"""
                 SELECT
+                    duel.duel_id,
+                    duel.recording_id,
                     duel.occurred_at,
                     duel.result,
                     duel.play_order,
@@ -253,6 +257,8 @@ class DuelStatisticsRepository:
                 opponent_deck=str(row["opponent_deck"]),
                 season_id=row["season_id"],
                 duel_type=str(row["duel_type"]),
+                duel_id=str(row["duel_id"]),
+                recording_id=row["recording_id"],
             )
             for row in rows
         )

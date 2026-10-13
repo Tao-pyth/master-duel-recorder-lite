@@ -120,6 +120,8 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
             "auto_watch_default_duel_type", _lower_text
         ),
         "runtime.auto_create_user_data": ConfigField("auto_create_user_data", _boolean),
+        "card_analysis.enabled": ConfigField("card_analysis_enabled", _boolean),
+        "card_analysis.fps": ConfigField("card_analysis_fps", _number),
     }
 )
 

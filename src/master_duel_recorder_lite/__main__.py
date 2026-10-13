@@ -643,13 +643,53 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="PyInstaller版の起動EXEも終了後に削除します。",
     )
+    card_parser = subparsers.add_parser("card-analysis", help="使用カードの対象・解析・確認結果を管理します。")
+    card_commands = card_parser.add_subparsers(dest="card_command", required=True)
+    card_targets = card_commands.add_parser("targets", help="対象カードを管理します。")
+    target_commands = card_targets.add_subparsers(dest="card_target_command", required=True)
+    target_list = target_commands.add_parser("list", help="無効な対象も含めて表示します。")
+    target_list.add_argument("--json", action="store_true")
+    target_save = target_commands.add_parser("save", help="名称・別名・用途を追加または編集します。")
+    target_save.add_argument("--name", required=True)
+    target_save.add_argument("--alias", action="append", default=[])
+    target_save.add_argument("--purpose", default="")
+    target_save.add_argument("--target-id")
+    target_save.add_argument("--expected-revision", type=_nonnegative_integer)
+    target_enabled = target_save.add_mutually_exclusive_group()
+    target_enabled.add_argument("--enabled", dest="enabled", action="store_true")
+    target_enabled.add_argument("--disabled", dest="enabled", action="store_false")
+    target_save.set_defaults(enabled=None)
+    target_save.add_argument("--json", action="store_true")
+    target_disable = target_commands.add_parser("disable", help="対象を無効にし、保存済み結果を保持します。")
+    target_disable.add_argument("target_id")
+    target_disable.add_argument("--expected-revision", type=_nonnegative_integer)
+    target_disable.add_argument("--json", action="store_true")
+    card_jobs = card_commands.add_parser("jobs", help="解析ジョブと進捗を表示します。")
+    card_jobs.add_argument("--recording-id")
+    card_jobs.add_argument("--json", action="store_true")
+    card_results = card_commands.add_parser("results", help="候補・確認・非使用・初動を表示します。")
+    card_results.add_argument("recording_id")
+    card_results.add_argument("--json", action="store_true")
+    card_analyse = card_commands.add_parser("analyse", help="設定ONの正常完了録画を明示的に解析します。")
+    card_analyse.add_argument("recording_id")
+    card_analyse.add_argument("--reanalyse", action="store_true")
+    card_analyse.add_argument("--timeout", type=_positive_seconds, default=1800.0,
+                              help="完了待ちの上限秒（既定1800秒）。未完了ジョブと既存結果を保持します。")
+    card_analyse.add_argument("--json", action="store_true")
+    card_diagnose = card_commands.add_parser("diagnose", help="OCR依存・同梱モデル・SHA256を診断します。")
+    card_diagnose.add_argument("--model-dir", type=Path)
+    card_diagnose.add_argument("--json", action="store_true")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     configure_standard_streams()
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "--card-analysis-worker":
+        from .card_analysis_worker import main as worker_main
+        return worker_main(arguments[1:])
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     if args.cleanup_manifest is not None:
         return run_cleanup_manifest(args.cleanup_manifest)
     paths = default_runtime_paths(
@@ -786,6 +826,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "timeline":
         return _run_timeline_command(paths=paths, args=args)
 
+    if args.command == "card-analysis":
+        return _run_card_analysis_command(args)
+
     if args.command == "review":
         return _run_review_command(
             args=args,
@@ -901,6 +944,109 @@ def main(argv: Sequence[str] | None = None) -> int:
         "次の確認: python -m master_duel_recorder_lite --init-user-data --write-default-config --show-config"
     )
     return 0
+
+
+def _run_card_analysis_command(args: argparse.Namespace) -> int:
+    from .card_analysis_repository import CardAnalysisError
+    from .card_ocr import CardAnalysisError as OcrError, diagnose_ocr_models
+
+    service = None
+    code = EXIT_SUCCESS
+    try:
+        if args.card_command == "diagnose":
+            document = diagnose_ocr_models(args.model_dir)
+            if args.json:
+                print(json.dumps(document, ensure_ascii=False, indent=2))
+            else:
+                print("使用カード解析: 利用可能（CPU処理・ネット接続不要）")
+                for model in document["models"]:
+                    print(f"{model['name']}: {model['size_bytes']} bytes / SHA256 {model['sha256']}")
+        else:
+            service = RecorderApplicationService(project_root=args.project_root, user_data_dir=args.user_data_dir)
+            code = _card_analysis_operation(service, args)
+    except KeyboardInterrupt:
+        _print_cli_error("E_CARD_INTERRUPTED", "解析の停止要求を受け付けました。", "未完了ジョブは保持します。GUIまたは同じ録画のanalyseで再開できます。")
+        code = EXIT_INTERRUPTED
+    except OcrError as exc:
+        _print_cli_error(f"E_CARD_{exc.code.upper()}", str(exc), "依存と同梱モデルを確認し、card-analysis diagnoseを再実行してください。")
+        code = EXIT_OPERATION
+    except (CardAnalysisError, ApplicationOperationError, AppConfigError, OSError, ValueError) as exc:
+        _print_cli_error("E_CARD_ANALYSIS", str(exc), "設定ON・正常完了録画・対象カード・revisionを確認してください。")
+        code = EXIT_OPERATION
+    finally:
+        if service is not None:
+            try:
+                service.close()
+            except (CardAnalysisError, ApplicationOperationError, OSError) as exc:
+                _print_cli_error("E_CARD_CLOSE", str(exc), "解析ジョブの状態を確認してから再開してください。")
+                code = EXIT_OPERATION
+    return code
+
+
+def _card_analysis_operation(service: RecorderApplicationService, args: argparse.Namespace) -> int:
+    command = args.card_command
+    if command == "targets":
+        targets = service.list_card_targets(include_disabled=True)
+        if args.card_target_command == "list":
+            if args.json:
+                print(json.dumps([target.to_dict() for target in targets], ensure_ascii=False, indent=2))
+            else:
+                for target in targets:
+                    print(f"{target.target_id} | {target.name} | {target.purpose} | {'有効' if target.enabled else '無効'} | revision {target.revision}")
+            return EXIT_SUCCESS
+        target = next((item for item in targets if item.target_id == args.target_id), None)
+        if args.target_id is not None and target is None:
+            raise ApplicationOperationError("対象カードがありません")
+        revision = args.expected_revision if args.expected_revision is not None else (target.revision if target else None)
+        if args.card_target_command == "disable":
+            target = service.save_card_target(name=target.name, aliases=target.aliases, purpose=target.purpose,
+                                              enabled=False, target_id=target.target_id, expected_revision=revision)
+        else:
+            enabled = args.enabled if args.enabled is not None else (target.enabled if target else True)
+            target = service.save_card_target(name=args.name, aliases=tuple(args.alias), purpose=args.purpose,
+                                              enabled=enabled, target_id=args.target_id, expected_revision=revision)
+        print(json.dumps(target.to_dict(), ensure_ascii=False, indent=2) if args.json else f"対象を保存しました: {target.name}（{'有効' if target.enabled else '無効'}）")
+        return EXIT_SUCCESS
+    if command == "jobs":
+        jobs = service.get_card_analysis_jobs(args.recording_id)
+        if args.json:
+            print(json.dumps([job.to_dict() for job in jobs], ensure_ascii=False, indent=2))
+        else:
+            for job in jobs:
+                print(f"{job.job_id} | {job.recording_id} | {job.state} | {job.progress * 100:.0f}% | {job.error}")
+        return EXIT_SUCCESS
+    if command == "results":
+        review = service.get_card_analysis_review(args.recording_id)
+        if args.json:
+            print(json.dumps(review.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            print(f"録画 {args.recording_id}: {review.job.state if review.job else '未解析'} / 保存済み {len(review.observations)}件")
+            for observation in review.observations:
+                print(f"{observation.event_id} | 観測 {observation.observed_ms / 1000:.3f}秒 | {observation.card_name} | {observation.actor} | {observation.action} | {observation.status}")
+            print(f"未使用確認 {sum(item.confirmed for item in review.nonuses)}件 / 初動確認 {sum(item.status == 'confirmed' for item in review.openers)}件")
+        return EXIT_SUCCESS
+    if command == "analyse":
+        job = service.request_card_analysis(args.recording_id, reanalyse=args.reanalyse)
+        deadline = time.monotonic() + args.timeout
+        while job.state not in {"completed", "failed", "cancelled"}:
+            if time.monotonic() >= deadline:
+                _print_cli_error("E_CARD_TIMEOUT", "解析の完了待ちが上限に達しました。", "ジョブと既存結果は保持します。card-analysis jobs/resultsで状態を確認できます。")
+                if args.json:
+                    print(json.dumps(job.to_dict(), ensure_ascii=False, indent=2))
+                return EXIT_ATTENTION
+            time.sleep(min(.1, max(0, deadline - time.monotonic())))
+            job = service.get_card_analysis_job(job.job_id)
+            if job is None:
+                raise ApplicationOperationError("解析ジョブが見つかりません")
+        if args.json:
+            print(json.dumps(job.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            print(f"解析 {job.state}: {job.recording_id} / {job.job_id}")
+        if job.state != "completed":
+            _print_cli_error("E_CARD_FAILED", job.error or "解析が完了していません。", "設定・元録画・OCR診断を確認して再試行してください。")
+            return EXIT_OPERATION
+        return EXIT_SUCCESS
+    raise ApplicationOperationError("未対応の使用カード解析操作です")
 
 
 def _load_config_or_report(

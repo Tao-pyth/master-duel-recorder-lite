@@ -222,9 +222,14 @@ def build_review_view_model(
     duel_record: DuelRecord | None,
     timeline: tuple[DuelEvent, ...],
     youtube_watch_url: str | None,
+    card_observations: tuple[object, ...] = (),
 ) -> ReviewViewModel:
     duration = history.duration_seconds
-    review_timeline = tuple(_timeline_event(event) for event in timeline)
+    review_timeline = tuple(sorted(
+        (*(_timeline_event(event) for event in timeline),
+         *(_card_timeline_event(event) for event in card_observations)),
+        key=lambda event: (event.elapsed_ms, event.event_id),
+    ))
     return ReviewViewModel(
         recording=ReviewRecordingSummary(
             recording_id=history.recording_id,
@@ -300,6 +305,19 @@ def _duel_summary(
     )
 
 
+def _card_timeline_event(event: object) -> ReviewTimelineEvent:
+    values = event.values
+    actors = {"self": "自分", "opponent": "相手", "unknown": "不明"}
+    actions = {"activate": "発動", "normal_summon": "通常召喚", "special_summon": "特殊召喚", "unknown": "行動不明"}
+    actual = f" / 実使用 {_elapsed_label(values.actual_ms)}" if values.actual_ms is not None else " / 実使用時刻未確認"
+    return ReviewTimelineEvent(
+        event_id=f"card:{event.event_id}", elapsed_ms=values.observed_ms,
+        elapsed_label=_elapsed_label(values.observed_ms), event_type="card_use",
+        status=event.status, label=f"{values.card_name} / {actors.get(values.actor, '不明')}・{actions.get(values.action, '行動不明')}（観測位置）{actual}",
+        source="card_analysis", confidence=values.confidence,
+    )
+
+
 def _timeline_event(event: DuelEvent) -> ReviewTimelineEvent:
     label = event.label or event.outcome or event.actor or event.event_type
     return ReviewTimelineEvent(
@@ -355,6 +373,8 @@ def _timeline_ratio(elapsed_ms: int, *, duration_ms: int) -> float:
 
 
 def _visual_timeline_kind(event: ReviewTimelineEvent) -> str:
+    if event.event_type == "card_use":
+        return "card_usage_rejected" if event.status == "rejected" else "card_usage"
     if event.event_type == "duel_start":
         return "duel_start"
     if event.event_type == "marker" and event.source == "manual":

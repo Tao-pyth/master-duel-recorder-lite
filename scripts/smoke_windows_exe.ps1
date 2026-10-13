@@ -185,6 +185,11 @@ try {
 }
 finally {
     $env:LOCALAPPDATA = $previousLocalAppData
+    $cleanupPath = [System.IO.Path]::GetFullPath($defaultSmokeRoot)
+    $tempParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    if ([System.IO.Path]::GetDirectoryName($cleanupPath) -ne $tempParent -or [System.IO.Path]::GetFileName($cleanupPath) -notlike "mdrl-default-path-smoke-*") {
+        throw "CLI smoke cleanup path is outside its isolated temporary directory"
+    }
     Remove-Item -LiteralPath $defaultSmokeRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
