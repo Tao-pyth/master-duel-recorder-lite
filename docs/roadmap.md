@@ -4,7 +4,7 @@
 
 ## V3.0.0: 使用カード分析の初期実装
 
-状態: 実装・検証中。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v3.0.0)、[親Issue #665](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/665)、子Issue #666〜#671、Milestone V3.0.0。
+状態: 実装・ローカル検証完了。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v3.0.0)、[親Issue #665](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/665)、子Issue #666〜#671、Milestone V3.0.0。
 
 - 正常完了録画の対象限定OCR、録画優先の永続ジョブと途中再開を実装する。
 - 対象の追加・編集・無効化、候補の訂正・確認・却下、非使用と初動の明示確認を提供する。

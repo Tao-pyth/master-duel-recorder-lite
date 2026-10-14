@@ -150,6 +150,7 @@ class Measurement:
             "worker_peak_rss_sampled_bytes": max((row["peak_rss_sampled_bytes"] for row in self.children.values()), default=0),
             "worker_peak_rss_os_bytes": max((row["peak_rss_os_bytes"] for row in self.children.values()), default=0),
             "worker_processes": list(self.children.values()), "sample_interval_seconds": 0.05,
+            "resource_scope": "manager launcher and verified worker descendants; PID creation time checked",
             "limitations": "owned processes only; sampled CPU can miss final process time; OS thread count includes helper threads",
         }
 
@@ -283,8 +284,9 @@ def main() -> int:
     parser.add_argument("--worker-python", type=Path, default=Path(sys.executable))
     parser.add_argument("--target", action="append", default=[])
     parser.add_argument("--timeout", type=float, default=1800)
-    parser.add_argument("--priority-only", action="store_true")
-    parser.add_argument("--skip-priority", action="store_true")
+    priority_mode = parser.add_mutually_exclusive_group()
+    priority_mode.add_argument("--priority-only", action="store_true")
+    priority_mode.add_argument("--skip-priority", action="store_true")
     parser.add_argument("--video-id", action="append", default=[])
     args = parser.parse_args()
     inventory = json.loads(args.inventory.read_text(encoding="utf-8"))
@@ -293,6 +295,8 @@ def main() -> int:
         videos = [video for video in videos if video["id"] in args.video_id]
         if {video["id"] for video in videos} != set(args.video_id):
             parser.error("--video-id がinventoryと一致しません")
+    if args.skip_priority and not videos:
+        parser.error("--skip-priority には１本以上の入力動画が必要です")
     output = args.output_dir.resolve() / ("pipeline-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
     output.mkdir(parents=True, exist_ok=False)
     paths = default_runtime_paths(user_data_dir=Path(tempfile.mkdtemp(prefix="mdrl-v3-card-validation-")))
