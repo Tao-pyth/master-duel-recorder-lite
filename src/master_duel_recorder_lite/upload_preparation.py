@@ -4,11 +4,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .recording_history import RecordingHistoryError, RecordingHistoryRepository
+from .recording_history import RecordingHistoryEntry, RecordingHistoryError, RecordingHistoryRepository
 from .runtime_paths import RuntimePaths
 from .upload_export import UploadExporter, UploadExportResult, UploadExportStatus
-from .upload_manifest import UploadManifestError, UploadManifestWriter
+from .upload_manifest import UploadManifestError, UploadManifestProvenanceUnavailableError, UploadManifestWriter
 from .upload_metadata import UploadMetadata
+from .video_source_use import video_source_use
 from .upload_queue import (
     UploadQueueError,
     UploadQueueItem,
@@ -123,67 +124,10 @@ class UploadPreparationService:
             history = self.repository.get(processing.recording_id)
             if history is None or history.state != "completed":
                 return self._fail(processing, "正常完了した録画履歴を確認できません")
-            source = (self.paths.recordings / history.output_path).resolve()
-            export = self.exporter.export(
-                recording_id=history.recording_id,
-                queue_id=processing.queue_id,
-                source_path=source,
-            )
-            validation = _validation_document(export)
-            if export.status is UploadExportStatus.CANCELLED:
-                partial_relative = (
-                    export.partial_path.resolve().relative_to(self.paths.root.resolve())
-                    if export.partial_path is not None
-                    else None
-                )
-                cancelled = self.queue.transition(
-                    processing.queue_id,
-                    UploadQueueState.CANCELLED,
-                    export_path=partial_relative,
-                    validation=validation,
-                    error=export.message,
-                )
-                return UploadPreparationResult(
-                    cancelled.queue_id,
-                    cancelled.recording_id,
-                    cancelled.state,
-                    export.message,
-                )
-            if not export.succeeded or export.output_path is None:
-                partial_relative = (
-                    export.partial_path.resolve().relative_to(self.paths.root.resolve())
-                    if export.partial_path is not None
-                    else None
-                )
-                return self._fail(
-                    processing,
-                    export.message,
-                    validation=validation,
-                    export_path=partial_relative,
-                )
-            manifest = self.manifest_writer.write(
-                item=processing,
-                history=history,
-                export=export,
-            )
-            export_relative = export.output_path.resolve().relative_to(self.paths.root.resolve())
-            manifest_relative = manifest.resolve().relative_to(self.paths.root.resolve())
-            completed = self.queue.transition(
-                processing.queue_id,
-                UploadQueueState.COMPLETED,
-                export_path=export_relative,
-                manifest_path=manifest_relative,
-                validation=validation,
-                error=None,
-            )
-            return UploadPreparationResult(
-                completed.queue_id,
-                completed.recording_id,
-                completed.state,
-                "アップロード準備が完了しました。",
-                export.output_path,
-                manifest,
-            )
+            with video_source_use(self.paths, processing.recording_id, purpose="upload_preparation") as source:
+                if source.asset.path != history.output_path.as_posix():
+                    return self._fail(processing, "録画履歴と現在の元動画の参照が一致しません")
+                return self._prepare_source(processing, history, source.path)
         except (
             OSError,
             RuntimeError,
@@ -193,6 +137,49 @@ class UploadPreparationService:
             ValueError,
         ) as exc:
             return self._fail(item, f"アップロード準備に失敗しました: {exc}")
+
+    def _prepare_source(
+        self, processing: UploadQueueItem, history: RecordingHistoryEntry, source: Path,
+    ) -> UploadPreparationResult:
+        source_snapshot = self.manifest_writer.capture_source(history)
+        export = self.exporter.export(
+            recording_id=history.recording_id, queue_id=processing.queue_id, source_path=source,
+        )
+        validation = _validation_document(export)
+        if export.status is UploadExportStatus.CANCELLED:
+            partial_relative = (
+                export.partial_path.resolve().relative_to(self.paths.root.resolve())
+                if export.partial_path is not None else None
+            )
+            cancelled = self.queue.transition(
+                processing.queue_id, UploadQueueState.CANCELLED, export_path=partial_relative,
+                validation=validation, error=export.message,
+            )
+            return UploadPreparationResult(cancelled.queue_id, cancelled.recording_id, cancelled.state, export.message)
+        if not export.succeeded or export.output_path is None:
+            partial_relative = (
+                export.partial_path.resolve().relative_to(self.paths.root.resolve())
+                if export.partial_path is not None else None
+            )
+            return self._fail(processing, export.message, validation=validation, export_path=partial_relative)
+        try:
+            manifest = self.manifest_writer.write(item=processing, history=history, export=export, source_snapshot=source_snapshot)
+        except UploadManifestProvenanceUnavailableError:
+            if not export.reused:
+                raise
+            manifest = None
+        export_relative = export.output_path.resolve().relative_to(self.paths.root.resolve())
+        manifest_relative = manifest.resolve().relative_to(self.paths.root.resolve()) if manifest else None
+        completed = self.queue.transition(
+            processing.queue_id, UploadQueueState.COMPLETED, export_path=export_relative,
+            manifest_path=manifest_relative, validation=validation, error=None,
+        )
+        return UploadPreparationResult(
+            completed.queue_id, completed.recording_id, completed.state,
+            "アップロード準備が完了しました。" if manifest else
+            "準備済みMP4を再利用できます。元動画の出自記録がないため、投稿後の元動画自動削除は見送ります。",
+            export.output_path, manifest,
+        )
 
     def _fail(
         self,

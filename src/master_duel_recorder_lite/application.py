@@ -63,6 +63,7 @@ from .description_template import (
 )
 from .detection import DetectionPolicy, DuelDetectionStateMachine, DuelObservation
 from .duel_catalog import DuelCatalogEntry, DuelCatalogRepository
+from .duel_card_repository import DuelCardRepository
 from .duel_csv import DuelCsvImportResult, DuelCsvPreview, DuelCsvService
 from .duel_start_monitor import MasterDuelStartMonitor
 from .duel_records import (
@@ -130,6 +131,7 @@ from .season_report_html import SeasonReportHtmlExporter
 from .season_reports import SeasonReport, SeasonReportService
 from .seasons import Season, SeasonRepository
 from .runtime_paths import default_runtime_paths
+from .video_lifecycle import RecordingVideoState, VideoLifecycleRepository
 from .upload_export import UploadExporter
 from .upload_manifest import UploadManifestWriter
 from .upload_media import UploadMediaValidator, find_ffprobe
@@ -248,6 +250,7 @@ class RecordingHistoryView:
     entry: RecordingHistoryEntry | None
     duel_record: DuelRecord | None
     own_deck_color: str | None = None
+    video_state: RecordingVideoState | None = None
 
     @property
     def row_id(self) -> str:
@@ -378,6 +381,7 @@ class RecorderApplicationService:
         youtube_credential_store: CredentialStore | None = None,
         youtube_client: YouTubeClient | None = None,
         youtube_oauth_environ: Mapping[str, str] | None = None,
+        require_gui_startup: bool = False,
     ) -> None:
         self.project_root = project_root
         self.user_data_dir = user_data_dir
@@ -404,12 +408,85 @@ class RecorderApplicationService:
         self._notifications = WindowsNotificationService()
         self._recording_history_revision = 0
         self._card_repository: CardAnalysisRepository | None = None
+        self._video_repository: VideoLifecycleRepository | None = None
         self._card_manager: CardAnalysisManager | None = None
         self._closed = False
         self._card_recording_starting = False
+        self._gui_startup_required = require_gui_startup
+        self._gui_startup_completed = False
+        self._gui_startup_running = False
+        self._gui_startup_result = None
+        self.startup_maintenance_message = "起動時の動画保存チェックを待っています"
         self.card_analysis_error = ""
-        if self.load_config().config.card_analysis_enabled:
+        if not require_gui_startup and self.load_config().config.card_analysis_enabled:
             self._ensure_card_manager()
+
+    @property
+    def gui_startup_ready(self) -> bool:
+        return not self._gui_startup_required or (
+            self._gui_startup_completed and bool(getattr(self._gui_startup_result, "operation_allowed", False))
+        )
+
+    def run_gui_startup_maintenance(self):
+        from .startup_maintenance import run_startup_maintenance
+
+        with self._lock:
+            if self._gui_startup_completed:
+                return self._gui_startup_result
+            if self._gui_startup_running:
+                raise ApplicationOperationError("起動時の動画保存チェックを実行中です")
+            self._gui_startup_required = True
+            self._gui_startup_running = True
+        try:
+            def progress(message: str) -> None:
+                self.startup_maintenance_message = message
+            result = run_startup_maintenance(self.paths, progress=progress)
+            with self._lock:
+                self._gui_startup_result = result
+                self._gui_startup_completed = True
+                self.startup_maintenance_message = result.message
+            if result.operation_allowed and not self._closed and self.load_config().config.card_analysis_enabled:
+                self._ensure_card_manager()
+            return result
+        finally:
+            self._gui_startup_running = False
+
+    def _require_gui_startup_ready(self) -> None:
+        if not self.gui_startup_ready:
+            raise ApplicationOperationError(self.startup_maintenance_message)
+
+    def _get_video_repository(self) -> VideoLifecycleRepository:
+        with self._lock:
+            if self._video_repository is None:
+                self._video_repository = VideoLifecycleRepository.from_runtime_paths(self.paths)
+            return self._video_repository
+
+    def get_recording_video_state(self, recording_id: str) -> RecordingVideoState:
+        repository = self._get_video_repository()
+        repository.ensure_current_asset(recording_id)
+        return repository.get_recording_video_state(recording_id)
+
+    def set_recording_video_protection(
+        self, recording_id: str, protected: bool, *, expected_revision: int | None = None,
+    ):
+        self._require_duel_write_idle()
+        result = self._get_video_repository().set_protection(
+            recording_id, protected, expected_revision=expected_revision,
+        )
+        with self._lock:
+            self._recording_history_revision += 1
+        return result
+
+    def delete_recording_video(self, recording_id: str, *, allow_protected: bool = False):
+        from .recording_retention import RecordingDeletionService
+
+        self._require_data_management_idle()
+        result = RecordingDeletionService(self.paths, repository=self._get_video_repository()).delete_video(
+            recording_id, reason="manual", allow_protected=allow_protected,
+        )
+        with self._lock:
+            self._recording_history_revision += 1
+        return result
 
     @property
     def recording_history_revision(self) -> int:
@@ -444,7 +521,7 @@ class RecorderApplicationService:
         loaded = self.load_config()
         config = updated_config_values(loaded.config, values)
         save_app_config(paths=self.paths, config=config)
-        if config.card_analysis_enabled:
+        if config.card_analysis_enabled and self.gui_startup_ready:
             self._ensure_card_manager().wake()
         elif self._card_manager is not None:
             self._card_manager.interrupt()
@@ -459,7 +536,7 @@ class RecorderApplicationService:
 
     def _card_analysis_can_run(self) -> bool:
         # workerからはアプリlockを取得せず、録画開始側とのlock逆転を避ける。
-        return (not self._closed and not self._manual_starting and not self._card_recording_starting
+        return (self.gui_startup_ready and not self._closed and not self._manual_starting and not self._card_recording_starting
                 and self._current is None
                 and self._operation_state.snapshot.state in {
                     OperationState.IDLE, OperationState.WATCH_WAITING, OperationState.FAILED,
@@ -492,6 +569,35 @@ class RecorderApplicationService:
             target_id=target_id, expected_revision=expected_revision,
         )
 
+    def _get_duel_card_repository(self) -> DuelCardRepository:
+        return DuelCardRepository(self._get_card_repository().database_path)
+
+    def list_card_identities(self):
+        return self._get_duel_card_repository().list_identities()
+
+    def save_card_identity(self, *, name: str):
+        self._require_duel_write_idle()
+        return self._get_duel_card_repository().save_identity(name=name)
+
+    def get_duel_card_review(self, duel_id: str):
+        return self._get_duel_card_repository().get_review(duel_id)
+
+    def save_duel_card_information(self, duel_id: str, card_id: str, actor: str, state: str, *,
+                                  expected_revision: int | None = None, is_opener: bool | None = None,
+                                  opener_expected_revision: int | None = None):
+        self._require_duel_write_idle()
+        return self._get_duel_card_repository().save_information(
+            duel_id, card_id, actor, state, expected_revision=expected_revision,
+            is_opener=is_opener, opener_expected_revision=opener_expected_revision,
+        )
+
+    def set_duel_card_opener(self, duel_id: str, actor: str, *, card_id: str | None = None,
+                             status: str = "confirmed", expected_revision: int | None = None):
+        self._require_duel_write_idle()
+        return self._get_duel_card_repository().set_opener(
+            duel_id, actor, card_id=card_id, status=status, expected_revision=expected_revision,
+        )
+
     def get_card_analysis_review(self, recording_id: str):
         return self._get_card_repository().get_review(recording_id)
 
@@ -502,6 +608,7 @@ class RecorderApplicationService:
         return self._get_card_repository().get_job(job_id)
 
     def request_card_analysis(self, recording_id: str, *, reanalyse: bool = False):
+        self._require_gui_startup_ready()
         config = self.load_config().config
         if not config.card_analysis_enabled:
             raise CardAnalysisError("設定でカード分析をONにしてください")
@@ -535,7 +642,9 @@ class RecorderApplicationService:
 
     def update_card_observation(self, event_id: str, *, expected_revision: int,
                                 status: str | None = None, is_opener: bool | None = None,
-                                opener_expected_revision: int | None = None, **changes):
+                                opener_expected_revision: int | None = None,
+                                information_expected_revision: int | None = None,
+                                expected_generation: int | None = None, **changes):
         repository = self._get_card_repository()
         current = repository.get_observation(event_id)
         if current is None:
@@ -547,9 +656,17 @@ class RecorderApplicationService:
                 raise CardAnalysisError("使用を確定するには使用者と行動を選んでください")
             values = replace(values, evidence={**values.evidence, "supports_use": True,
                                                "manually_confirmed_use": True})
+            if information_expected_revision is None and values.target_id is not None:
+                target = repository.get_target(values.target_id)
+                review = repository.get_review(current.recording_id)
+                information = next((item for item in review.information if target is not None
+                                    and item.card_id == target.card_id and item.actor == values.actor), None)
+                information_expected_revision = information.revision if information else 0
         return repository.review_observation(
             event_id, expected_revision=expected_revision, values=values, status=status,
             is_opener=is_opener, opener_expected_revision=opener_expected_revision,
+            information_expected_revision=information_expected_revision,
+            expected_generation=current.generation if expected_generation is None else expected_generation,
         )
 
     def confirm_card_observation(self, event_id: str, *, expected_revision: int):
@@ -576,10 +693,10 @@ class RecorderApplicationService:
                             actor: str = "self", opener_target_id: str | None = None,
                             include_candidates: bool = False):
         if target_id is None:
-            targets = self.list_card_targets(include_disabled=False)
+            targets = self.list_card_identities()
             if not targets:
-                raise CardAnalysisError("有効な対象カードを追加してください")
-            target_id = targets[0].target_id
+                raise CardAnalysisError("カード情報または対象カードを追加してください")
+            target_id = targets[0].card_id
         return CardAnalysisStatisticsRepository.from_runtime_paths(self.paths).dashboard(
             filters, target_id=target_id, actor=actor, opener_target_id=opener_target_id,
             include_candidates=include_candidates,
@@ -621,7 +738,6 @@ class RecorderApplicationService:
 
     def relocate_runtime_data(self, destination: Path) -> DataRelocationResult:
         self._require_data_management_idle()
-        DataProtectionService(self.paths).create_backup("pre-data-relocation")
         return relocate_runtime_data(self.paths, destination)
 
     def default_ffmpeg_install_directory(self) -> Path:
@@ -761,6 +877,7 @@ class RecorderApplicationService:
             controller.stop()
 
     def start_recording(self, target: CaptureTarget | None = None) -> RecordingSnapshot:
+        self._require_gui_startup_ready()
         with self._lock:
             self._collect_manual_terminal_locked()
             if self._manual_starting:
@@ -935,6 +1052,7 @@ class RecorderApplicationService:
         *,
         duel_defaults: AutoWatchDuelDefaults | None = None,
     ) -> None:
+        self._require_gui_startup_ready()
         with self._lock:
             self._collect_manual_terminal_locked()
             if self._manual_starting:
@@ -1085,7 +1203,12 @@ class RecorderApplicationService:
             key=lambda view: (view.occurred_at, view.row_id),
             reverse=True,
         )
-        return tuple(filtered[: selected.limit])
+        visible = []
+        for view in filtered[: selected.limit]:
+            if view.recording_id is not None:
+                view = replace(view, video_state=self.get_recording_video_state(view.recording_id))
+            visible.append(view)
+        return tuple(visible)
 
     def export_managed_data(self, path: Path) -> ManagedDataResult:
         self._require_data_management_idle()
@@ -1127,6 +1250,18 @@ class RecorderApplicationService:
         self._require_data_management_idle()
         preview = DataProtectionService(self.paths).restore(path)
         self._recording_browser = None
+        self._card_repository = None
+        self._video_repository = None
+        if self._get_video_repository().pending_intents():
+            self._gui_startup_required = True
+            self._gui_startup_completed = True
+            from .startup_maintenance import StartupMaintenanceResult
+            self._gui_startup_result = StartupMaintenanceResult(
+                False, "復元した未完了の動画削除を、次の通常起動で確認してください",
+            )
+            self.startup_maintenance_message = self._gui_startup_result.message
+        with self._lock:
+            self._recording_history_revision += 1
         return preview
 
     def diagnose_data_integrity(self) -> IntegrityReport:
@@ -1141,18 +1276,22 @@ class RecorderApplicationService:
 
     def relink_recording(self, preview: RelinkPreview) -> None:
         self._require_data_management_idle()
-        DataProtectionService(self.paths).create_backup("pre-relink")
         history = RecordingHistoryRepository.from_runtime_paths(self.paths)
         DataReconciliationService(history).relink(preview)
         self._recording_browser = None
+        with self._lock:
+            self._recording_history_revision += 1
 
     def duplicate_duel_candidates(self) -> tuple[DuplicateCandidate, ...]:
         history = RecordingHistoryRepository.from_runtime_paths(self.paths)
         return DataReconciliationService(history).duplicate_candidates()
 
     def _require_data_management_idle(self) -> None:
+        self._require_gui_startup_ready()
         with self._lock:
             self._collect_manual_terminal_locked()
+            if self._manual_starting:
+                raise ApplicationOperationError("録画開始処理の実行中は管理データを変更できません")
             try:
                 self._operation_state.require(OperationAction.MANAGE_DATA)
             except RuntimeError as exc:
@@ -1485,7 +1624,6 @@ class RecorderApplicationService:
 
     def delete_duel_record(self, duel_id: str) -> DuelRecord:
         self._require_duel_write_idle()
-        DataProtectionService(self.paths).create_backup("pre-duel-delete")
         return DuelRecordRepository.from_runtime_paths(self.paths).delete_manual(duel_id)
 
     def duel_write_block_reason(self) -> str | None:
@@ -1508,6 +1646,7 @@ class RecorderApplicationService:
             return "録画中のため更新できません"
 
     def _require_duel_write_idle(self) -> None:
+        self._require_gui_startup_ready()
         reason = self.duel_write_block_reason()
         if reason is not None:
             raise ApplicationOperationError(reason)
@@ -1778,14 +1917,85 @@ class RecorderApplicationService:
         upload = YouTubeUploadRepository.from_runtime_paths(self.paths).completed_for_recording(
             recording_id
         )
+        from .recording_retention import safe_file_path
+        from .video_lifecycle import VideoLifecycleRepository
+
+        asset = VideoLifecycleRepository.from_runtime_paths(self.paths).get_current_asset(recording_id)
+        stable = False
+        if asset is not None and asset.state == "present" and asset.sha256:
+            try:
+                actual = safe_file_path(self.paths.recordings, asset.path).stat()
+                stable = (actual.st_size, actual.st_mtime_ns) == (asset.size_bytes, asset.mtime_ns)
+            except (RuntimeError, OSError, ValueError):
+                pass
+        observations = self.get_card_analysis_review(recording_id).observations
+        if not stable:
+            observations = tuple(replace(observation, video_verified=False) for observation in observations)
         return build_review_view_model(
             history=history,
             reference=reference,
             duel_record=self.get_duel_record(recording_id),
             timeline=self.list_timeline(recording_id),
             youtube_watch_url=upload.watch_url if upload is not None else None,
-            card_observations=self.get_card_analysis_review(recording_id).observations,
+            card_observations=observations,
         )
+
+    def verify_recording_video_sources(self, recording_id: str) -> int:
+        """背景処理で現物を一度照合し、普通・カードマーカーへ同じ検証結果を渡します。"""
+        from contextlib import closing
+        from .history_database import connect_history_database
+        from .recording_retention import fingerprint_file
+        from .video_lifecycle import VideoLifecycleRepository, _object
+        from .video_source_use import video_source_use
+
+        lifecycle = VideoLifecycleRepository.from_runtime_paths(self.paths)
+        asset = lifecycle.get_current_asset(recording_id)
+        if asset is None:
+            return 0
+        with closing(connect_history_database(lifecycle.database_path)) as connection:
+            rows = []
+            for table in ("duel_event_sources", "card_observation_links", "card_analysis_job_sources"):
+                rows.extend(connection.execute(
+                    f"SELECT input_fingerprint_json FROM {table} WHERE video_asset_id=? AND video_generation=? AND time_basis=?",
+                    (asset.asset_id, asset.generation, asset.time_basis),
+                ).fetchall())
+        known = False
+        for row in rows:
+            try:
+                proof = _object(row[0], "動画の証拠")
+            except RuntimeError:
+                continue
+            digest, size, inode = proof.get("sha256"), proof.get("size_bytes"), proof.get("inode")
+            full = (isinstance(digest, str) and len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+                    and isinstance(size, int) and not isinstance(size, bool) and size > 0)
+            capture = (proof.get("schema") == "mdrl-timeline-capture-v1"
+                       and proof.get("verification_origin", "local_capture") == "local_capture"
+                       and isinstance(inode, int) and not isinstance(inode, bool) and inode > 0)
+            known = known or full or capture
+        if not known:
+            return 0
+        with video_source_use(self.paths, recording_id, purpose="review_verification") as source:
+            stat = source.path.stat()
+            key = (source.asset.asset_id, source.asset.generation, str(source.path),
+                   stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+            with self._lock:
+                cache = getattr(self, "_review_video_fingerprint_cache", None)
+                if cache is None:
+                    cache = self._review_video_fingerprint_cache = {}
+                fingerprint = cache.get(key)
+            if fingerprint is None:
+                fingerprint = fingerprint_file(source.path)
+                with self._lock:
+                    # SHAの計算中はアプリ全体の操作ロックを保持しません。
+                    self._review_video_fingerprint_cache = {key: fingerprint}
+            events = DuelTimelineRepository.from_runtime_paths(self.paths).verify_video_sources(
+                recording_id, fingerprint=fingerprint,
+            )
+            changed = self._get_card_repository().verify_video_sources(
+                recording_id, CardInputFingerprint(str(source.path), fingerprint.size_bytes,
+                                                   fingerprint.mtime_ns, fingerprint.sha256),
+            )
+        return sum(event.video_verified for event in events) + changed
 
     def add_review_marker(self, request: ReviewMarkerRequest) -> DuelEvent:
         return self.add_timeline_event(
@@ -1825,16 +2035,18 @@ class RecorderApplicationService:
             self.paths
         ).check_consistency()
 
-    def delete_history(self, recording_id: str) -> HistoryDeletionResult:
+    def delete_history(self, recording_id: str, *, allow_protected: bool = False) -> HistoryDeletionResult:
+        self._require_data_management_idle()
+        if self.get_recording_video_state(recording_id).protected and not allow_protected:
+            raise ApplicationOperationError("削除対象外の動画です。追加の削除確認が必要です")
         with self._lock:
             self._collect_manual_terminal_locked()
             if self._manual_starting or self._current is not None or self.watch_active:
                 raise ApplicationOperationError(
                     "録画または自動監視の実行中は履歴を削除できません"
                 )
-        DataProtectionService(self.paths).create_backup("pre-history-delete")
         return RecordingHistoryRepository.from_runtime_paths(self.paths).delete(
-            recording_id
+            recording_id, allow_protected=allow_protected,
         )
 
     def resolve_recording(self, recording_id: str) -> RecordingReference:
@@ -2598,6 +2810,8 @@ class RecorderApplicationService:
         )
 
     def _youtube_upload_service(self) -> YouTubeUploadService:
+        from .post_upload_cleanup import PostUploadCleanupHandler
+
         return YouTubeUploadService(
             paths=self.paths,
             upload_repository=YouTubeUploadRepository.from_runtime_paths(self.paths),
@@ -2605,6 +2819,7 @@ class RecorderApplicationService:
             credential_store=self._youtube_credential_store,
             youtube_client=self._youtube_client,
             preparation_service=self._upload_preparation_service(),
+            post_upload_cleanup=PostUploadCleanupHandler(self.paths),
         )
 
     def _emit(self, callback: EventCallback | None, event: ApplicationEvent) -> None:

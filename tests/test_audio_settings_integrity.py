@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 from master_duel_recorder_lite.application import RecorderApplicationService
 from master_duel_recorder_lite.config import AppConfig, AppConfigError
 from master_duel_recorder_lite.config_management import ConfigValueError, updated_config
@@ -87,6 +89,7 @@ class AudioSelectionWidgetTest(unittest.TestCase):
                 app = QApplication.instance()
                 window = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
                 try:
+                    wait_for_gui_startup(app, window)
                     window.show_page("settings")
                     audio = window.widgets["settings_audio_input"]
                     status = window.widgets["settings_audio_status"]
@@ -128,7 +131,7 @@ class AudioSelectionWidgetTest(unittest.TestCase):
                     self.assertEqual(service.load_config().config.audio_mode, "device")
                 finally:
                     window.settings_baseline = None
-                    window.close()
+                    close_gui_test_window(app, window)
                 return 0
 
             with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}), patch.object(QApplication, "exec", inspect):

@@ -3,14 +3,17 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import shutil
 import sqlite3
+import tempfile
 import uuid
+import zipfile
 
 
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 19
 HISTORY_DATABASE_NAME = "history.sqlite3"
 
 
@@ -931,6 +934,547 @@ def _migrate_to_v18(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v19(connection: sqlite3.Connection) -> None:
+    """動画の根拠を消しても、対戦の確認済み情報を失わない形へ移します。"""
+    connection.execute("DROP INDEX youtube_uploads_completed_recording_idx")
+    connection.execute(
+        "CREATE INDEX youtube_uploads_completed_recording_idx ON youtube_uploads "
+        "(recording_id, updated_at DESC, upload_id DESC) WHERE state='completed'"
+    )
+    _create_v19_tables(connection)
+    previous_factory = connection.row_factory
+    connection.row_factory = sqlite3.Row
+    try:
+        _migrate_v19_assets(connection)
+        _migrate_v19_card_information(connection)
+        connection.execute("DROP TABLE card_opener_confirmations")
+        connection.execute("DROP TABLE card_nonuse_confirmations")
+    finally:
+        connection.row_factory = previous_factory
+
+
+def _create_v19_tables(connection: sqlite3.Connection) -> None:
+    statements = (
+        """
+        CREATE TABLE card_identities (
+            card_id TEXT PRIMARY KEY CHECK (length(trim(card_id)) > 0),
+            name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE card_target_identity_links (
+            target_id TEXT PRIMARY KEY REFERENCES card_targets(target_id) ON DELETE CASCADE,
+            card_id TEXT NOT NULL REFERENCES card_identities(card_id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE duel_card_information (
+            information_id TEXT PRIMARY KEY CHECK (length(trim(information_id)) > 0),
+            duel_id TEXT NOT NULL REFERENCES duel_records(duel_id) ON DELETE RESTRICT,
+            card_id TEXT NOT NULL REFERENCES card_identities(card_id) ON DELETE RESTRICT,
+            actor TEXT NOT NULL CHECK (actor IN ('self', 'opponent', 'unknown')),
+            state TEXT NOT NULL CHECK (state IN ('used', 'not_used', 'unknown')),
+            source TEXT NOT NULL CHECK (source IN ('manual', 'review', 'import', 'migration')),
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            confirmed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (duel_id, card_id, actor)
+        )
+        """,
+        """
+        CREATE TABLE duel_card_information_changes (
+            change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            information_id TEXT NOT NULL
+                REFERENCES duel_card_information(information_id) ON DELETE RESTRICT,
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            source TEXT NOT NULL CHECK (source IN ('manual', 'review', 'import', 'migration')),
+            before_json TEXT NOT NULL,
+            after_json TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            UNIQUE (information_id, revision)
+        )
+        """,
+        """
+        CREATE TABLE duel_card_openers (
+            duel_id TEXT NOT NULL REFERENCES duel_records(duel_id) ON DELETE RESTRICT,
+            actor TEXT NOT NULL CHECK (actor IN ('self', 'opponent')),
+            card_id TEXT REFERENCES card_identities(card_id) ON DELETE RESTRICT,
+            status TEXT NOT NULL CHECK (status IN ('confirmed', 'unknown')),
+            source TEXT NOT NULL CHECK (source IN ('manual', 'review', 'import', 'migration')),
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            confirmed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK ((status = 'confirmed' AND card_id IS NOT NULL)
+                   OR (status = 'unknown' AND card_id IS NULL)),
+            PRIMARY KEY (duel_id, actor)
+        )
+        """,
+        """
+        CREATE TABLE duel_card_opener_changes (
+            change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            duel_id TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            source TEXT NOT NULL CHECK (source IN ('manual', 'review', 'import', 'migration')),
+            before_json TEXT NOT NULL,
+            after_json TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            UNIQUE (duel_id, actor, revision),
+            FOREIGN KEY (duel_id, actor)
+                REFERENCES duel_card_openers(duel_id, actor) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE recording_video_assets (
+            asset_id TEXT PRIMARY KEY CHECK (length(trim(asset_id)) > 0),
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            generation INTEGER NOT NULL CHECK (generation >= 1),
+            is_current INTEGER NOT NULL DEFAULT 1 CHECK (is_current IN (0, 1)),
+            path TEXT NOT NULL CHECK (length(trim(path)) > 0),
+            size_bytes INTEGER CHECK (size_bytes IS NULL OR size_bytes >= 0),
+            mtime_ns INTEGER CHECK (mtime_ns IS NULL OR mtime_ns >= 0),
+            sha256 TEXT NOT NULL DEFAULT '',
+            time_basis TEXT NOT NULL DEFAULT 'recording_start'
+                CHECK (length(trim(time_basis)) > 0),
+            state TEXT NOT NULL DEFAULT 'unverified'
+                CHECK (state IN ('unverified', 'present', 'deleted', 'unavailable')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (recording_id, generation),
+            UNIQUE (asset_id, generation),
+            UNIQUE (recording_id, asset_id, generation)
+        )
+        """,
+        "CREATE UNIQUE INDEX recording_video_current_idx ON recording_video_assets(recording_id) "
+        "WHERE is_current = 1",
+        """
+        CREATE TABLE recording_video_protection (
+            recording_id TEXT PRIMARY KEY REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            protected INTEGER NOT NULL DEFAULT 0 CHECK (protected IN (0, 1)),
+            revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE card_observation_links (
+            event_id TEXT PRIMARY KEY REFERENCES card_observations(event_id) ON DELETE CASCADE,
+            video_asset_id TEXT NOT NULL
+                REFERENCES recording_video_assets(asset_id) ON DELETE RESTRICT,
+            video_generation INTEGER NOT NULL CHECK (video_generation >= 1),
+            time_basis TEXT NOT NULL,
+            information_id TEXT
+                REFERENCES duel_card_information(information_id) ON DELETE SET NULL,
+            input_fingerprint_json TEXT NOT NULL DEFAULT '{}',
+            verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
+            FOREIGN KEY (video_asset_id, video_generation)
+                REFERENCES recording_video_assets(asset_id, generation) ON DELETE RESTRICT
+        )
+        """,
+        "CREATE INDEX card_observation_information_idx "
+        "ON card_observation_links(information_id, event_id)",
+        """
+        CREATE TABLE card_analysis_job_sources (
+            job_id TEXT PRIMARY KEY REFERENCES card_analysis_jobs(job_id) ON DELETE CASCADE,
+            video_asset_id TEXT NOT NULL
+                REFERENCES recording_video_assets(asset_id) ON DELETE RESTRICT,
+            video_generation INTEGER NOT NULL CHECK (video_generation >= 1),
+            time_basis TEXT NOT NULL,
+            input_fingerprint_json TEXT NOT NULL,
+            verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
+            FOREIGN KEY (video_asset_id, video_generation)
+                REFERENCES recording_video_assets(asset_id, generation) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE duel_event_sources (
+            event_id TEXT PRIMARY KEY REFERENCES duel_events(event_id) ON DELETE CASCADE,
+            video_asset_id TEXT NOT NULL
+                REFERENCES recording_video_assets(asset_id) ON DELETE RESTRICT,
+            video_generation INTEGER NOT NULL CHECK (video_generation >= 1),
+            time_basis TEXT NOT NULL,
+            input_fingerprint_json TEXT NOT NULL DEFAULT '{}',
+            verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
+            FOREIGN KEY (video_asset_id, video_generation)
+                REFERENCES recording_video_assets(asset_id, generation) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE video_asset_uses (
+            use_id TEXT PRIMARY KEY CHECK (length(trim(use_id)) > 0),
+            asset_id TEXT NOT NULL REFERENCES recording_video_assets(asset_id) ON DELETE RESTRICT,
+            owner_id TEXT NOT NULL CHECK (length(trim(owner_id)) > 0),
+            purpose TEXT NOT NULL CHECK (length(trim(purpose)) > 0),
+            process_id INTEGER NOT NULL CHECK (process_id >= 0),
+            acquired_at TEXT NOT NULL
+        )
+        """,
+        "CREATE INDEX video_asset_uses_asset_idx ON video_asset_uses(asset_id)",
+        """
+        CREATE TABLE video_deletion_history (
+            deletion_id TEXT PRIMARY KEY CHECK (length(trim(deletion_id)) > 0),
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            asset_id TEXT NOT NULL REFERENCES recording_video_assets(asset_id) ON DELETE RESTRICT,
+            generation INTEGER NOT NULL CHECK (generation >= 1),
+            reason TEXT NOT NULL CHECK (
+                reason IN ('capacity', 'retention', 'youtube_uploaded', 'manual', 'restored_deleted')
+            ),
+            deleted_at TEXT NOT NULL,
+            original_path TEXT NOT NULL,
+            size_bytes INTEGER CHECK (size_bytes IS NULL OR size_bytes >= 0),
+            sha256 TEXT NOT NULL DEFAULT '',
+            cause_known INTEGER NOT NULL DEFAULT 1 CHECK (cause_known IN (0, 1)),
+            upload_id TEXT REFERENCES youtube_uploads(upload_id) ON DELETE SET NULL,
+            prepare_queue_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            CHECK (reason <> 'restored_deleted' OR cause_known = 0),
+            UNIQUE (asset_id, generation),
+            FOREIGN KEY (recording_id, asset_id, generation)
+                REFERENCES recording_video_assets(recording_id, asset_id, generation) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE video_deletion_journal (
+            intent_id TEXT PRIMARY KEY CHECK (length(trim(intent_id)) > 0),
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            asset_id TEXT NOT NULL REFERENCES recording_video_assets(asset_id) ON DELETE RESTRICT,
+            generation INTEGER NOT NULL CHECK (generation >= 1),
+            reason TEXT NOT NULL CHECK (
+                reason IN ('capacity', 'retention', 'youtube_uploaded', 'manual')
+            ),
+            state TEXT NOT NULL CHECK (
+                state IN ('intent', 'staged', 'unlinked', 'completed', 'cancelled', 'failed')
+            ),
+            original_path TEXT NOT NULL CHECK (length(trim(original_path)) > 0),
+            staged_path TEXT NOT NULL CHECK (length(trim(staged_path)) > 0),
+            size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+            mtime_ns INTEGER NOT NULL CHECK (mtime_ns >= 0),
+            sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+            backup_path TEXT NOT NULL CHECK (length(trim(backup_path)) > 0),
+            upload_id TEXT REFERENCES youtube_uploads(upload_id) ON DELETE SET NULL,
+            prepare_queue_id TEXT,
+            requested_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (recording_id, asset_id, generation)
+                REFERENCES recording_video_assets(recording_id, asset_id, generation) ON DELETE RESTRICT
+        )
+        """,
+        "CREATE UNIQUE INDEX video_deletion_pending_asset_idx "
+        "ON video_deletion_journal(asset_id, generation) "
+        "WHERE state IN ('intent', 'staged', 'unlinked')",
+        """
+        CREATE TABLE upload_cleanup_requests (
+            request_id TEXT PRIMARY KEY CHECK (length(trim(request_id)) > 0),
+            recording_id TEXT NOT NULL REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            asset_id TEXT NOT NULL REFERENCES recording_video_assets(asset_id) ON DELETE RESTRICT,
+            generation INTEGER NOT NULL CHECK (generation >= 1),
+            upload_id TEXT NOT NULL REFERENCES youtube_uploads(upload_id) ON DELETE RESTRICT,
+            prepare_queue_id TEXT,
+            state TEXT NOT NULL DEFAULT 'pending'
+                CHECK (state IN ('pending', 'completed', 'cancelled')),
+            provenance_json TEXT NOT NULL,
+            last_skip_reason TEXT NOT NULL DEFAULT '',
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+            last_attempt_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (upload_id, asset_id, generation),
+            FOREIGN KEY (recording_id, asset_id, generation)
+                REFERENCES recording_video_assets(recording_id, asset_id, generation) ON DELETE RESTRICT
+        )
+        """,
+        "CREATE INDEX upload_cleanup_pending_idx ON upload_cleanup_requests(state, created_at)",
+        """
+        CREATE TABLE card_migration_review_items (
+            review_id TEXT PRIMARY KEY CHECK (length(trim(review_id)) > 0),
+            recording_id TEXT REFERENCES recordings(recording_id) ON DELETE RESTRICT,
+            duel_id TEXT REFERENCES duel_records(duel_id) ON DELETE RESTRICT,
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            data_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'needs_review'
+                CHECK (status IN ('needs_review', 'resolved')),
+            created_at TEXT NOT NULL,
+            UNIQUE (source_kind, source_id, reason)
+        )
+        """,
+    )
+    # executescriptは既存transactionをcommitするため、移行内では使いません。
+    for statement in statements:
+        connection.execute(statement)
+
+
+def _v19_id(kind: str, *parts: str) -> str:
+    return uuid.uuid5(uuid.NAMESPACE_URL, _migration_json(["mdrl-schema19", kind, *parts])).hex
+
+
+def _migration_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _migration_object(raw: str) -> dict[str, object]:
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _migrate_v19_assets(connection: sqlite3.Connection) -> None:
+    for recording in connection.execute("SELECT * FROM recordings ORDER BY recording_id").fetchall():
+        identifier = _v19_id("asset", recording["recording_id"], "1")
+        connection.execute(
+            "INSERT INTO recording_video_assets "
+            "(asset_id,recording_id,generation,is_current,path,size_bytes,state,created_at,updated_at) "
+            "VALUES (?,?,1,1,?,?,'unverified',?,?)",
+            (identifier, recording["recording_id"], recording["output_path"],
+             recording["size_bytes"], recording["created_at"], recording["updated_at"]),
+        )
+        connection.execute(
+            "INSERT INTO recording_video_protection "
+            "(recording_id,protected,revision,created_at,updated_at) VALUES (?,0,1,?,?)",
+            (recording["recording_id"], recording["created_at"], recording["updated_at"]),
+        )
+    connection.execute(
+        "INSERT INTO card_analysis_job_sources "
+        "(job_id,video_asset_id,video_generation,time_basis,input_fingerprint_json,verified) "
+        "SELECT jobs.job_id,assets.asset_id,assets.generation,assets.time_basis,jobs.fingerprint_json,0 "
+        "FROM card_analysis_jobs jobs JOIN recording_video_assets assets "
+        "ON assets.recording_id=jobs.recording_id AND assets.is_current=1"
+    )
+    connection.execute(
+        "INSERT INTO card_observation_links "
+        "(event_id,video_asset_id,video_generation,time_basis,input_fingerprint_json,verified) "
+        "SELECT observations.event_id,assets.asset_id,assets.generation,assets.time_basis,"
+        "COALESCE(jobs.fingerprint_json,'{}'),0 "
+        "FROM card_observations observations JOIN recording_video_assets assets "
+        "ON assets.recording_id=observations.recording_id AND assets.is_current=1 "
+        "LEFT JOIN card_analysis_jobs jobs ON jobs.job_id=observations.job_id"
+    )
+    connection.execute(
+        "INSERT INTO duel_event_sources "
+        "(event_id,video_asset_id,video_generation,time_basis,verified) "
+        "SELECT events.event_id,assets.asset_id,assets.generation,assets.time_basis,0 "
+        "FROM duel_events events JOIN recording_video_assets assets "
+        "ON assets.recording_id=events.recording_id AND assets.is_current=1"
+    )
+
+
+def _migration_review(
+    connection: sqlite3.Connection, *, recording_id: str, duel_id: str | None,
+    source_kind: str, source_id: str, reason: str, data: dict[str, object], created_at: str,
+) -> None:
+    connection.execute(
+        "INSERT INTO card_migration_review_items "
+        "(review_id,recording_id,duel_id,source_kind,source_id,reason,data_json,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (_v19_id("review", source_kind, source_id, reason), recording_id, duel_id,
+         source_kind, source_id, reason, _migration_json(data), created_at),
+    )
+
+
+def _migrate_v19_card_information(connection: sqlite3.Connection) -> None:
+    targets = {
+        row["target_id"]: row for row in connection.execute("SELECT * FROM card_targets").fetchall()
+    }
+    for identifier, target in targets.items():
+        connection.execute(
+            "INSERT INTO card_identities VALUES (?,?,?,?,?)",
+            (identifier, target["name"], target["normalized_name"],
+             target["created_at"], target["updated_at"]),
+        )
+        connection.execute("INSERT INTO card_target_identity_links VALUES (?,?)", (identifier, identifier))
+
+    recordings = {
+        row["recording_id"]: row for row in connection.execute("SELECT * FROM recordings").fetchall()
+    }
+    duels = {
+        row["recording_id"]: row["duel_id"]
+        for row in connection.execute("SELECT duel_id,recording_id FROM duel_records").fetchall()
+        if row["recording_id"] is not None
+    }
+    observations = connection.execute("SELECT * FROM card_observations ORDER BY event_id").fetchall()
+    nonuses = connection.execute("SELECT * FROM card_nonuse_confirmations").fetchall()
+    openers = connection.execute("SELECT * FROM card_opener_confirmations").fetchall()
+    meaningful_recordings = {
+        row["recording_id"] for row in observations if _old_observation_used(row)
+    } | {
+        row["recording_id"] for row in nonuses if row["confirmed"] == 1
+    } | {
+        row["recording_id"] for row in openers if row["status"] == "confirmed"
+    }
+    for recording_id in sorted(meaningful_recordings - duels.keys()):
+        recording = recordings[recording_id]
+        duel_id = _v19_id("draft", recording_id)
+        occurred_at = recording["started_at"] or recording["created_at"]
+        connection.execute(
+            "INSERT INTO duel_records "
+            "(duel_id,recording_id,entry_origin,occurred_at,status,result,play_order,coin_face,"
+            "own_deck,opponent_deck,duel_type,notes,revision,created_at,updated_at) "
+            "VALUES (?,?,'recording',?,'draft','unknown','unknown','unknown','','','other','',1,?,?)",
+            (duel_id, recording_id, occurred_at, recording["created_at"], recording["updated_at"]),
+        )
+        duels[recording_id] = duel_id
+
+    grouped: dict[tuple[str, str, str], list[sqlite3.Row]] = {}
+    for row in observations:
+        if row["status"] != "confirmed":
+            continue
+        duel_id = duels.get(row["recording_id"])
+        reason = None
+        if not _old_observation_used(row):
+            reason = "confirmed_observation_without_usage"
+        elif row["target_id"] not in targets:
+            reason = "unmapped_card"
+        elif row["actor"] == "unknown":
+            reason = "unknown_actor"
+        if reason is not None:
+            _migration_review(
+                connection, recording_id=row["recording_id"], duel_id=duel_id,
+                source_kind="observation", source_id=row["event_id"], reason=reason,
+                data=dict(row), created_at=row["updated_at"],
+            )
+        if _old_observation_used(row) and row["target_id"] in targets and duel_id is not None:
+            grouped.setdefault((duel_id, row["target_id"], row["actor"]), []).append(row)
+
+    information_ids: dict[tuple[str, str, str], str] = {}
+    for key, rows in grouped.items():
+        duel_id, card_id, actor = key
+        snapshots = [_old_semantic_snapshot(row) for row in rows]
+        latest = max(rows, key=lambda row: (row["updated_at"], row["event_id"]))
+        revision = max(row["revision"] for row in rows)
+        information_id = _insert_migrated_information(
+            connection, duel_id=duel_id, card_id=card_id, actor=actor, state="used",
+            revision=revision, created_at=min(row["created_at"] for row in rows),
+            updated_at=latest["updated_at"], legacy_snapshots=snapshots,
+        )
+        information_ids[key] = information_id
+        for row in rows:
+            connection.execute(
+                "UPDATE card_observation_links SET information_id=? WHERE event_id=?",
+                (information_id, row["event_id"]),
+            )
+
+    for row in nonuses:
+        duel_id = duels.get(row["recording_id"])
+        source_id = _migration_json([row["recording_id"], row["target_id"], row["actor"]])
+        if duel_id is None:
+            _migration_review(
+                connection, recording_id=row["recording_id"], duel_id=None,
+                source_kind="nonuse", source_id=source_id, reason="orphan_confirmation_history",
+                data=dict(row), created_at=row["updated_at"],
+            )
+            continue
+        key = (duel_id, row["target_id"], row["actor"])
+        if key in information_ids:
+            _migration_review(
+                connection, recording_id=row["recording_id"], duel_id=duel_id,
+                source_kind="nonuse", source_id=source_id,
+                reason="usage_nonuse_conflict" if row["confirmed"] else "nonuse_clear_with_usage",
+                data=dict(row), created_at=row["updated_at"],
+            )
+            continue
+        information_ids[key] = _insert_migrated_information(
+            connection, duel_id=duel_id, card_id=row["target_id"], actor=row["actor"],
+            state="not_used" if row["confirmed"] else "unknown", revision=row["revision"],
+            created_at=row["updated_at"], updated_at=row["updated_at"],
+            legacy_snapshots=[dict(row)],
+        )
+
+    by_event = {row["event_id"]: row for row in observations}
+    for row in openers:
+        duel_id = duels.get(row["recording_id"])
+        source_id = _migration_json([row["recording_id"], row["actor"]])
+        if duel_id is None:
+            _migration_review(
+                connection, recording_id=row["recording_id"], duel_id=None,
+                source_kind="opener", source_id=source_id, reason="orphan_confirmation_history",
+                data=dict(row), created_at=row["updated_at"],
+            )
+            continue
+        observation = by_event.get(row["event_id"])
+        valid = row["status"] == "confirmed" and observation is not None and (
+            _old_observation_used(observation) and observation["target_id"] in targets
+            and observation["actor"] == row["actor"]
+            and observation["recording_id"] == row["recording_id"]
+        )
+        if row["status"] == "confirmed" and not valid:
+            _migration_review(
+                connection, recording_id=row["recording_id"], duel_id=duel_id,
+                source_kind="opener", source_id=source_id, reason="invalid_opener_reference",
+                data={"opener": dict(row), "observation": dict(observation) if observation else None},
+                created_at=row["updated_at"],
+            )
+        card_id = observation["target_id"] if valid else None
+        status = "confirmed" if valid else "unknown"
+        connection.execute(
+            "INSERT INTO duel_card_openers "
+            "(duel_id,actor,card_id,status,source,revision,confirmed_at,created_at,updated_at) "
+            "VALUES (?,?,?,?,'migration',?,?,?,?)",
+            (duel_id, row["actor"], card_id, status, row["revision"],
+             row["updated_at"] if valid else None, row["updated_at"], row["updated_at"]),
+        )
+        connection.execute(
+            "INSERT INTO duel_card_opener_changes "
+            "(duel_id,actor,revision,source,before_json,after_json,changed_at) "
+            "VALUES (?,?,?,'migration',?,?,?)",
+            (duel_id, row["actor"], row["revision"], _migration_json(dict(row)),
+             _migration_json({"duel_id": duel_id, "actor": row["actor"], "card_id": card_id,
+                              "status": status}), row["updated_at"]),
+        )
+
+
+def _old_observation_used(row: sqlite3.Row) -> bool:
+    return (row["status"] == "confirmed" and row["action"] != "unknown"
+            and _migration_object(row["evidence_json"]).get("supports_use") is True)
+
+
+def _old_semantic_snapshot(row: sqlite3.Row) -> dict[str, object]:
+    # 対戦の確認履歴は動画時刻を存在条件にしません。旧revisionと人の訂正は残します。
+    original = _migration_object(row["original_values_json"])
+    keys = ("target_id", "card_name", "actor", "action", "status", "revision", "manual_locked")
+    return {
+        "current": {key: row[key] for key in keys},
+        "original": {key: original[key] for key in keys if key in original},
+        "original_supports_use": (
+            original.get("evidence", {}).get("supports_use")
+            if isinstance(original.get("evidence"), dict) else None
+        ),
+        "supports_use": _migration_object(row["evidence_json"]).get("supports_use"),
+    }
+
+
+def _insert_migrated_information(
+    connection: sqlite3.Connection, *, duel_id: str, card_id: str, actor: str, state: str,
+    revision: int, created_at: str, updated_at: str, legacy_snapshots: list[dict[str, object]],
+) -> str:
+    information_id = _v19_id("information", duel_id, card_id, actor)
+    connection.execute(
+        "INSERT INTO duel_card_information "
+        "(information_id,duel_id,card_id,actor,state,source,revision,confirmed_at,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,'migration',?,?,?,?)",
+        (information_id, duel_id, card_id, actor, state, revision,
+         updated_at if state != "unknown" else None, created_at, updated_at),
+    )
+    connection.execute(
+        "INSERT INTO duel_card_information_changes "
+        "(information_id,revision,source,before_json,after_json,changed_at) "
+        "VALUES (?,?,'migration',?,?,?)",
+        (information_id, revision, _migration_json({"legacy": legacy_snapshots}),
+         _migration_json({"information_id": information_id, "duel_id": duel_id,
+                          "card_id": card_id, "actor": actor, "state": state}), updated_at),
+    )
+    return information_id
+
+
 _MIGRATIONS: dict[int, Migration] = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -950,6 +1494,7 @@ _MIGRATIONS: dict[int, Migration] = {
     16: _migrate_to_v16,
     17: _migrate_to_v17,
     18: _migrate_to_v18,
+    19: _migrate_to_v19,
 }
 
 
@@ -992,6 +1537,9 @@ def initialize_history_database(
                 if migration_backup_factory is not None
                 else _backup_database(connection, database_path, current_version)
             )
+            if not backup_path.is_file() or backup_path.stat().st_size == 0:
+                raise HistoryDatabaseError("移行前バックアップを保持できません")
+            _validate_migration_backup(backup_path, current_version)
 
         if current_version >= 2 and current_version < 7 and recordings_root is not None:
             retired_artifacts = _stage_recovery_artifacts(
@@ -1340,10 +1888,39 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
                               "card_name", "actor", "action", "observed_ms", "actual_ms", "time_kind",
                               "evidence_json", "confidence", "source_key", "status", "revision",
                               "manual_locked", "original_values_json", "created_at", "updated_at"},
-        "card_nonuse_confirmations": {"recording_id", "target_id", "actor", "confirmed", "revision",
-                                      "updated_at"},
-        "card_opener_confirmations": {"recording_id", "actor", "event_id", "status", "revision",
-                                      "updated_at"},
+        "card_identities": {"card_id", "name", "normalized_name", "created_at", "updated_at"},
+        "card_target_identity_links": {"target_id", "card_id"},
+        "duel_card_information": {"information_id", "duel_id", "card_id", "actor", "state", "source",
+                                  "revision", "confirmed_at", "created_at", "updated_at"},
+        "duel_card_information_changes": {"change_id", "information_id", "revision", "source",
+                                          "before_json", "after_json", "changed_at"},
+        "duel_card_openers": {"duel_id", "actor", "card_id", "status", "source", "revision",
+                              "confirmed_at", "created_at", "updated_at"},
+        "duel_card_opener_changes": {"change_id", "duel_id", "actor", "revision", "source",
+                                     "before_json", "after_json", "changed_at"},
+        "recording_video_assets": {"asset_id", "recording_id", "generation", "is_current", "path",
+                                   "size_bytes", "mtime_ns", "sha256", "time_basis", "state",
+                                   "created_at", "updated_at"},
+        "recording_video_protection": {"recording_id", "protected", "revision", "created_at", "updated_at"},
+        "card_observation_links": {"event_id", "video_asset_id", "video_generation", "time_basis",
+                                   "information_id", "input_fingerprint_json", "verified"},
+        "card_analysis_job_sources": {"job_id", "video_asset_id", "video_generation", "time_basis",
+                                      "input_fingerprint_json", "verified"},
+        "duel_event_sources": {"event_id", "video_asset_id", "video_generation", "time_basis",
+                               "input_fingerprint_json", "verified"},
+        "video_asset_uses": {"use_id", "asset_id", "owner_id", "purpose", "process_id", "acquired_at"},
+        "video_deletion_history": {"deletion_id", "recording_id", "asset_id", "generation", "reason",
+                                   "deleted_at", "original_path", "size_bytes", "sha256", "cause_known",
+                                   "upload_id", "prepare_queue_id", "metadata_json"},
+        "video_deletion_journal": {"intent_id", "recording_id", "asset_id", "generation", "reason", "state",
+                                   "original_path", "staged_path", "size_bytes", "mtime_ns", "sha256",
+                                   "backup_path", "upload_id", "prepare_queue_id", "requested_at", "updated_at",
+                                   "error", "metadata_json"},
+        "upload_cleanup_requests": {"request_id", "recording_id", "asset_id", "generation", "upload_id",
+                                    "prepare_queue_id", "state", "provenance_json", "last_skip_reason", "attempts",
+                                    "last_attempt_at", "created_at", "updated_at"},
+        "card_migration_review_items": {"review_id", "recording_id", "duel_id", "source_kind", "source_id",
+                                        "reason", "data_json", "status", "created_at"},
     }
     for table, required in card_columns.items():
         columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
@@ -1353,6 +1930,8 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
     if quick_check is None or quick_check[0] != "ok":
         detail = quick_check[0] if quick_check else "結果なし"
         raise HistoryDatabaseError(f"録画履歴DBの整合性検査に失敗しました: {detail}")
+    if connection.execute("PRAGMA foreign_key_check").fetchall():
+        raise HistoryDatabaseError("録画履歴DBの外部キー整合性検査に失敗しました")
 
 
 def _backup_database(
@@ -1377,3 +1956,49 @@ def _backup_database(
     finally:
         if destination is not None:
             destination.close()
+
+
+def _validate_migration_backup(path: Path, expected_version: int) -> None:
+    """callbackの成功返却だけに依存せず、移行前の復元材料を検証します。"""
+    try:
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as archive:
+                manifest = json.loads(archive.read("manifest.json"))
+                if (manifest.get("schema") != "mdrl-data-backup-v1"
+                        or manifest.get("protected") is not True
+                        or manifest.get("schema_version") != expected_version):
+                    raise HistoryDatabaseError("移行前バックアップの保護状態・スキーマ版が不正です")
+                allowed = {"manifest.json", "data/history.sqlite3", "config/app.toml"}
+                if not set(archive.namelist()).issubset(allowed):
+                    raise HistoryDatabaseError("移行前バックアップに未許可のファイルがあります")
+                members = manifest.get("members")
+                if not isinstance(members, dict) or "data/history.sqlite3" not in members:
+                    raise HistoryDatabaseError("移行前バックアップに履歴DBがありません")
+                for name, metadata in members.items():
+                    if name not in allowed - {"manifest.json"} or not isinstance(metadata, dict):
+                        raise HistoryDatabaseError("移行前バックアップのファイル定義が不正です")
+                    payload = archive.read(name)
+                    if (metadata.get("size") != len(payload)
+                            or metadata.get("sha256") != hashlib.sha256(payload).hexdigest()):
+                        raise HistoryDatabaseError("移行前バックアップのファイル検証に失敗しました")
+                with tempfile.TemporaryDirectory(prefix="mdrl-migration-check-") as directory:
+                    snapshot = Path(directory) / "history.sqlite3"
+                    snapshot.write_bytes(archive.read("data/history.sqlite3"))
+                    _validate_migration_snapshot(snapshot, expected_version)
+        else:
+            _validate_migration_snapshot(path, expected_version)
+    except (OSError, sqlite3.Error, zipfile.BadZipFile, ValueError, KeyError, AttributeError) as exc:
+        raise HistoryDatabaseError(f"移行前バックアップを検証できません: {exc}") from exc
+
+
+def _validate_migration_snapshot(path: Path, expected_version: int) -> None:
+    connection = sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True, timeout=10.0)
+    try:
+        if _read_schema_version(connection) != expected_version:
+            raise HistoryDatabaseError("移行前バックアップのスキーマ版が一致しません")
+        if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise HistoryDatabaseError("移行前バックアップの整合性検査に失敗しました")
+        if connection.execute("PRAGMA foreign_key_check").fetchall():
+            raise HistoryDatabaseError("移行前バックアップの外部キー検査に失敗しました")
+    finally:
+        connection.close()

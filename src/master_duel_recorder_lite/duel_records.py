@@ -292,23 +292,33 @@ class DuelRecordRepository:
         )
 
     def delete_manual(self, duel_id: str) -> DuelRecord:
+        from .data_ownership import (
+            DataOwnershipError, delete_duel_related, scoped_data_protection, scoped_runtime_paths,
+        )
+        from .data_protection import DataProtectionError
+        from .video_management import VideoManagementError, video_management_gate
+
         current = self.get(duel_id)
         if current is None or current.duel_id != _identifier(duel_id):
             raise DuelRecordError(f"対戦記録が見つかりません: {duel_id}")
         if current.recording_id is not None:
             raise DuelRecordError("録画付き戦績は録画履歴の削除を使用してください")
-        with closing(connect_history_database(self.database_path)) as connection, connection:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                "DELETE FROM duel_record_tag_links WHERE duel_id = ?", (current.duel_id,)
-            )
-            connection.execute(
-                "DELETE FROM duel_record_tags WHERE duel_id = ?", (current.duel_id,)
-            )
-            connection.execute(
-                "DELETE FROM duel_record_changes WHERE duel_id = ?", (current.duel_id,)
-            )
-            connection.execute("DELETE FROM duel_records WHERE duel_id = ?", (current.duel_id,))
+        try:
+            paths = scoped_runtime_paths(self.database_path)
+            protection = scoped_data_protection(paths, self.database_path)
+            with video_management_gate(paths, database_path=self.database_path):
+                with protection.retained_backup("pre-duel-delete"):
+                    with closing(connect_history_database(self.database_path)) as connection, connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        checked = connection.execute("SELECT recording_id FROM duel_records WHERE duel_id=?", (current.duel_id,)).fetchone()
+                        if checked is None or checked[0] is not None:
+                            raise DataOwnershipError("対象の手入力戦績が変更されています")
+                        if delete_duel_related(connection, current.duel_id) != 1:
+                            raise DataOwnershipError("対象の手入力戦績が変更されています")
+                        if connection.execute("PRAGMA foreign_key_check").fetchall():
+                            raise DataOwnershipError("戦績削除後のDB参照関係が不正です")
+        except (sqlite3.Error, OSError, DataOwnershipError, DataProtectionError, VideoManagementError) as exc:
+            raise DuelRecordError(f"対戦記録を削除できません。DBは変更前へ戻しました: {exc}") from exc
         return current
 
     def _save_record(

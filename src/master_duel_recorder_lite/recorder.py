@@ -602,7 +602,7 @@ def _visual_worker_builder(
         height=0,
     )
     capture = FfmpegWindowFrameCapture(executable) if shared_frame_capture is None else None
-    repository = DuelTimelineRepository(history.database_path)
+    repository = DuelTimelineRepository(history.database_path, recordings_root=history.recordings_root)
 
     def build(started_at: datetime) -> VisualDetectionWorker:
         def new_pipeline() -> VisualDetectionPipeline:

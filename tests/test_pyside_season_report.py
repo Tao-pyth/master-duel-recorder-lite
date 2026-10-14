@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 from master_duel_recorder_lite.application import RecorderApplicationService
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.pyside_season_report import create_season_report_dialog
@@ -114,6 +116,7 @@ class SeasonReportWidgetTest(unittest.TestCase):
         def inspect(_app):
             window = next(w for w in self.app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
             try:
+                wait_for_gui_startup(self.app, window)
                 window.show_page("seasons")
                 with patch.object(window, "_show_information") as info:
                     window.selected_season_id = None
@@ -128,7 +131,7 @@ class SeasonReportWidgetTest(unittest.TestCase):
                     window.widgets["season_report"].click()
                     warning.assert_called_once()
             finally:
-                window.close()
+                close_gui_test_window(self.app, window)
             return 0
 
         with patch.object(QApplication, "exec", inspect):

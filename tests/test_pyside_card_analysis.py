@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 from master_duel_recorder_lite.application import RecorderApplicationService
 from master_duel_recorder_lite.card_analysis_models import CardInputFingerprint, CardObservationValues
 from master_duel_recorder_lite.card_analysis_repository import CardAnalysisRepository
@@ -270,6 +272,7 @@ class CardAnalysisWidgetTest(unittest.TestCase):
         def inspect(app):
             window = next(widget for widget in app.topLevelWidgets() if hasattr(widget, "card_target_panel") and widget.isVisible())
             try:
+                wait_for_gui_startup(app, window)
                 window.show_page("settings")
                 window.widgets["settings_card_analysis_enabled"].setChecked(True)
                 window.widgets["settings_card_analysis_fps"].setText("1.5")
@@ -302,7 +305,7 @@ class CardAnalysisWidgetTest(unittest.TestCase):
                     root.mkdir(parents=True, exist_ok=True)
                     self.assertTrue(window.grab().save(str(root / "main-card-statistics.png")))
             finally:
-                window.close()
+                close_gui_test_window(app, window)
             return 0
 
         with patch.object(QApplication, "exec", lambda app: inspect(app)):

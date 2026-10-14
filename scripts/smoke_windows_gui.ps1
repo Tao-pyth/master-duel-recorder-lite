@@ -32,6 +32,7 @@ try {
     }
     $result = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
     $requiredWidgets = @(
+        "history_cards", "history_video_delete", "history_video_protection", "history_video_status", "settings_recording_storage_max_gib", "settings_recording_retention_days", "settings_delete_source_after_upload",
         "activity", "app_update", "catalog_table", "clean_uninstall", "csv_status", "data_backup_table", "data_protection_scope", "data_protection_status", "deck_catalog_table", "ffmpeg_setup",
         "history_add", "history_bulk", "history_coin_filter", "history_columns", "history_delete", "history_duel", "history_duplicates", "history_incomplete", "history_origin_filter", "history_own_deck_filter", "history_play", "history_refresh", "history_saved_filter", "history_season_filter", "history_table", "history_tag_filter", "history_youtube",
         "improvement_status", "incomplete_duel_count", "internal_improve_manual_duel_add", "internal_improve_refresh", "internal_prepare_run", "manual_duel_add", "prepare_recording", "prepare_table", "record_diagnostics_export", "record_manual_duel_add", "record_reliability_check", "record_start", "record_status", "record_stop", "record_target_refresh", "record_target_save",

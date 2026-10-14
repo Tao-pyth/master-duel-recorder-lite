@@ -2,6 +2,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
+from contextlib import closing
+import sqlite3
+from unittest.mock import patch
 
 from master_duel_recorder_lite.data_reconciliation import DataReconciliationService
 from master_duel_recorder_lite.duel_records import DuelRecordRepository, DuelRecordValues
@@ -10,6 +13,11 @@ from master_duel_recorder_lite.recording_history import (
     RecordingHistoryRepository,
 )
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
+from master_duel_recorder_lite.duel_card_repository import DuelCardRepository
+from master_duel_recorder_lite.duel_timeline import DuelTimelineRepository
+from master_duel_recorder_lite.video_lifecycle import VideoLifecycleRepository
+from master_duel_recorder_lite.recording_retention import fingerprint_file
+from master_duel_recorder_lite.video_source_use import video_source_use
 
 
 class DataReconciliationServiceTest(unittest.TestCase):
@@ -71,6 +79,75 @@ class DataReconciliationServiceTest(unittest.TestCase):
         candidate.write_bytes(b"after")
         with self.assertRaisesRegex(RecordingHistoryError, "変更"):
             self.service.relink(preview)
+
+    def _completed_video_with_marker(self):
+        source = self._recording("one", b"original-video")
+        with closing(sqlite3.connect(self.history.database_path)) as connection, connection:
+            connection.execute("UPDATE recordings SET state='completed',ended_at=created_at,size_bytes=? WHERE recording_id='one'", (source.stat().st_size,))
+        marker = DuelTimelineRepository.from_runtime_paths(self.paths).add("one", elapsed_ms=100, event_type="marker", label="old marker")
+        lifecycle = VideoLifecycleRepository.from_runtime_paths(self.paths)
+        asset = lifecycle.get_current_asset("one")
+        duel = self.duels.save("one", DuelRecordValues(status="confirmed", result="win"), expected_revision=0)
+        cards = DuelCardRepository.from_runtime_paths(self.paths)
+        identity = cards.save_identity(name="Meaning stays")
+        cards.save_information(duel.duel_id, identity.card_id, "self", "used", is_opener=True)
+        return source, lifecycle, asset, marker, cards, duel
+
+    def test_replacement_changes_generation_and_keeps_confirmed_information(self) -> None:
+        source, lifecycle, old, marker, cards, duel = self._completed_video_with_marker()
+        before = cards.get_review(duel.duel_id)
+        candidate = self.paths.recordings / "replacement.mkv"
+        candidate.write_bytes(b"different-video")
+        self.service.relink(self.service.preview_relink("one", candidate))
+        current = lifecycle.get_current_asset("one")
+        self.assertNotEqual(current.asset_id, old.asset_id)
+        self.assertEqual(current.generation, old.generation + 1)
+        self.assertEqual(cards.get_review(duel.duel_id), before)
+        events = DuelTimelineRepository.from_runtime_paths(self.paths).list("one")
+        self.assertEqual(events[0].event_id, marker.event_id)
+        self.assertFalse(events[0].video_verified)
+        self.assertTrue(source.exists())
+
+    def test_identical_content_move_keeps_asset_and_marker(self) -> None:
+        source, lifecycle, old, _marker, _cards, _duel = self._completed_video_with_marker()
+        candidate = self.paths.recordings / "same-content.mkv"
+        candidate.write_bytes(source.read_bytes())
+        self.service.relink(self.service.preview_relink("one", candidate))
+        current = lifecycle.get_current_asset("one")
+        self.assertEqual((current.asset_id, current.generation), (old.asset_id, old.generation))
+        self.assertEqual(current.path, "same-content.mkv")
+        self.assertTrue(DuelTimelineRepository.from_runtime_paths(self.paths).list("one")[0].video_verified)
+
+    def test_source_use_prevents_relink_before_any_metadata_change(self) -> None:
+        self._completed_video_with_marker()
+        candidate = self.paths.recordings / "replacement.mkv"
+        candidate.write_bytes(b"different-video")
+        preview = self.service.preview_relink("one", candidate)
+        with video_source_use(self.paths, "one", purpose="fixture-reader"):
+            with self.assertRaisesRegex(RecordingHistoryError, "利用中"):
+                self.service.relink(preview)
+        self.assertEqual(self.history.get("one").output_path, Path("one.mkv"))
+
+    def test_late_file_change_rolls_back_recording_and_asset(self) -> None:
+        source, lifecycle, old, _marker, cards, duel = self._completed_video_with_marker()
+        candidate = self.paths.recordings / "replacement.mkv"
+        candidate.write_bytes(b"different-video")
+        preview = self.service.preview_relink("one", candidate)
+        before = cards.get_review(duel.duel_id)
+        calls = 0
+        def changing(path):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                candidate.write_bytes(b"late-change")
+            return fingerprint_file(path)
+        with patch("master_duel_recorder_lite.data_reconciliation.fingerprint_file", side_effect=changing):
+            with self.assertRaisesRegex(RecordingHistoryError, "変更"):
+                self.service.relink(preview)
+        self.assertEqual(self.history.get("one").output_path, Path("one.mkv"))
+        self.assertEqual(lifecycle.get_current_asset("one").asset_id, old.asset_id)
+        self.assertEqual(cards.get_review(duel.duel_id), before)
+        self.assertTrue(source.is_file())
 
     def test_duplicate_detection_finds_strong_manual_match_only(self) -> None:
         occurred = datetime(2026, 8, 13, 12, tzinfo=timezone.utc)

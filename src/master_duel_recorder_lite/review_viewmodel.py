@@ -67,6 +67,7 @@ class ReviewTimelineEvent:
     label: str
     source: str
     confidence: float | None
+    video_verified: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -78,6 +79,7 @@ class ReviewTimelineEvent:
             "label": self.label,
             "source": self.source,
             "confidence": self.confidence,
+            "video_verified": self.video_verified,
         }
 
 
@@ -90,6 +92,7 @@ class ReviewVisualTimelineItem:
     label: str
     tooltip: str
     in_range: bool
+    video_verified: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -100,6 +103,7 @@ class ReviewVisualTimelineItem:
             "label": self.label,
             "tooltip": self.tooltip,
             "in_range": self.in_range,
+            "video_verified": self.video_verified,
         }
 
 
@@ -255,7 +259,7 @@ def build_review_view_model(
             duration_seconds=duration,
         ),
         clip_candidates=tuple(
-            _clip_candidate(event, duration_seconds=duration) for event in timeline
+            _clip_candidate(event, duration_seconds=duration) for event in review_timeline if event.video_verified
         ),
     )
 
@@ -268,7 +272,7 @@ def build_visual_timeline_items(
     duration_ms = int(duration_seconds * 1000) if duration_seconds and duration_seconds > 0 else 0
     return tuple(
         _visual_timeline_item(event, duration_ms=duration_ms)
-        for event in timeline
+        for event in timeline if event.video_verified
     )
 
 
@@ -315,6 +319,7 @@ def _card_timeline_event(event: object) -> ReviewTimelineEvent:
         elapsed_label=_elapsed_label(values.observed_ms), event_type="card_use",
         status=event.status, label=f"{values.card_name} / {actors.get(values.actor, '不明')}・{actions.get(values.action, '行動不明')}（観測位置）{actual}",
         source="card_analysis", confidence=values.confidence,
+        video_verified=getattr(event, "video_verified", False) is True,
     )
 
 
@@ -329,6 +334,7 @@ def _timeline_event(event: DuelEvent) -> ReviewTimelineEvent:
         label=label,
         source=event.source,
         confidence=event.confidence,
+        video_verified=getattr(event, "video_verified", False) is True,
     )
 
 
@@ -363,6 +369,7 @@ def _visual_timeline_item(
         label=event.label,
         tooltip=f"{event.elapsed_label} / {event.label} / {kind}",
         in_range=in_range,
+        video_verified=event.video_verified,
     )
 
 

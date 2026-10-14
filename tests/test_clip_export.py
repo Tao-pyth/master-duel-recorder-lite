@@ -1,6 +1,6 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
 import tempfile
 import unittest
 
@@ -10,6 +10,8 @@ from master_duel_recorder_lite.clip_export import (
     resolve_clip_range,
 )
 from master_duel_recorder_lite.ffmpeg import CommandResult
+from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
+from master_duel_recorder_lite.recording_session import RecordingResult, RecordingState
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
 from master_duel_recorder_lite.upload_media import UploadMediaValidator
 
@@ -64,13 +66,12 @@ class ClipExportTest(unittest.TestCase):
             ensure_runtime_dirs(paths)
             source = paths.recordings / "source.mkv"
             source.write_bytes(b"original")
-            repository = SimpleNamespace(
-                get=lambda _recording_id: SimpleNamespace(
-                    state="completed",
-                    output_path=Path("source.mkv"),
-                    duration_seconds=60.0,
-                )
-            )
+            repository = RecordingHistoryRepository.from_runtime_paths(paths)
+            now = datetime.now(timezone.utc)
+            repository.register_starting(recording_id="recording", output_path=source, container="mkv", source="manual", created_at=now)
+            repository.finalize("recording", RecordingResult(
+                RecordingState.COMPLETED, source, 0, now, now + timedelta(seconds=60), source.stat().st_size, None, (),
+            ))
             validator = UploadMediaValidator(
                 ffprobe_executable=root / "ffprobe.exe",
                 runner=lambda command, _timeout: CommandResult(

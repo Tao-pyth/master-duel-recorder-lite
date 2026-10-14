@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 
 @unittest.skipUnless(importlib.util.find_spec("PySide6"), "PySide6 is optional")
 class RecordPageLayoutTest(unittest.TestCase):
@@ -25,8 +27,8 @@ class RecordPageLayoutTest(unittest.TestCase):
             def inspect(_app):
                 app = QApplication.instance()
                 w = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
-                w.record_state_timer.stop()
                 try:
+                    wait_for_gui_startup(app, w)
                     combo = w.widgets["watch_default_duel_type"]
                     seen.append(combo.currentData())
                     self.assertEqual([combo.itemText(i) for i in range(combo.count())],
@@ -50,9 +52,7 @@ class RecordPageLayoutTest(unittest.TestCase):
                         combo.setCurrentIndex(combo.findData("event"))
                         w.widgets["record_auto_watch_defaults_section"].grab().save(str(dest / "watch-defaults.png"))
                 finally:
-                    w.close()
-                    w.deleteLater()
-                    app.processEvents()
+                    close_gui_test_window(app, w)
                 return 0
 
             try:
@@ -92,6 +92,7 @@ class RecordPageLayoutTest(unittest.TestCase):
             widgets["watch_default_duel_type"].setCurrentIndex(1)
             original_service = window.service
             fake = SimpleNamespace(
+                gui_startup_ready=True,
                 start_recording=Mock(), stop_recording=Mock(),
                 start_watch=Mock(), stop_watch=Mock(), save_settings=Mock(),
                 visual_detection_status=lambda: SimpleNamespace(message="自動判定を実行中です"),

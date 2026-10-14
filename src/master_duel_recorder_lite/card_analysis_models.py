@@ -10,6 +10,15 @@ CARD_ACTIONS = {"activate", "normal_summon", "special_summon", "unknown"}
 CARD_TIME_KINDS = {"log_observed", "detail_observed", "actual_use"}
 CARD_STATUSES = {"candidate", "confirmed", "rejected"}
 CARD_JOB_STATES = {"queued", "running", "waiting", "completed", "failed", "cancelled"}
+CARD_INFORMATION_STATES = {"used", "not_used", "unknown"}
+
+
+class CardAnalysisError(RuntimeError):
+    """カード分析・対戦カード情報を安全に読み書きできない場合のエラーです。"""
+
+
+class CardAnalysisConflictError(CardAnalysisError):
+    """解析や人の編集が競合したため、再読込が必要です。"""
 
 
 def normalize_card_name(value: str) -> str:
@@ -43,6 +52,7 @@ class CardTarget:
     revision: int
     created_at: datetime
     updated_at: datetime
+    card_id: str | None = None
 
     @property
     def purpose(self) -> str:
@@ -54,7 +64,7 @@ class CardTarget:
     def to_dict(self) -> dict[str, object]:
         return {**self.snapshot().to_dict(), "purpose": self.purpose, "enabled": self.enabled,
                 "revision": self.revision, "created_at": self.created_at.isoformat(),
-                "updated_at": self.updated_at.isoformat()}
+                "updated_at": self.updated_at.isoformat(), "card_id": self.card_id}
 
 
 @dataclass(frozen=True)
@@ -133,6 +143,11 @@ class CardObservation:
     is_opener: bool
     created_at: datetime
     updated_at: datetime
+    information_id: str | None = None
+    information_revision: int = 0
+    card_id: str | None = None
+    video_generation: int | None = None
+    video_verified: bool = False
 
     @property
     def observation_id(self) -> str:
@@ -176,7 +191,10 @@ class CardObservation:
                 "job_id": self.job_id, "generation": self.generation, "status": self.status,
                 "revision": self.revision, "manual_locked": self.manual_locked,
                 "is_opener": self.is_opener, "created_at": self.created_at.isoformat(),
-                "updated_at": self.updated_at.isoformat()}
+                "updated_at": self.updated_at.isoformat(),
+                "information_id": self.information_id, "information_revision": self.information_revision,
+                "card_id": self.card_id, "video_generation": self.video_generation,
+                "video_verified": self.video_verified}
 
 
 @dataclass(frozen=True)
@@ -214,6 +232,8 @@ class CardAnalysisReview:
     observations: tuple[CardObservation, ...]
     nonuses: tuple[CardNonuseConfirmation, ...]
     openers: tuple[CardOpenerConfirmation, ...]
+    duel_id: str | None = None
+    information: tuple[DuelCardInformation, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {"recording_id": self.recording_id,
@@ -221,4 +241,87 @@ class CardAnalysisReview:
                 "successful_job": self.successful_job.to_dict() if self.successful_job else None,
                 "observations": [item.to_dict() for item in self.observations],
                 "nonuses": [item.to_dict() for item in self.nonuses],
-                "openers": [item.to_dict() for item in self.openers]}
+                "openers": [item.to_dict() for item in self.openers],
+                "duel_id": self.duel_id,
+                "information": [item.to_dict() for item in self.information]}
+
+
+@dataclass(frozen=True)
+class CardIdentity:
+    card_id: str
+    name: str
+    normalized_name: str
+    created_at: datetime
+    updated_at: datetime
+
+    def to_dict(self) -> dict[str, object]:
+        return {**asdict(self), "created_at": self.created_at.isoformat(),
+                "updated_at": self.updated_at.isoformat()}
+
+
+@dataclass(frozen=True)
+class DuelCardInformation:
+    information_id: str
+    duel_id: str
+    card_id: str
+    card_name: str
+    actor: str
+    state: str
+    source: str
+    revision: int
+    confirmed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    def to_dict(self) -> dict[str, object]:
+        return {**asdict(self), "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
+                "created_at": self.created_at.isoformat(), "updated_at": self.updated_at.isoformat()}
+
+
+@dataclass(frozen=True)
+class DuelCardOpener:
+    duel_id: str
+    actor: str
+    card_id: str | None
+    card_name: str | None
+    status: str
+    source: str
+    revision: int
+    confirmed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    def to_dict(self) -> dict[str, object]:
+        return {**asdict(self), "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
+                "created_at": self.created_at.isoformat(), "updated_at": self.updated_at.isoformat()}
+
+
+@dataclass(frozen=True)
+class DuelCardMigrationReview:
+    review_id: str
+    source_kind: str
+    reason: str
+    card_name: str
+    actor: str
+    action: str
+    original_status: str
+    supports_use: bool | None
+    nonuse_confirmed: bool | None
+    opener_status: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class DuelCardReview:
+    duel_id: str
+    information: tuple[DuelCardInformation, ...]
+    openers: tuple[DuelCardOpener, ...]
+    migration_reviews: tuple[DuelCardMigrationReview, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {"duel_id": self.duel_id,
+                "information": [item.to_dict() for item in self.information],
+                "openers": [item.to_dict() for item in self.openers],
+                "migration_reviews": [item.to_dict() for item in self.migration_reviews]}

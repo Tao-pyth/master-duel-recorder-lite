@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 from master_duel_recorder_lite.application import RecorderApplicationService
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 
@@ -47,6 +49,7 @@ class MatchupStatisticsWidgetTest(unittest.TestCase):
                 window = next(w for w in app.topLevelWidgets()
                               if isinstance(w, QMainWindow) and w.isVisible())
                 try:
+                    wait_for_gui_startup(app, window)
                     window.show_page("statistics")
                     widgets = window.widgets
                     table = widgets["statistics_matchup_table"]
@@ -123,7 +126,7 @@ class MatchupStatisticsWidgetTest(unittest.TestCase):
                             directory.mkdir(parents=True, exist_ok=True)
                             self.assertTrue(window.grab().save(str(directory / f"matchups-{width}x{height}.png")))
                 finally:
-                    window.close()
+                    close_gui_test_window(app, window)
                 return 0
 
             platform = os.environ.get("MDRL_TEST_QPA", "offscreen")

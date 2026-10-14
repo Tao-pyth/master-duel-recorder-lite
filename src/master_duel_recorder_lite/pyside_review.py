@@ -10,6 +10,8 @@ import webbrowser
 from .application import RecorderApplicationService
 from .clip_export import resolve_clip_range
 from .duel_records import DuelRecordValues, duel_choice_label
+from .runtime_paths import RuntimePaths
+from .video_source_use import video_source_use
 from .review_viewmodel import (
     ReviewClipExportRequest,
     ReviewMarkerRequest,
@@ -145,7 +147,7 @@ def review_timeline_display_row(event: ReviewTimelineEvent) -> tuple[str, str, s
     return (
         event.elapsed_label,
         event_type,
-        REVIEW_EVENT_STATUS_LABELS.get(event.status, event.status or "-"),
+        REVIEW_EVENT_STATUS_LABELS.get(event.status, event.status or "-") if getattr(event, "video_verified", False) else "動画未検証",
         description,
     )
 
@@ -212,7 +214,65 @@ def review_operation_error_message(operation: str, error: Exception) -> str:
     return f"{operation}に失敗しました。\n{compact}"
 
 
+class _ReviewSourceSession:
+    def __init__(self, paths: RuntimePaths, recording_id: str) -> None:
+        self.context = video_source_use(paths, recording_id, purpose="review_playback")
+        self.source = self.context.__enter__()
+        self.player = None
+        self.window = None
+        self.released = False
+
+    def release(self) -> None:
+        if not self.released:
+            self.released = True
+            self.context.__exit__(None, None, None)
+
+    def release_if_empty(self, url) -> None:
+        if not self.released and url.isEmpty() and self.player.source().isEmpty():
+            self.release()
+
+    def close(self) -> None:
+        try:
+            if self.player is not None:
+                import shiboken6
+                from PySide6.QtCore import QUrl
+
+                if shiboken6.isValid(self.player):
+                    self.player.stop()
+                    self.player.setSource(QUrl())
+                    self.player.setVideoOutput(None)
+                    self.player.setAudioOutput(None)
+        finally:
+            self.release()
+
+
 def create_review_window(
+    *, service: RecorderApplicationService, recording_id: str, parent: object | None = None,
+    initial_tab: str = "duel", on_duel_saved: DuelSavedCallback | None = None,
+    on_closed: Callable[[object], None] | None = None,
+) -> object:
+    paths = getattr(service, "paths", None)
+    if not isinstance(paths, RuntimePaths):
+        raise PySideReviewError("録画の保存先と利用状態を確認できないため、レビューを開けません")
+    try:
+        session = _ReviewSourceSession(paths, recording_id)
+    except (RuntimeError, OSError, ValueError) as exc:
+        raise PySideReviewError(f"元動画の利用を開始できません: {exc}") from exc
+    try:
+        return _create_review_window(
+            service=service, recording_id=recording_id, parent=parent, initial_tab=initial_tab,
+            on_duel_saved=on_duel_saved, on_closed=on_closed, source_session=session,
+        )
+    except BaseException:
+        try:
+            session.close()
+        finally:
+            if session.window is not None:
+                session.window.deleteLater()
+        raise
+
+
+def _create_review_window(
     *,
     service: RecorderApplicationService,
     recording_id: str,
@@ -220,6 +280,7 @@ def create_review_window(
     initial_tab: str = "duel",
     on_duel_saved: DuelSavedCallback | None = None,
     on_closed: Callable[[object], None] | None = None,
+    source_session: _ReviewSourceSession,
 ) -> object:
     try:
         from PySide6.QtCore import QSize, QUrl
@@ -254,6 +315,9 @@ def create_review_window(
         raise PySideReviewError(f"PySide6レビュー画面の読み込みに失敗しました: {exc}") from exc
 
     model = service.get_review_view_model(recording_id)
+    if (model.video.path.resolve() != source_session.source.path
+            or model.video.recording_id != recording_id):
+        raise PySideReviewError("レビューの動画参照と登録された元動画が一致しません")
     if not model.video.can_play_in_app:
         raise PySideReviewError(
             f"{model.video.suffix or '不明な形式'}はアプリ内再生対象外です。"
@@ -265,10 +329,7 @@ def create_review_window(
                 event.ignore()
                 return
             # stopだけでは動画ファイルが開いたままになるためsourceも解除する。
-            self.player.stop()
-            self.player.setSource(QUrl())
-            self.player.setVideoOutput(None)
-            self.player.setAudioOutput(None)
+            source_session.close()
             if on_closed is not None:
                 on_closed(self)
             super().closeEvent(event)
@@ -296,6 +357,9 @@ def create_review_window(
             self._update_text()
 
     window = ReviewWindow(parent)
+    source_session.window = window
+    window.source_session = source_session
+    window.destroyed.connect(lambda: source_session.close())
     window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
     window.setObjectName("review_window")
     window.setWindowTitle(f"Master Duel Recorder Lite Review - {recording_id}")
@@ -331,10 +395,12 @@ def create_review_window(
 
     player = QMediaPlayer(window)
     window.player = player
+    source_session.player = player
+    player.sourceChanged.connect(source_session.release_if_empty, Qt.ConnectionType.QueuedConnection)
     audio = QAudioOutput(window)
     player.setAudioOutput(audio)
     player.setVideoOutput(video)
-    player.setSource(QUrl.fromLocalFile(str(model.video.path)))
+    player.setSource(QUrl.fromLocalFile(str(source_session.source.path)))
 
     class ReviewVisualTimelineWidget(QWidget):
         def __init__(self, items: tuple[ReviewVisualTimelineItem, ...]) -> None:
@@ -654,8 +720,29 @@ def create_review_window(
     tabs.addTab(marker_tab, "マーカー編集")
     from .pyside_card_analysis import CardReviewPanel
 
+    def marker_verified(event_id: str) -> bool:
+        if source_session.released:
+            return False
+        try:
+            refreshed = service.get_review_view_model(recording_id)
+            matched = next((event for event in refreshed.timeline if event.event_id == event_id), None)
+            return matched is not None and matched.video_verified
+        except Exception:
+            return False
+
+    def seek_card_marker(position: int) -> None:
+        if source_session.released:
+            return
+        selected = card_panel.current
+        if selected is None:
+            return
+        if not marker_verified(f"card:{selected.event_id}"):
+            report_error("動画内容の一致を確認できないため、保存されたマーカー位置へ移動できません。")
+            return
+        player.setPosition(position)
+
     card_panel = CardReviewPanel(
-        service, recording_id, seek=player.setPosition,
+        service, recording_id, seek=seek_card_marker,
         on_changed=lambda: reload_timeline(),
         duration_seconds=model.recording.duration_seconds, parent=window,
     )
@@ -668,6 +755,7 @@ def create_review_window(
     event_source_role = Qt.ItemDataRole.UserRole + 3
     event_status_role = Qt.ItemDataRole.UserRole + 4
     event_label_role = Qt.ItemDataRole.UserRole + 5
+    event_verified_role = Qt.ItemDataRole.UserRole + 6
     last_clip_output_path: Path | None = None
 
     def refresh_duel_summary() -> None:
@@ -695,6 +783,9 @@ def create_review_window(
                 item.setData(event_source_role, event.source)
                 item.setData(event_status_role, event.status)
                 item.setData(event_label_role, event.label)
+                item.setData(event_verified_role, event.video_verified)
+                if not event.video_verified:
+                    item.setToolTip("動画内容の一致を確認できません。保存された時刻での移動・クリップ出力は利用できません。")
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, event.elapsed_ms)
                 timeline.setItem(row, column, item)
@@ -704,6 +795,8 @@ def create_review_window(
         item = timeline.item(timeline.currentRow(), 0)
         if item is None:
             return max(0, int(player.position()))
+        if not item.data(event_verified_role) or not marker_verified(str(item.data(event_id_role))):
+            raise PySideReviewError("動画内容の一致を確認できないマーカーの時刻は利用できません")
         value = item.data(Qt.ItemDataRole.UserRole)
         return int(value)
 
@@ -727,6 +820,10 @@ def create_review_window(
         confirm_button.setEnabled(is_candidate)
         reject_button.setEnabled(is_candidate)
         marker_edit_button.setEnabled(is_manual_marker)
+        item = timeline.item(timeline.currentRow(), 0)
+        verified = item is None or bool(item.data(event_verified_role))
+        confirm_button.setEnabled(is_candidate and verified)
+        clip_button.setEnabled(verified and not source_session.released)
 
     reload_timeline()
 
@@ -840,7 +937,15 @@ def create_review_window(
 
     def export_clip() -> None:
         nonlocal last_clip_output_path
-        center_seconds = selected_elapsed_ms() / 1000
+        item = timeline.item(timeline.currentRow(), 0)
+        if source_session.released or (item is not None and not item.data(event_verified_role)):
+            report_error("動画内容の一致を確認できないマーカーの位置からクリップを出力できません。")
+            return
+        try:
+            center_seconds = selected_elapsed_ms() / 1000
+        except Exception as exc:
+            report_error(review_operation_error_message("クリップ出力", exc))
+            return
         range_message = review_clip_range_message(
             center_seconds=center_seconds,
             duration_seconds=model.recording.duration_seconds,
@@ -937,6 +1042,10 @@ def create_review_window(
         item = timeline.item(row, 0)
         if item is None:
             return
+        if (source_session.released or not item.data(event_verified_role)
+                or not marker_verified(str(item.data(event_id_role)))):
+            update_timeline_action_state()
+            return
         visual_timeline.set_selected_event(str(item.data(event_id_role)))
         player.setPosition(int(item.data(Qt.ItemDataRole.UserRole)))
         if item.data(event_type_role) == "card_use":
@@ -949,6 +1058,8 @@ def create_review_window(
         update_timeline_action_state()
 
     def select_timeline_event(item: ReviewVisualTimelineItem) -> None:
+        if source_session.released or not item.video_verified or not marker_verified(item.event_id):
+            return
         for row in range(timeline.rowCount()):
             event_id_item = timeline.item(row, 0)
             if event_id_item is None:

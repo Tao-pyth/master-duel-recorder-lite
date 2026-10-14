@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 from master_duel_recorder_lite.application import RecorderApplicationService
 
 
@@ -78,17 +80,15 @@ class CatalogRedesignTest(unittest.TestCase):
             def inspect(_app):
                 app = QApplication.instance()
                 w = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
-                w.record_state_timer.stop()
                 try:
+                    wait_for_gui_startup(app, w)
                     scenario(w, service, app)
                 finally:
                     for page in w.catalog_pages.values():
                         page.baseline = None
                     w.history_editor.baseline = None
                     w.settings_baseline = None
-                    w.close()
-                    w.deleteLater()
-                    app.processEvents()
+                    close_gui_test_window(app, w)
                 return 0
             with patch.dict(os.environ, {"QT_QPA_PLATFORM": os.environ.get("MDRL_TEST_QPA", "offscreen")}), patch.object(QApplication, "exec", inspect):
                 self.assertEqual(pyside_gui.main(["--project-root", str(root), "--user-data-dir", str(root / "data")]), 0)

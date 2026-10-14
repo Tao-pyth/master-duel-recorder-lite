@@ -375,12 +375,19 @@ SETTINGS_PARITY_WIDGETS: tuple[str, ...] = (
     "app_update_download",
 )
 
+RETENTION_WIDGETS: tuple[str, ...] = (
+    "history_cards", "history_video_delete", "history_video_protection", "history_video_status",
+    "settings_recording_storage_max_gib", "settings_recording_retention_days", "settings_delete_source_after_upload",
+)
+
+
 SMOKE_WIDGETS: tuple[str, ...] = tuple(
     sorted(
         set(required_standard_widget_keys())
         | set(RICH_UI_SECTION_WIDGETS)
         | set(UI_USABILITY_WIDGETS)
         | set(SETTINGS_PARITY_WIDGETS)
+        | set(RETENTION_WIDGETS)
         | {widget for widgets in OPERATIONAL_ACTION_WIDGETS.values() for widget in widgets}
         | {
             "incomplete_duel_count",
@@ -1210,6 +1217,9 @@ def _run(args: argparse.Namespace) -> int:
                 tuple[str, concurrent.futures.Future[object], Any]
             ] = []
             self.youtube_upload_running = False
+            self.startup_maintenance_running = False
+            self.video_deletion_running = False
+            self.close_after_background = False
             self.youtube_connection_running = False
             self.youtube_connection_status_cache = None
             self.background_timer = QTimer(self)
@@ -1247,6 +1257,15 @@ def _run(args: argparse.Namespace) -> int:
             return widget
 
         def closeEvent(self, event: object) -> None:
+            if self.startup_maintenance_running or self.youtube_upload_running or self.video_deletion_running:
+                self.close_after_background = True
+                self.centralWidget().setEnabled(False)
+                message = ("起動時の動画保存チェックが完了してから終了します。"
+                           if self.startup_maintenance_running else "動画削除が完了してから終了します。"
+                           if self.video_deletion_running else "YouTube投稿と動画削除の後処理が完了してから終了します。")
+                self._set_youtube_background_status(True, message)
+                event.ignore()
+                return
             if self.youtube_connection_running:
                 self._set_youtube_background_status(
                     True,
@@ -1264,6 +1283,10 @@ def _run(args: argparse.Namespace) -> int:
                 event.ignore()
                 return
             for review in tuple(self.review_windows):
+                information_panel = getattr(review, "card_information_panel", None)
+                if information_panel is not None and not information_panel.request_leave():
+                    event.ignore()
+                    return
                 panel = getattr(review, "card_panel", None)
                 if panel is not None:
                     if not panel.request_leave():
@@ -1293,6 +1316,32 @@ def _run(args: argparse.Namespace) -> int:
             self.background_timer.stop()
             self.background_executor.shutdown(wait=False, cancel_futures=True)
             super().closeEvent(event)
+
+        def begin_startup_maintenance(self) -> None:
+            self.startup_maintenance_running = True
+            self.centralWidget().setEnabled(False)
+            self._append_activity("起動時の動画保存チェックを開始します")
+            self._submit_background_task(
+                "起動時の動画保存チェック", self.service.run_gui_startup_maintenance,
+                self._startup_maintenance_completed,
+            )
+
+        def _startup_maintenance_completed(self, result: object) -> None:
+            self.startup_maintenance_running = False
+            self.centralWidget().setEnabled(not self.close_after_background)
+            self.load_runtime_data = True
+            self._load_runtime_dashboard()
+            if not bool(getattr(result, "operation_allowed", False)):
+                self._set_saved_video_status("保存処理を要確認", str(getattr(result, "message", "")))
+            elif (retention := getattr(result, "retention", None)) is not None and not retention.capacity_met:
+                self._set_saved_video_status("保存容量を要確認", str(getattr(result, "message", "")))
+            self._append_activity(str(getattr(result, "message", "動画保存チェックが完了しました")))
+
+        def _set_saved_video_status(self, summary: str, detail: str) -> None:
+            label = self.widgets.get("nav_health_status")
+            if isinstance(label, QLabel):
+                label.setText(summary)
+                label.setToolTip(detail)
 
         def _build(self) -> None:
             root = QWidget()
@@ -2043,6 +2092,11 @@ def _run(args: argparse.Namespace) -> int:
             table.itemChanged.connect(self._history_checkbox_changed)
             table.cellDoubleClicked.connect(self._history_double_clicked)
             layout.addWidget(self._register("history_table", table), stretch=1)
+            video_status = self._register("history_video_status", QLabel())
+            video_status.setWordWrap(True)
+            video_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            video_status.hide()
+            layout.addWidget(video_status)
 
             self.history_editor = create_history_editor(self, self.service)
             layout.addWidget(self.history_editor)
@@ -2053,6 +2107,9 @@ def _run(args: argparse.Namespace) -> int:
             actions.setContentsMargins(0, 0, 0, 0)
             self.history_selection_label = QLabel()
             actions.addWidget(self.history_selection_label)
+            protection = self._register("history_video_protection", QCheckBox("自動削除から保護"))
+            protection.toggled.connect(self._set_selected_video_protection)
+            actions.addWidget(protection)
             for key, label in (("history_play", "再生"), ("history_bulk", "一括編集")):
                 button = self._button(key, label)
                 self._connect_history_button(key, button)
@@ -2061,8 +2118,10 @@ def _run(args: argparse.Namespace) -> int:
             selected_menu = QMenu(other)
             self._history_menu_button(selected_menu, "history_duel", "詳細・レビュー")
             self._history_menu_button(selected_menu, "history_youtube", "YouTube")
+            self._history_menu_button(selected_menu, "history_cards", "使用カード・初動")
             selected_menu.addSeparator()
-            self._history_menu_button(selected_menu, "history_delete", "削除…")
+            self._history_menu_button(selected_menu, "history_video_delete", "動画だけ削除…")
+            self._history_menu_button(selected_menu, "history_delete", "戦績・録画履歴ごと削除…")
             other.setMenu(selected_menu)
             actions.addWidget(other)
             actions.addStretch(1)
@@ -2689,6 +2748,17 @@ def _run(args: argparse.Namespace) -> int:
             status = self._register("settings_status", QLabel("設定を読み込みました"))
             assert isinstance(status, QLabel)
             self.settings_status_label = status
+            storage = QFormLayout()
+            storage.addRow("動画の保存最大容量（GiB、0で無制限）", self._settings_field(
+                "settings_recording_storage_max_gib", "storage.max_gib", 0,
+            ))
+            storage.addRow("動画の保存期限（日、0で無制限）", self._settings_field(
+                "settings_recording_retention_days", "storage.retention_days", 0,
+            ))
+            grid.addLayout(storage, 13, 0, 1, 3)
+            storage_note = QLabel("保存した容量・期限は次の通常起動で確認します。古い元動画から整理し、戦績・確認済みカード情報・投稿URLは残します。削除した動画はDBバックアップから戻りません。")
+            storage_note.setWordWrap(True)
+            grid.addWidget(storage_note, 14, 0, 1, 3)
             return tab
 
         def _recording_settings_secondary_tab(self) -> QWidget:
@@ -2898,6 +2968,13 @@ def _run(args: argparse.Namespace) -> int:
             note = QLabel("OAuth資格情報、refresh token、認可コードは画面・設定・DB・ログへ保存しません。")
             note.setWordWrap(True)
             layout.addWidget(note)
+            layout.addWidget(self._settings_check(
+                "settings_delete_source_after_upload", "upload.delete_source_after_upload",
+                "YouTubeアップロード後、動画の自動削除を行う", False,
+            ))
+            cleanup_note = QLabel("投稿結果・URLを保存後、保存済み設定と保護状態を確認して元動画を削除します。投稿用MP4は残ります。一時的に見送った対象は次の通常起動で再確認します。")
+            cleanup_note.setWordWrap(True)
+            layout.addWidget(cleanup_note)
             layout.addStretch(1)
             return tab
 
@@ -3262,9 +3339,15 @@ def _run(args: argparse.Namespace) -> int:
                 status_band.setToolTip(operation.message)
                 self._set_dynamic_property(status_band, "recordState", state.status_key)
 
-            self._set_button_state("record_start", state.start_enabled)
+            if self.startup_maintenance_running:
+                self._set_saved_video_status(
+                    "保存チェック中" if self.startup_maintenance_running else "保存処理を要確認",
+                    self.service.startup_maintenance_message,
+                )
+            ready = self.service.gui_startup_ready
+            self._set_button_state("record_start", state.start_enabled and ready)
             self._set_button_state("record_stop", state.stop_enabled)
-            self._set_button_state("watch_toggle", state.watch_enabled, text=state.watch_text)
+            self._set_button_state("watch_toggle", state.watch_enabled and ready, text=state.watch_text)
             if self.load_runtime_data and self.service.recording_history_revision != self.history_revision:
                 self._refresh_history()
 
@@ -3526,6 +3609,8 @@ def _run(args: argparse.Namespace) -> int:
                 "history_play": self._play_selected_history,
                 "history_duel": self._show_selected_duel_editor,
                 "history_delete": self._delete_selected_history,
+                "history_video_delete": self._delete_selected_video,
+                "history_cards": self._show_selected_duel_cards,
                 "history_duplicates": self._show_duplicate_candidates,
                 "history_refresh": self._load_runtime_dashboard,
                 "history_columns": self._show_history_columns,
@@ -3749,10 +3834,14 @@ def _run(args: argparse.Namespace) -> int:
             views = self._selected_history_views()
             single = len(views) == 1
             has_recording = single and bool(views[0].recording_id)
-            blocked = self.service.duel_write_block_reason() is not None
+            blocked = self.service.duel_write_block_reason() is not None or not self.service.gui_startup_ready or self.video_deletion_running
+            video_state = getattr(views[0], "video_state", None) if single else None
+            available = has_recording and getattr(video_state, "state", "") not in {"deleted", "missing", "unavailable"}
             states = {
-                "history_play": has_recording, "history_duel": single,
+                "history_play": available and not blocked, "history_duel": single,
                 "history_delete": single and not blocked,
+                "history_video_delete": available and not blocked and not self._youtube_operation_busy(),
+                "history_cards": single and not blocked,
                 "history_youtube": has_recording and not self._youtube_operation_busy(),
                 "history_bulk": len(views) > 1 and not blocked,
                 "history_save": single and not blocked and self.history_editor.view is not None,
@@ -3762,6 +3851,27 @@ def _run(args: argparse.Namespace) -> int:
                 self.widgets[key].setEnabled(enabled)
                 if key in self.history_menu_actions:
                     self.history_menu_actions[key].setEnabled(enabled)
+            protection = self.widgets["history_video_protection"]
+            blocker = QSignalBlocker(protection)
+            protection.setChecked(bool(getattr(video_state, "protected", False)))
+            protection.setEnabled(has_recording and not blocked)
+            protection.setVisible(has_recording)
+            del blocker
+            status = self.widgets["history_video_status"]
+            status.setVisible(has_recording)
+            if has_recording:
+                deletion = getattr(video_state, "deletion", None)
+                text = f"元動画: {getattr(video_state, 'message', '確認不可')}"
+                if deletion is not None:
+                    time_label = "復元時確認日時" if deletion.reason == "restored_deleted" else "削除日時"
+                    text += f" / {time_label}: {deletion.deleted_at.astimezone():%Y-%m-%d %H:%M:%S}"
+                    if not deletion.cause_known:
+                        text += " / 元の削除原因は不明です"
+                if getattr(video_state, "cleanup_pending", False):
+                    text += " / 投稿後の動画削除は再試行待ちです"
+                if getattr(video_state, "pending_intent", False):
+                    text += " / 未完了の削除を通常起動で回復してください"
+                status.setText(text)
             self.history_selection_bar.setVisible(bool(views))
             self.history_selection_label.setText(f"{len(views)}件選択")
             self.widgets["history_bulk"].setVisible(len(views) > 1)
@@ -3991,6 +4101,14 @@ def _run(args: argparse.Namespace) -> int:
             if not recording_id:
                 self._show_information("録画再生", "録画がある行を選択してください。")
                 return
+            self._append_activity("動画とマーカーの対応を確認しています")
+            self._submit_background_task(
+                "レビュー動画の確認",
+                lambda: self.service.verify_recording_video_sources(recording_id),
+                lambda _result: self._open_review_window(recording_id),
+            )
+
+        def _open_review_window(self, recording_id: str, *, initial_tab: str = "duel", on_unavailable: Any | None = None) -> None:
             try:
                 from .pyside_review import PySideReviewError, create_review_window
 
@@ -3998,11 +4116,15 @@ def _run(args: argparse.Namespace) -> int:
                     service=self.service,
                     recording_id=recording_id,
                     parent=self,
+                    initial_tab=initial_tab,
                     on_duel_saved=self._refresh_history,
                     on_closed=self._forget_review_window,
                 )
             except PySideReviewError as exc:
-                self._fallback_to_external_player(recording_id, reason=str(exc))
+                if on_unavailable is not None:
+                    on_unavailable()
+                else:
+                    self._fallback_to_external_player(recording_id, reason=str(exc))
                 return
             except Exception as exc:
                 self._show_warning("レビュー画面を開けません", str(exc))
@@ -4049,25 +4171,19 @@ def _run(args: argparse.Namespace) -> int:
             values = duel_record.values if duel_record is not None else data.values
             record = duel_record or data.record
             if recording_id:
-                try:
-                    from .pyside_review import PySideReviewError, create_review_window
-
-                    review_window = create_review_window(
-                        service=self.service,
-                        recording_id=recording_id,
-                        parent=self,
-                        initial_tab="duel",
-                        on_duel_saved=self._refresh_history,
-                        on_closed=self._forget_review_window,
+                state = self.service.get_recording_video_state(recording_id)
+                if state.state not in {"deleted", "missing", "unavailable"}:
+                    self._submit_background_task(
+                        "レビュー動画の確認",
+                        lambda: self.service.verify_recording_video_sources(recording_id),
+                        lambda _result: self._open_review_window(
+                            recording_id, initial_tab="duel",
+                            on_unavailable=lambda: self._open_duel_editor_dialog(
+                                record=record, recording_id=recording_id, values=values,
+                                decks=data.decks, seasons=data.seasons,
+                            ),
+                        ),
                     )
-                except PySideReviewError:
-                    pass
-                except Exception as exc:
-                    self._show_warning("レビュー画面を開けません", str(exc))
-                else:
-                    self.review_windows.append(review_window)
-                    review_window.show()
-                    self._append_activity(f"レビュー画面の戦績入力を開きました: {recording_id}")
                     return
             self._open_duel_editor_dialog(
                 record=record,
@@ -4283,16 +4399,19 @@ def _run(args: argparse.Namespace) -> int:
                 return
             if QMessageBox.question(
                 self,
-                "削除",
-                "選択した履歴または手動戦績を削除します。録画または自動監視中は実行できません。",
+                "戦績・録画履歴ごと削除",
+                "選択した戦績・録画履歴と、所属するカード情報・初動・マーカー・ローカルの投稿情報を削除します。元動画も削除対象です。YouTube上の投稿は残ります。",
             ) != QMessageBox.StandardButton.Yes:
                 self._append_activity("削除をキャンセルしました")
+                return
+            allow_protected = self._confirm_protected_deletion(selected)
+            if allow_protected is None:
                 return
             recording_id = getattr(selected, "recording_id", None)
             duel_record = getattr(selected, "duel_record", None)
             try:
                 if recording_id:
-                    result = self.service.delete_history(recording_id)
+                    result = self.service.delete_history(recording_id, allow_protected=allow_protected)
                 elif duel_record is not None:
                     result = self.service.delete_duel_record(duel_record.duel_id)
                 else:
@@ -4303,6 +4422,122 @@ def _run(args: argparse.Namespace) -> int:
                 return
             self._append_activity(f"削除しました: {result}")
             self._refresh_history()
+
+        def _set_selected_video_protection(self, protected: bool) -> None:
+            selected = self._selected_history_view()
+            if selected is None or not selected.recording_id:
+                return
+            state = getattr(selected, "video_state", None)
+            try:
+                self.service.set_recording_video_protection(
+                    selected.recording_id, protected,
+                    expected_revision=getattr(getattr(state, "protection", None), "revision", None),
+                )
+            except Exception as exc:
+                self._show_warning("動画の保護を変更できません", str(exc))
+                self._update_history_action_states()
+                return
+            self.history_views_by_row_id[selected.row_id] = replace(
+                selected, video_state=self.service.get_recording_video_state(selected.recording_id),
+            )
+            self._update_history_action_states()
+            self._refresh_history()
+
+        def _confirm_protected_deletion(self, selected: object) -> bool | None:
+            recording_id = getattr(selected, "recording_id", None)
+            if not recording_id:
+                return False
+            try:
+                protected = self.service.get_recording_video_state(recording_id).protected
+            except Exception as exc:
+                self._show_warning("保護状態を確認できません", str(exc))
+                return None
+            if not protected:
+                return False
+            if QMessageBox.warning(
+                self, "削除対象外の動画です",
+                "この動画は自動削除から保護されています。今回の手動操作で削除を続けますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            ) != QMessageBox.StandardButton.Yes:
+                return None
+            return True
+
+        def _delete_selected_video(self) -> None:
+            if not self._allow_history_leave():
+                return
+            selected = self._selected_history_view()
+            recording_id = getattr(selected, "recording_id", None)
+            if not recording_id or self.video_deletion_running:
+                return
+            if QMessageBox.question(
+                self, "動画だけ削除",
+                "元動画と、その動画上の時刻・マーカー・未確認候補を削除します。戦績・使用カード情報・初動・投稿URL・投稿用MP4は残します。動画はDBバックアップから戻りません。続けますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            allow_protected = self._confirm_protected_deletion(selected)
+            if allow_protected is None:
+                return
+            self.video_deletion_running = True
+            self._update_history_action_states()
+            try:
+                self._submit_background_task(
+                    "元動画削除", lambda: self.service.delete_recording_video(recording_id, allow_protected=allow_protected),
+                    self._video_deletion_completed,
+                )
+            except Exception as exc:
+                self.video_deletion_running = False
+                self._update_history_action_states()
+                self._show_warning("動画を削除できません", str(exc))
+
+        def _video_deletion_completed(self, result: object) -> None:
+            self.video_deletion_running = False
+            self._refresh_history()
+            self._append_activity(str(getattr(result, "message", "動画の削除結果を確認してください")))
+            if getattr(result, "status", "failed") not in {"deleted", "already_deleted"}:
+                self._show_warning("動画の削除を完了できません", str(getattr(result, "message", "確認不可")))
+
+        def _show_selected_duel_cards(self) -> None:
+            if not self._allow_history_leave():
+                return
+            selected = self._selected_history_view()
+            if selected is None:
+                return
+            record = getattr(selected, "duel_record", None)
+            try:
+                if record is None and selected.recording_id:
+                    record = self.service.save_duel_record(selected.recording_id, DuelRecordValues(), expected_revision=0)
+                if record is None:
+                    return
+                from .pyside_duel_cards import CardInformationPanel
+                class CardInformationDialog(QDialog):
+                    def reject(dialog_self) -> None:
+                        if dialog_self.card_information_panel.request_leave():
+                            super().reject()
+                    def closeEvent(dialog_self, event) -> None:
+                        if not dialog_self.card_information_panel.request_leave():
+                            event.ignore()
+                            return
+                        super().closeEvent(event)
+                dialog = CardInformationDialog(self)
+                dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+                dialog.setWindowTitle("対戦カード情報・初動")
+                dialog.resize(720, 580)
+                dialog.setMinimumSize(400, 300)
+                layout = QVBoxLayout(dialog)
+                panel = CardInformationPanel(self.service, record.duel_id, on_changed=self._refresh_history, parent=dialog)
+                dialog.card_information_panel = panel
+                layout.addWidget(panel)
+                close = QPushButton("閉じる")
+                close.clicked.connect(lambda: dialog.accept() if panel.request_leave() else None)
+                layout.addWidget(close)
+                dialog.finished.connect(lambda _result: self._forget_review_window(dialog))
+                self.review_windows.append(dialog)
+                dialog.show()
+            except Exception as exc:
+                self._show_warning("カード情報を開けません", str(exc))
 
         def _show_duplicate_candidates(self) -> None:
             try:
@@ -4389,7 +4624,7 @@ def _run(args: argparse.Namespace) -> int:
             self._refresh_youtube()
             self._set_youtube_background_status(
                 False,
-                f"YouTube投稿完了: {url or message}" if completed else f"YouTube投稿に失敗しました: {message}",
+                f"YouTube投稿完了: {url or ''}\n{message}" if completed else f"YouTube投稿に失敗しました: {message}",
             )
 
         def _submit_background_task(
@@ -4416,6 +4651,16 @@ def _run(args: argparse.Namespace) -> int:
                         )
                     elif label == "YouTube連携":
                         self._youtube_connection_failed(exc)
+                    elif label == "起動時の動画保存チェック":
+                        self.startup_maintenance_running = False
+                        self.centralWidget().setEnabled(not self.close_after_background)
+                        self._set_saved_video_status("保存処理を要確認", f"保存チェックを完了できません: {exc}")
+                    elif label == "元動画削除":
+                        self.video_deletion_running = False
+                        self._update_history_action_states()
+                        self._show_warning("動画を削除できません", str(exc))
+                    elif label == "レビュー動画の確認":
+                        self._show_warning("動画を確認できません", str(exc))
                     self._append_activity(f"{label}に失敗しました")
                     continue
                 if on_success is not None:
@@ -4425,6 +4670,10 @@ def _run(args: argparse.Namespace) -> int:
             self.background_tasks = remaining
             if not self.background_tasks:
                 self.background_timer.stop()
+                if self.close_after_background:
+                    self.close_after_background = False
+                    self.centralWidget().setEnabled(True)
+                    QTimer.singleShot(0, self.close)
 
         def _set_youtube_background_status(self, busy: bool, message: str) -> None:
             for key in ("youtube_status", "settings_youtube_status"):
@@ -5530,21 +5779,33 @@ def _run(args: argparse.Namespace) -> int:
             self._refresh_data_protection()
 
         def restore_data_backup(self, *_args: object) -> None:
+            if not self._allow_history_leave():
+                return
             path, _filter = QFileDialog.getOpenFileName(
                 self,
                 "バックアップを選択",
                 str(self.service.paths.data / "backups"),
-                "SQLite (*.sqlite3);;All files (*)",
+                "MDRL Backup (*.mdrl-backup);;All files (*)",
             )
             if not path:
                 return
             if QMessageBox.question(
                 self,
                 "バックアップを復元",
-                "管理DBと設定を選択したバックアップへ戻します。録画ファイル、queue、manifest、OAuth資格情報は変更しません。",
+                "管理DB・保存済み設定・動画の保護状態をバックアップへ戻します。未保存の設定編集も復元した値に置き換わります。削除済み動画は戻りません。復元操作では新しい動画整理を行いません。",
             ) != QMessageBox.StandardButton.Yes:
                 return
-            self._run_action("バックアップ復元", lambda: self.service.restore_data_backup(Path(path)))
+            try:
+                self.service.restore_data_backup(Path(path))
+            except Exception as exc:
+                self._show_warning("バックアップを復元できません", str(exc))
+                return
+            self.load_settings()
+            if hasattr(self, "card_target_panel"):
+                self.card_target_panel.reload()
+            self._refresh_history()
+            self._refresh_statistics()
+            self._append_activity("バックアップを復元し、設定と動画の保護表示を読み直しました")
             self._refresh_data_protection()
 
         def run_data_integrity_diagnosis(self, *_args: object) -> None:
@@ -5808,13 +6069,20 @@ def _run(args: argparse.Namespace) -> int:
     service = RecorderApplicationService(
         project_root=args.project_root,
         user_data_dir=args.user_data_dir,
+        require_gui_startup=not args.smoke_test,
     )
-    window = MainWindow(service, load_runtime_data=not args.smoke_test)
+    window = MainWindow(service, load_runtime_data=False)
     window.setStyleSheet(_style_sheet())
     window.show()
+    if not args.smoke_test:
+        window.begin_startup_maintenance()
     app.processEvents()
 
     if args.smoke_test:
+        missing = set(RETENTION_WIDGETS).difference(window.widgets)
+        if missing:
+            window.close()
+            raise PySideGuiError("保存管理の画面項目を作成できません: " + ", ".join(sorted(missing)))
         contract = smoke_contract(
             service=service,
             width=window.width(),

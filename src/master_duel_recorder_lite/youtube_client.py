@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -50,6 +51,10 @@ class YouTubeUploadResult:
     watch_url: str
     privacy_status: str
     warning: str | None = None
+    # 実際に送信したbytesの証拠です。独自clientが返さない場合は自動削除しません。
+    media_path: Path | None = None
+    media_size_bytes: int | None = None
+    media_sha256: str | None = None
 
 
 class YouTubeClient:
@@ -198,9 +203,11 @@ class HttpYouTubeClient(YouTubeClient):
         media_path: Path,
         requested_privacy: str,
     ) -> YouTubeUploadResult:
-        size = media_path.stat().st_size
+        sent_path = media_path.resolve()
         with media_path.open("rb") as handle:
             data = handle.read()
+        size = len(data)
+        sent_sha256 = hashlib.sha256(data).hexdigest()
         request = urllib.request.Request(
             upload_url,
             data=data,
@@ -239,6 +246,9 @@ class HttpYouTubeClient(YouTubeClient):
             watch_url=f"https://youtu.be/{video_id}",
             privacy_status=actual_privacy if isinstance(actual_privacy, str) else requested_privacy,
             warning=warning,
+            media_path=sent_path,
+            media_size_bytes=size,
+            media_sha256=sent_sha256,
         )
 
 

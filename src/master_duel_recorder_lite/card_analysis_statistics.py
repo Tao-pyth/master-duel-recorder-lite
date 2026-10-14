@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 
-from .card_analysis_repository import CardAnalysisRepository
+from .duel_card_repository import DuelCardRepository
 from .duel_statistics import (
     DuelStatisticsRepository, StatisticsFilter, StatisticsMetric, StatisticsRow,
 )
@@ -75,8 +75,12 @@ class CardAnalysisStatisticsRepository:
             raise ValueError("使用者は自分または相手を指定してください")
         if not isinstance(include_candidates, bool):
             raise ValueError("候補参考モードは真偽値で指定してください")
-        targets = {item.target_id: item for item in CardAnalysisRepository(self.database_path).list_targets()}
-        if target_id not in targets or (opener_target_id is not None and opener_target_id not in targets):
+        targets = {item.card_id: item for item in DuelCardRepository(self.database_path).list_identities()}
+        with closing(connect_history_database(self.database_path)) as connection:
+            identities = {row["target_id"]: row["card_id"] for row in connection.execute("SELECT * FROM card_target_identity_links")}
+        selected_card = identities.get(target_id, target_id)
+        selected_opener = identities.get(opener_target_id, opener_target_id)
+        if selected_card not in targets or (selected_opener is not None and selected_opener not in targets):
             raise ValueError("対象カードがありません")
         base_rows = DuelStatisticsRepository(self.database_path).rows(filters)
         confirmed: set[str] = set()
@@ -85,38 +89,44 @@ class CardAnalysisStatisticsRepository:
         openers: dict[str, str] = {}
         with closing(connect_history_database(self.database_path)) as connection:
             for row in connection.execute(
-                "SELECT recording_id,action,status,evidence_json FROM card_observations "
-                "WHERE target_id=? AND actor=? AND status IN ('confirmed','candidate')", (target_id, actor),
+                "SELECT duel_id,state FROM duel_card_information WHERE card_id=? AND actor=?",
+                (selected_card, actor),
             ):
-                if row["action"] == "unknown" or json.loads(row["evidence_json"]).get("supports_use") is not True:
-                    continue
-                (confirmed if row["status"] == "confirmed" else candidates).add(row["recording_id"])
-            nonuses = {row[0] for row in connection.execute(
-                "SELECT recording_id FROM card_nonuse_confirmations WHERE target_id=? AND actor=? AND confirmed=1",
-                (target_id, actor),
-            )}
+                if row["state"] == "used":
+                    confirmed.add(row["duel_id"])
+                elif row["state"] == "not_used":
+                    nonuses.add(row["duel_id"])
             for row in connection.execute(
-                "SELECT opener.recording_id, observation.target_id,observation.action,observation.evidence_json "
-                "FROM card_opener_confirmations AS opener "
-                "JOIN card_observations AS observation ON observation.event_id=opener.event_id "
-                "WHERE opener.actor=? AND opener.status='confirmed' AND observation.status='confirmed'",
+                "SELECT duel_id,card_id FROM duel_card_openers WHERE actor=? AND status='confirmed'",
                 (actor,),
             ):
-                if row["target_id"] is not None and row["action"] != "unknown" and json.loads(row["evidence_json"]).get("supports_use") is True:
-                    openers[row["recording_id"]] = row["target_id"]
-        rows = tuple(row for row in base_rows if opener_target_id is None or openers.get(row.recording_id) == opener_target_id)
+                openers[row["duel_id"]] = row["card_id"]
+            for row in connection.execute(
+                "SELECT duel.duel_id,observation.action,observation.evidence_json FROM card_observations AS observation "
+                "JOIN duel_records AS duel ON duel.recording_id=observation.recording_id "
+                "JOIN card_target_identity_links AS identity ON identity.target_id=observation.target_id "
+                "JOIN card_observation_links AS source ON source.event_id=observation.event_id "
+                "JOIN recording_video_assets AS asset ON asset.asset_id=source.video_asset_id "
+                "WHERE identity.card_id=? AND observation.actor=? AND observation.status='candidate' "
+                "AND source.verified=1 AND asset.is_current=1 AND asset.state='present' "
+                "AND source.video_generation=asset.generation AND source.time_basis=asset.time_basis",
+                (selected_card, actor),
+            ):
+                if row["action"] != "unknown" and json.loads(row["evidence_json"]).get("supports_use") is True:
+                    candidates.add(row["duel_id"])
+        rows = tuple(row for row in base_rows if selected_opener is None or openers.get(row.duel_id) == selected_opener)
         groups: dict[str, list[StatisticsRow]] = defaultdict(list)
         for row in rows:
-            if row.recording_id in openers:
-                groups[openers[row.recording_id]].append(row)
+            if row.duel_id in openers:
+                groups[openers[row.duel_id]].append(row)
         confirmed_rows, candidate_rows, unused_rows, unknown_rows = [], [], [], []
         for row in rows:
-            recording = row.recording_id
-            if recording in confirmed:
+            duel = row.duel_id
+            if duel in confirmed:
                 confirmed_rows.append(row)
-            elif recording in nonuses:
+            elif duel in nonuses:
                 unused_rows.append(row)
-            elif recording in candidates:
+            elif duel in candidates:
                 candidate_rows.append(row)
                 if not include_candidates:
                     unknown_rows.append(row)
@@ -128,7 +138,7 @@ class CardAnalysisStatisticsRepository:
             _metric(unused_rows), _metric(unknown_rows), _metric(confirmed_rows), _metric(candidate_rows),
             tuple(CardOpenerStatistics(key, targets[key].name, _metric(value))
                   for key, value in sorted(groups.items(), key=lambda item: targets[item[0]].name)),
-            sum(row.recording_id not in openers for row in base_rows), _metric(base_rows),
+            sum(row.duel_id not in openers for row in base_rows), _metric(base_rows),
         )
 
 

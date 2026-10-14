@@ -44,7 +44,7 @@ class DuelTimelineRepositoryTest(unittest.TestCase):
                 (),
             ),
         )
-        self.repository = DuelTimelineRepository(self.database)
+        self.repository = DuelTimelineRepository(self.database, recordings_root=recordings)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()

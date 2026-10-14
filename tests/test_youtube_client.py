@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import hashlib
+import json
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
@@ -19,6 +21,30 @@ from master_duel_recorder_lite.youtube_oauth import YouTubeCredentials
 
 
 class YouTubeClientTest(unittest.TestCase):
+    def test_http_result_proves_the_sent_bytes_even_if_path_changes_after_send(self) -> None:
+        client = HttpYouTubeClient()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            media = Path(tmp_dir) / "video.mp4"
+            original = b"original-mp4-data"
+            media.write_bytes(original)
+
+            def receive(request, *, timeout):
+                self.assertEqual(timeout, 300)
+                self.assertEqual(request.data, original)
+                self.assertEqual(request.get_header("Content-length"), str(len(original)))
+                media.write_bytes(b"replacement")
+                return BytesIO(json.dumps({"id": "uploaded-video", "status": {"privacyStatus": "private"}}).encode())
+
+            with patch("urllib.request.urlopen", side_effect=receive):
+                result = client._send_media(
+                    access_token="fake-access", upload_url="https://example.test/upload",
+                    media_path=media, requested_privacy="private",
+                )
+            self.assertEqual(result.media_path, media.resolve())
+            self.assertEqual(result.media_size_bytes, len(original))
+            self.assertEqual(result.media_sha256, hashlib.sha256(original).hexdigest())
+            self.assertNotEqual(result.media_sha256, hashlib.sha256(media.read_bytes()).hexdigest())
+
     def test_fake_client_returns_watch_url(self) -> None:
         client = FakeYouTubeClient()
         with tempfile.TemporaryDirectory() as tmp_dir:

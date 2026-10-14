@@ -2,6 +2,18 @@
 
 このロードマップは、中核機能1つを原則として1マイナーバージョンへ対応させます。各作業は実装前にGitHub Issueへ登録し、該当するバージョンラベルとMilestoneへ接続します。
 
+## V3.1.0: 元動画の保存管理と対戦カード情報の分離
+
+状態の正本: [GitHub Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v3.1.0)、[親Issue #672](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/672)と対応するAct記録。ローカル・配布検証の記録は[検証文書](validation/3.1.0.md)を参照する。
+
+- 容量・期限は初期0（無制限）、投稿後削除は初期OFF。通常GUI起動で未完了削除回復、期限、容量、明示された投稿後再試行を順に行う。
+- 元動画だけの削除と戦績・録画履歴ごとの削除を分け、保護・利用状態・削除理由・バックアップ保持を共通サービスで管理する。
+- 使用・明示非使用・不明・初動を対戦へ所属させ、動画マーカーの削除・再解析から独立して保存・編集・集計する。
+- schema17/18から19へ保護バックアップ付きで移行し、JSON、関連削除、復元同期、終了待機を同じ責務境界へ揃える。
+- [操作](releases/3.1.0.md)、[保存管理](architecture/recording-retention.md)、[Release Contract](release-contracts/3.1.0.md)。追跡: [親Issue #672](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/672)、子#673〜#679・#686〜#689、[Milestone V3.1.0](https://github.com/Tao-pyth/master-duel-recorder-lite/milestone/105)。
+
+完了条件: 全AC・回帰・実Windows GUI・3EXE/7assets・正式公開と再取得検証の証拠を確認してから、対象Issue/Milestoneを完了にする。動画本体のバックアップ、常時整理、投稿用MP4の自動削除、全カード認識の改善は今回の範囲に含めない。
+
 ## V3.0.0: 使用カード分析の初期実装
 
 状態: 実装・ローカル検証完了。公開とclosureの正本は[Release](https://github.com/Tao-pyth/master-duel-recorder-lite/releases/tag/v3.0.0)、[親Issue #665](https://github.com/Tao-pyth/master-duel-recorder-lite/issues/665)、子Issue #666〜#671、Milestone V3.0.0。

@@ -434,7 +434,9 @@ class RecorderApplicationServiceTest(unittest.TestCase):
             self.assertEqual(connected.state, "connected")
 
     def test_manual_duel_write_is_rejected_during_watch(self) -> None:
-        service = RecorderApplicationService()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        service = RecorderApplicationService(user_data_dir=Path(temporary.name))
         service._watch_thread = SimpleNamespace(is_alive=lambda: True)
 
         self.assertEqual(
@@ -445,6 +447,8 @@ class RecorderApplicationServiceTest(unittest.TestCase):
                 DuelRecordValues(status="confirmed"),
                 occurred_at=datetime.now(timezone.utc),
             )
+        service._watch_thread = None
+        service.close()
 
     def test_active_seasons_prioritize_rank_then_nearest_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -657,11 +661,14 @@ class RecorderApplicationServiceTest(unittest.TestCase):
         self.assertEqual(dialog_data.title, "Master Duel")
 
     def test_history_delete_is_rejected_while_manual_start_is_reserved(self) -> None:
-        service = RecorderApplicationService()
-        service._manual_starting = True
-
-        with self.assertRaisesRegex(ApplicationOperationError, "実行中"):
-            service.delete_history("recording")
+        with tempfile.TemporaryDirectory() as temporary:
+            service = RecorderApplicationService(user_data_dir=Path(temporary))
+            service._manual_starting = True
+            with self.assertRaisesRegex(ApplicationOperationError, "実行中"):
+                service.delete_history("recording")
+            self.assertFalse((service.paths.db / "history.sqlite3").exists())
+            service._manual_starting = False
+            service.close()
 
     def test_manual_start_reservation_is_released_after_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

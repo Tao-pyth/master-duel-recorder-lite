@@ -357,7 +357,7 @@ class RecordingHistoryRepositoryTest(unittest.TestCase):
                 DuelRecordValues(own_deck="青眼", tags=("大会",)),
                 expected_revision=0,
             )
-            DuelTimelineRepository(repository.database_path).add(
+            DuelTimelineRepository(repository.database_path, recordings_root=repository.recordings_root).add(
                 "delete-me",
                 elapsed_ms=1000,
                 event_type="marker",

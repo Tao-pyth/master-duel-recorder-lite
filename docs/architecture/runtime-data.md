@@ -11,12 +11,16 @@ user_data/
     app.toml.previous
   data/
     recording.lock
+    video-operations.lock
+    data-protection.lock
     recording-state.json
     recording-state.json.previous
     db/
       history.sqlite3
       history.vN.*.backup.sqlite3
     recordings/
+      .mdrl-video-staging/
+    backups/
     preroll/
     screenshots/
     exports/
@@ -43,7 +47,7 @@ V0.16.0以前のEXE隣接`user_data/`は自動移行しません。録画、DB�
 
 `recording.lock` は同時録画を防ぐ排他制御と診断情報に使います。内容が残っていても削除して解決せず、OSロックを取得できるかで実行中かを判定します。
 
-`history.sqlite3` は録画履歴DBです。旧スキーマを移行する前には同じフォルダへ版番号付きバックアップを作り、移行失敗時は元DBのトランザクションをロールバックします。バックアップは自動削除しません。
+`history.sqlite3` は録画履歴・戦績・カード情報・動画管理を保持するDBで、V3.1.0の現在版はschema19です。通常入口の旧17/18からの移行は、DB・設定の検証済み保護バックアップを`data/backups/`へ作ってから単一transactionで実行します。単独DBの低水準移行は同じフォルダの版番号付きSQLiteバックアップを使います。失敗時は元DBを保持し、移行前保護バックアップを自動削除しません。[保存構造](retention-schema-3.1.0.md)を参照してください。
 
 `recording-state.json` は直前の録画状態をチェックサム付きで保持します。書込みは同じフォルダの一時ファイルを同期してから原子的に置換し、直前の有効状態を `.previous` に1世代保持します。不完全な一時ファイルやチェックサム不一致は有効状態として読みません。
 
@@ -54,3 +58,13 @@ V2.6.0のプリロール一時segmentは `user_data/data/preroll/` 配下に保�
 V0.19.0のv7移行では、旧`recovery_artifacts`が参照する成果物だけを録画保存先内で検証して退避し、DB移行成功後に削除します。通常録画と同じパスは削除せず、移行失敗時は退避ファイルとDBを復元します。移行バックアップは自動削除しません。
 
 アップロード準備済みMP4は `exports/{recording_id}/{queue_id}.mp4`、マニフェストは `queue/manifests/{queue_id}.json` に保存します。準備キューはチェックサム付きJSONを原子的に更新し、1世代前を `.previous` に保持します。remux失敗・キャンセル時の部分出力も相対パスをキューへ残し、自動削除しません。
+
+## V3.1.0の元動画整理
+
+容量・期限は初期0（無制限）、投稿後削除は初期falseです。通常GUI起動で移行・未完了削除回復・期限・容量・保存された投稿後再試行を順に行います。生成・参照・診断・設定保存・復元だけで新しい整理を開始しません。
+
+対象は登録済み元動画だけです。容量はrecordings領域の実サイズを数え、保護・未登録・退避ファイルも含めます。exports、clip、preroll、未登録動画は自動削除しません。削除の退避先は同じrecordings領域の`.mdrl-video-staging/`とし、未完了journal・確定理由・再試行要求はDBへ保存します。退避ファイルの存在を容量解放とみなしません。
+
+`video-operations.lock`、`recording.lock`と動画利用leaseで、録画・解析・レビュー・管理データ置換と削除を隔離します。`data-protection.lock`は削除処理中の事前バックアップを世代整理から守ります。利用中・確認不能・事前バックアップ保持不能では元動画を保持します。
+
+元動画の削除成功時だけ動画上のマーカー・未確認候補を除去します。戦績・タグ・メモ・使用/明示非使用/不明・初動・完了投稿URLは残します。動画本体はバックアップに含まれません。JSON取込や復元で戻った動画根拠は内容・世代・時刻基準を確認するまで利用しません。[保存管理](recording-retention.md)、[管理JSON](managed-data.md)、[復元](retention-management-3.1.0.md)を参照してください。

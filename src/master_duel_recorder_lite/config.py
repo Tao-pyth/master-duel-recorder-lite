@@ -18,6 +18,11 @@ ALLOWED_AUDIO_MODES = {"process", "system", "device", "none"}
 ALLOWED_CAPTURE_MODES = {"master_duel", "window", "monitor", "desktop"}
 ALLOWED_VISUAL_DETECTION_LANGUAGES = {"auto", "ja", "en"}
 ALLOWED_AUTO_WATCH_DESIRED_PLAY_ORDERS = {"unknown", "first", "second"}
+GIB_BYTES = 1_073_741_824
+SECONDS_PER_DAY = 86_400
+# 換算後もSQLite等で扱える符号付き64bit整数の範囲に収めます。
+MAX_RECORDING_STORAGE_GIB = (2**63 - 1) // GIB_BYTES
+MAX_RECORDING_RETENTION_DAYS = (2**63 - 1) // SECONDS_PER_DAY
 
 
 class AppConfigError(RuntimeError):
@@ -67,6 +72,9 @@ class AppConfig:
     preroll_max_megabytes: int = 512
     windows_notifications_enabled: bool = True
     upload_privacy_status: str = "private"
+    upload_delete_source_after_upload: bool = False
+    recording_storage_max_gib: int = 0
+    recording_retention_days: int = 0
     readiness_check_seconds: int = 30
     setup_wizard_completed: bool = False
     hotkeys_enabled: bool = False
@@ -81,6 +89,18 @@ class AppConfig:
     auto_create_user_data: bool = True
     card_analysis_enabled: bool = False
     card_analysis_fps: float = 2.0
+
+    @property
+    def recording_storage_max_bytes(self) -> int:
+        """容量設定をbytesへ換算します。0は無制限です。"""
+        _retention_values(self)
+        return self.recording_storage_max_gib * GIB_BYTES
+
+    @property
+    def recording_retention_seconds(self) -> int:
+        """保存期限を固定長の日数で換算します。0は無制限です。"""
+        _retention_values(self)
+        return self.recording_retention_days * SECONDS_PER_DAY
 
 
 @dataclass(frozen=True)
@@ -114,6 +134,7 @@ def load_app_config(
         recorder_table = _table(raw, "recorder")
         detection_table = _table(raw, "detection")
         upload_table = _table(raw, "upload")
+        storage_table = _table(raw, "storage")
         interaction_table = _table(raw, "interaction")
         runtime_table = _table(raw, "runtime")
         card_analysis_table = _table(raw, "card_analysis")
@@ -248,6 +269,17 @@ def load_app_config(
             upload_privacy_status=_privacy_status(
                 _string_value(upload_table, "privacy_status", AppConfig.upload_privacy_status)
             ),
+            upload_delete_source_after_upload=_bool_value(
+                upload_table,
+                "delete_source_after_upload",
+                AppConfig.upload_delete_source_after_upload,
+            ),
+            recording_storage_max_gib=_int_value(
+                storage_table, "max_gib", AppConfig.recording_storage_max_gib
+            ),
+            recording_retention_days=_int_value(
+                storage_table, "retention_days", AppConfig.recording_retention_days
+            ),
             readiness_check_seconds=_int_value(
                 interaction_table,
                 "readiness_check_seconds",
@@ -322,6 +354,7 @@ def load_app_config(
         _recording_number_values(config)
         _detection_values(config)
         _card_analysis_values(config)
+        _retention_values(config)
     except (OSError, tomllib.TOMLDecodeError, TypeError, ValueError) as exc:
         raise AppConfigError(f"設定ファイルを読み込めません: {config_path}: {exc}") from exc
 
@@ -348,6 +381,7 @@ def validate_app_config(config: AppConfig) -> None:
     _recording_number_values(config)
     _detection_values(config)
     _card_analysis_values(config)
+    _retention_values(config)
     _privacy_status(config.upload_privacy_status)
     if config.readiness_check_seconds < 5 or config.readiness_check_seconds > 120:
         raise ValueError("readiness_check_seconds は5から120の整数である必要があります")
@@ -438,6 +472,11 @@ def _serialize_app_config(config: AppConfig) -> bytes:
                 "",
                 "[upload]",
                 f"privacy_status = {_toml_string(config.upload_privacy_status)}",
+                f"delete_source_after_upload = {_toml_bool(config.upload_delete_source_after_upload)}",
+                "",
+                "[storage]",
+                f"max_gib = {config.recording_storage_max_gib}",
+                f"retention_days = {config.recording_retention_days}",
                 "",
                 "[interaction]",
                 f"readiness_check_seconds = {config.readiness_check_seconds}",
@@ -700,6 +739,22 @@ def _card_analysis_values(config: AppConfig) -> None:
     fps = config.card_analysis_fps
     if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not 0.25 <= fps <= 2.0:
         raise ValueError("card_analysis.fps は0.25から2.0の有限な数値で指定してください")
+
+
+def _retention_values(config: AppConfig) -> None:
+    limits = {
+        "storage.max_gib": (config.recording_storage_max_gib, MAX_RECORDING_STORAGE_GIB),
+        "storage.retention_days": (
+            config.recording_retention_days, MAX_RECORDING_RETENTION_DAYS
+        ),
+    }
+    for key, (value, maximum) in limits.items():
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{key} は整数である必要があります")
+        if not 0 <= value <= maximum:
+            raise ValueError(f"{key} は0から{maximum}の整数で指定してください（0は無制限）")
+    if not isinstance(config.upload_delete_source_after_upload, bool):
+        raise ValueError("upload.delete_source_after_upload はtrueまたはfalseで指定してください")
 
 
 def _visual_detection_language(value: str) -> str:

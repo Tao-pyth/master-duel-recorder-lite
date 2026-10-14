@@ -1,75 +1,33 @@
 from __future__ import annotations
 
-from contextlib import closing
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import sqlite3
 import uuid
 
-from .data_protection import DataProtectionError, DataProtectionService
+from .data_ownership import (
+    DataOwnershipError, clear_history_owned, clear_portable_base, scoped_data_protection, scoped_runtime_paths,
+)
+from .data_protection import BackupInfo, DataProtectionError, DataProtectionService
 from .history_database import HISTORY_DATABASE_NAME, connect_history_database
+from .portable_data import (
+    PORTABLE_SCHEMA, PORTABLE_TABLES, PortableDataError, get_portable_export,
+    remap_portable_card_ids, validate_portable_document,
+)
 from .runtime_paths import RuntimePaths
 
 
-EXPORT_SCHEMA = "mdrl-managed-data-v1"
-MANAGED_TABLES = (
-    "recordings",
-    "duel_catalog_entries",
-    "seasons",
-    "duel_records",
-    "duel_record_tags",
-    "duel_record_changes",
-    "duel_events",
-    "duel_record_tag_links",
-    "duel_editor_preferences",
-    "saved_duel_filters",
-)
-DELETE_ORDER = (
-    "saved_duel_filters",
-    "duel_record_tag_links",
-    "duel_record_tags",
-    "duel_record_changes",
-    "duel_events",
-    "duel_records",
-    "seasons",
-    "duel_catalog_entries",
-    "duel_editor_preferences",
-    "recordings",
-)
+EXPORT_SCHEMA = PORTABLE_SCHEMA
+MANAGED_TABLES = PORTABLE_TABLES
+DELETE_ORDER = tuple(reversed(PORTABLE_TABLES))
 RESET_SCOPES = {"history", "decks", "tags", "seasons", "all"}
-LEGACY_DEFAULTS = {
-    "duel_records": {
-        "coin_face": "unknown",
-    },
-    "seasons": {
-        "report_goal": "",
-        "report_highlights": "",
-        "report_challenges": "",
-        "report_next_plan": "",
-        "report_revision": 0,
-    },
-}
 
 
 class ManagedDataError(RuntimeError):
     """管理データを安全に入出力または初期化できない場合のエラーです。"""
-
-
-def _without_legacy_coin_outcome(raw: object) -> str:
-    try:
-        document = json.loads(str(raw))
-    except json.JSONDecodeError as exc:
-        raise ManagedDataError("管理データ内のJSON列が不正です") from exc
-    if isinstance(document, dict):
-        document.pop("coin_toss_outcome", None)
-    return json.dumps(
-        document,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
 
 
 @dataclass(frozen=True)
@@ -78,18 +36,19 @@ class ManagedDataResult:
     path: Path | None
     backup_path: Path | None
     row_count: int
+    id_maps: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 class ManagedDataService:
     def __init__(
-        self,
-        database_path: Path,
-        exports_path: Path,
-        protection: DataProtectionService | None = None,
+        self, database_path: Path, exports_path: Path, protection: DataProtectionService | None = None,
     ) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.exports_path = exports_path.expanduser().resolve()
-        self.protection = protection
+        self.paths = protection.paths if protection is not None else scoped_runtime_paths(
+            self.database_path, exports_path=self.exports_path,
+        )
+        self.protection = protection or scoped_data_protection(self.paths, self.database_path)
         connect_history_database(self.database_path).close()
 
     @classmethod
@@ -97,242 +56,120 @@ class ManagedDataService:
         from .data_protection import initialize_protected_history_database
 
         initialize_protected_history_database(paths)
-        return cls(
-            paths.db / HISTORY_DATABASE_NAME,
-            paths.exports,
-            DataProtectionService(paths),
-        )
+        return cls(paths.db / HISTORY_DATABASE_NAME, paths.exports, DataProtectionService(paths))
 
     def export_to(self, path: Path) -> ManagedDataResult:
         destination = path.expanduser().resolve()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with closing(connect_history_database(self.database_path)) as connection:
-            tables = {
-                table: [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
-                for table in MANAGED_TABLES
-            }
-        payload = {
-            "schema": EXPORT_SCHEMA,
-            "exported_at": datetime.now(timezone.utc).isoformat(),
-            "tables": tables,
-        }
         temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
         try:
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            payload = get_portable_export(self.database_path, self.paths.recordings)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(destination)
-        except OSError as exc:
+        except (OSError, PortableDataError) as exc:
             temporary.unlink(missing_ok=True)
             raise ManagedDataError(f"管理データを書き出せません: {destination}: {exc}") from exc
-        return ManagedDataResult(
-            action="export",
-            path=destination,
-            backup_path=None,
-            row_count=sum(len(rows) for rows in tables.values()),
-        )
+        return ManagedDataResult("export", destination, None,
+                                 sum(len(rows) for rows in payload["tables"].values()))
 
     def import_from(self, path: Path) -> ManagedDataResult:
         source = path.expanduser().resolve()
         try:
             payload = json.loads(source.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            incoming = validate_portable_document(payload)
+        except (OSError, UnicodeError, json.JSONDecodeError, PortableDataError) as exc:
             raise ManagedDataError(f"管理データを読み込めません: {source}: {exc}") from exc
-        tables = self._validated_tables(payload)
-        backup = self._backup("import")
-        try:
-            with closing(connect_history_database(self.database_path)) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                for table in DELETE_ORDER:
-                    connection.execute(f"DELETE FROM {table}")
-                for table in MANAGED_TABLES:
-                    self._insert_rows(connection, table, tables[table])
-                check = connection.execute("PRAGMA foreign_key_check").fetchall()
-                if check:
-                    raise ManagedDataError("インポートデータの参照関係が不正です")
-                connection.commit()
-        except (sqlite3.Error, ManagedDataError) as exc:
-            self._restore_backup(backup)
-            if isinstance(exc, ManagedDataError):
-                raise
-            raise ManagedDataError(f"管理データを取り込めません: {exc}") from exc
-        return ManagedDataResult(
-            action="import",
-            path=source,
-            backup_path=backup,
-            row_count=sum(len(rows) for rows in tables.values()),
-        )
+
+        with self._mutation("import") as backup:
+            try:
+                with closing(connect_history_database(self.database_path)) as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    with connection:
+                        existing_cards = [dict(row) for row in connection.execute("SELECT * FROM card_identities")]
+                        existing_targets = [dict(row) for row in connection.execute("SELECT * FROM card_targets")]
+                        plan = remap_portable_card_ids(incoming, existing_cards, existing_targets)
+                        _validate_shared_target_links(connection, plan.tables)
+                        clear_portable_base(connection)
+                        _insert_managed_plan(connection, plan.tables, self._insert_rows)
+                        if connection.execute("PRAGMA foreign_key_check").fetchall():
+                            raise ManagedDataError("インポートデータの参照関係が不正です")
+                        if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                            raise ManagedDataError("インポート後のDB整合性検査に失敗しました")
+            except (sqlite3.Error, PortableDataError, DataOwnershipError) as exc:
+                raise ManagedDataError(f"管理データを取り込めません。DBは変更前へ戻しました: {exc}") from exc
+        return ManagedDataResult("import", source, backup.path, plan.row_count, plan.id_maps)
 
     def reset(self, scope: str) -> ManagedDataResult:
         if scope not in RESET_SCOPES:
             raise ManagedDataError(f"未対応の初期化対象です: {scope}")
-        backup = self._backup(f"reset-{scope}")
+        with self._mutation(f"reset-{scope}") as backup:
+            try:
+                with closing(connect_history_database(self.database_path)) as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    with connection:
+                        if scope in {"history", "all"}:
+                            clear_history_owned(connection)
+                        if scope in {"decks", "all"}:
+                            connection.execute("DELETE FROM deck_tag_links")
+                            connection.execute("UPDATE duel_records SET own_deck_id=NULL,opponent_deck_id=NULL,own_deck='',opponent_deck=''")
+                            connection.execute("UPDATE duel_editor_preferences SET own_deck='',opponent_deck=''")
+                            connection.execute("DELETE FROM duel_catalog_entries WHERE kind='deck'")
+                        if scope in {"tags", "all"}:
+                            connection.execute("DELETE FROM deck_tag_links")
+                            connection.execute("DELETE FROM duel_record_tag_links")
+                            connection.execute("DELETE FROM duel_record_tags")
+                            connection.execute("UPDATE duel_editor_preferences SET tags_json='[]'")
+                            connection.execute("DELETE FROM duel_catalog_entries WHERE kind='tag'")
+                        if scope in {"seasons", "all"}:
+                            connection.execute("UPDATE duel_records SET season_id=NULL")
+                            connection.execute("DELETE FROM seasons")
+                        if scope == "all":
+                            connection.execute("DELETE FROM saved_duel_filters")
+                        if connection.execute("PRAGMA foreign_key_check").fetchall():
+                            raise ManagedDataError("初期化後のDB参照関係が不正です")
+            except (sqlite3.Error, DataOwnershipError) as exc:
+                raise ManagedDataError(f"管理データを初期化できません。DBは変更前へ戻しました: {exc}") from exc
+        return ManagedDataResult("reset", None, backup.path, 0)
+
+    @contextmanager
+    def _mutation(self, reason: str) -> Iterator[BackupInfo]:
+        from .video_management import VideoManagementError, video_management_gate
+
         try:
-            with closing(connect_history_database(self.database_path)) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                if scope in {"history", "all"}:
-                    for table in (
-                        "duel_record_tag_links",
-                        "duel_record_tags",
-                        "duel_record_changes",
-                        "duel_events",
-                        "duel_records",
-                        "recordings",
-                    ):
-                        connection.execute(f"DELETE FROM {table}")
-                if scope in {"decks", "all"}:
-                    if scope != "all":
-                        connection.execute(
-                            "UPDATE duel_records SET own_deck_id = NULL, opponent_deck_id = NULL, "
-                            "own_deck = '', opponent_deck = ''"
-                        )
-                    connection.execute(
-                        "UPDATE duel_editor_preferences SET own_deck = '', opponent_deck = ''"
-                    )
-                    connection.execute("DELETE FROM duel_catalog_entries WHERE kind = 'deck'")
-                if scope in {"tags", "all"}:
-                    if scope != "all":
-                        connection.execute("DELETE FROM duel_record_tag_links")
-                        connection.execute("DELETE FROM duel_record_tags")
-                    connection.execute("UPDATE duel_editor_preferences SET tags_json = '[]'")
-                    connection.execute("DELETE FROM duel_catalog_entries WHERE kind = 'tag'")
-                if scope in {"seasons", "all"}:
-                    if scope != "all":
-                        connection.execute("UPDATE duel_records SET season_id = NULL")
-                    connection.execute("DELETE FROM seasons")
-                connection.commit()
-        except sqlite3.Error as exc:
-            self._restore_backup(backup)
-            raise ManagedDataError(f"管理データを初期化できません: {exc}") from exc
-        return ManagedDataResult("reset", None, backup, 0)
+            with video_management_gate(self.paths, database_path=self.database_path):
+                with self.protection.retained_backup(reason) as backup:
+                    yield backup
+        except (VideoManagementError, DataProtectionError, DataOwnershipError) as exc:
+            raise ManagedDataError(f"管理操作を開始できません: {exc}") from exc
 
     def _validated_tables(self, payload: object) -> dict[str, list[dict[str, object]]]:
-        if not isinstance(payload, dict) or payload.get("schema") != EXPORT_SCHEMA:
-            raise ManagedDataError("このアプリで作成した管理データJSONではありません")
-        raw_tables = payload.get("tables")
-        if not isinstance(raw_tables, dict):
-            raise ManagedDataError("管理データJSONのテーブル構成が不正です")
-        missing = set(MANAGED_TABLES) - set(raw_tables)
-        if missing == {"saved_duel_filters"}:
-            raw_tables["saved_duel_filters"] = []
-        if set(raw_tables) != set(MANAGED_TABLES):
-            raise ManagedDataError("管理データJSONのテーブル構成が不正です")
-        with closing(connect_history_database(self.database_path)) as connection:
-            columns = {
-                table: {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
-                for table in MANAGED_TABLES
-            }
-        validated: dict[str, list[dict[str, object]]] = {}
-        recording_dates = {
-            str(row.get("recording_id")): row.get("started_at") or row.get("created_at")
-            for row in raw_tables["recordings"]
-            if isinstance(row, dict) and row.get("recording_id")
-        }
-        for table in MANAGED_TABLES:
-            rows = raw_tables[table]
-            if not isinstance(rows, list):
-                raise ManagedDataError(f"{table}のデータ形式が不正です")
-            normalized: list[dict[str, object]] = []
-            for row in rows:
-                if not isinstance(row, dict):
-                    raise ManagedDataError(f"{table}の列構成が現在のDBと一致しません")
-                if any(not isinstance(key, str) for key in row):
-                    raise ManagedDataError(f"{table}の列名が不正です")
-                item = dict(row)
-                if table == "duel_records":
-                    item.pop("coin_toss_outcome", None)
-                if table == "duel_record_changes":
-                    for column in ("before_json", "after_json"):
-                        item[column] = _without_legacy_coin_outcome(item[column])
-                if table == "saved_duel_filters":
-                    item["criteria_json"] = _without_legacy_coin_outcome(
-                        item["criteria_json"]
-                    )
-                if table == "duel_records" and "duel_id" not in item:
-                    recording_id = str(item.get("recording_id") or "")
-                    item["duel_id"] = recording_id
-                    item["entry_origin"] = "recording"
-                    item["occurred_at"] = recording_dates.get(recording_id)
-                if (
-                    table
-                    in {
-                        "duel_record_tags",
-                        "duel_record_changes",
-                        "duel_record_tag_links",
-                    }
-                    and "duel_id" not in item
-                    and "recording_id" in item
-                ):
-                    item["duel_id"] = item.pop("recording_id")
-                defaults = LEGACY_DEFAULTS.get(table, {})
-                if set(item).issubset(columns[table]):
-                    for column, default in defaults.items():
-                        item.setdefault(column, default)
-                if set(item) != columns[table]:
-                    raise ManagedDataError(f"{table}の列構成が現在のDBと一致しません")
-                normalized.append(item)
-            validated[table] = normalized
-        return validated
+        try:
+            return validate_portable_document(payload).tables
+        except PortableDataError as exc:
+            raise ManagedDataError(str(exc)) from exc
 
     @staticmethod
-    def _insert_rows(
-        connection: sqlite3.Connection, table: str, rows: list[dict[str, object]]
-    ) -> None:
-        if not rows:
-            return
-        columns = tuple(rows[0])
-        placeholders = ", ".join("?" for _ in columns)
-        sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
-        connection.executemany(sql, [tuple(row[column] for column in columns) for row in rows])
+    def _insert_rows(connection: sqlite3.Connection, table: str, rows: list[dict[str, object]]) -> None:
+        if rows:
+            columns = tuple(rows[0])
+            placeholders = ",".join("?" for _ in columns)
+            connection.executemany(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",
+                                   [tuple(row[column] for column in columns) for row in rows])
 
-    def _backup(self, reason: str) -> Path:
-        if self.protection is not None:
-            try:
-                return self.protection.create_backup(reason).path
-            except DataProtectionError as exc:
-                raise ManagedDataError(f"操作前バックアップを作成できません: {exc}") from exc
-        self.exports_path.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        destination = self.exports_path / f"history.{reason}.{timestamp}.{uuid.uuid4().hex}.sqlite3"
-        source: sqlite3.Connection | None = None
-        target: sqlite3.Connection | None = None
-        try:
-            source = connect_history_database(self.database_path)
-            target = sqlite3.connect(destination)
-            source.backup(target)
-            target.commit()
-            return destination
-        except (OSError, sqlite3.Error) as exc:
-            destination.unlink(missing_ok=True)
-            raise ManagedDataError(f"操作前バックアップを作成できません: {exc}") from exc
-        finally:
-            if target is not None:
-                target.close()
-            if source is not None:
-                source.close()
 
-    def _restore_backup(self, backup: Path) -> None:
-        if self.protection is not None and backup.suffix == ".mdrl-backup":
-            try:
-                self.protection.restore(backup, create_safety_backup=False)
-                return
-            except DataProtectionError as exc:
-                raise ManagedDataError(
-                    f"処理に失敗し、バックアップの復元にも失敗しました: {backup}: {exc}"
-                ) from exc
-        source: sqlite3.Connection | None = None
-        target: sqlite3.Connection | None = None
-        try:
-            source = sqlite3.connect(backup)
-            target = sqlite3.connect(self.database_path)
-            source.backup(target)
-            target.commit()
-        except sqlite3.Error as exc:
-            raise ManagedDataError(
-                f"処理に失敗し、バックアップの復元にも失敗しました: {backup}: {exc}"
-            ) from exc
-        finally:
-            if target is not None:
-                target.close()
-            if source is not None:
-                source.close()
+def _validate_shared_target_links(connection: sqlite3.Connection, tables: dict[str, list[dict[str, object]]]) -> None:
+    current = {row["target_id"]: row["card_id"] for row in connection.execute("SELECT * FROM card_target_identity_links")}
+    for row in tables["card_target_identity_links"]:
+        if row["target_id"] in current and row["card_id"] != current[row["target_id"]]:
+            raise ManagedDataError("既存の解析対象と持込カードの同一性が異なります。共有設定を変更せず取込を中止しました")
+
+
+def _insert_managed_plan(connection: sqlite3.Connection, tables: dict[str, list[dict[str, object]]], insert) -> None:
+    shared_keys = {"card_identities": "card_id", "card_targets": "target_id", "card_target_identity_links": "target_id"}
+    for table in PORTABLE_TABLES:
+        rows = tables[table]
+        if table in shared_keys:
+            key = shared_keys[table]
+            existing = {row[0] for row in connection.execute(f"SELECT {key} FROM {table}")}
+            rows = [row for row in rows if row[key] not in existing]
+        insert(connection, table, rows)

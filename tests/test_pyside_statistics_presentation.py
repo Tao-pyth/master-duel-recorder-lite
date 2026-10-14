@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 from master_duel_recorder_lite.duel_statistics import StatisticsMetric, StatisticsTrendPoint
 
 
@@ -27,6 +29,7 @@ class StatisticsPresentationWidgetTest(unittest.TestCase):
                 window = next(w for w in app.topLevelWidgets()
                               if isinstance(w, QMainWindow) and w.isVisible())
                 try:
+                    wait_for_gui_startup(app, window)
                     window.show_page("statistics")
                     table = window._table(
                         "statistics_presentation_test_table", ("名称", "対戦", "勝利", "勝率"),
@@ -133,7 +136,7 @@ class StatisticsPresentationWidgetTest(unittest.TestCase):
                     chart.set_points(())
                     self.assertEqual(chart.date_label_rectangles(), ())
                 finally:
-                    window.close()
+                    close_gui_test_window(app, window)
                 return 0
 
             platform = os.environ.get("MDRL_TEST_QPA", "offscreen")

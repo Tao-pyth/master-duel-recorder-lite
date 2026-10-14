@@ -491,6 +491,7 @@ class PySideGuiContractTest(unittest.TestCase):
             status="confirmed",
             label="レビューで追加",
             source="manual",
+            video_verified=True,
         )
 
         row = review_timeline_display_row(event)

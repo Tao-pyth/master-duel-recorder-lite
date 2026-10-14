@@ -104,6 +104,7 @@ class ReviewViewModelTest(unittest.TestCase):
                 label="対戦開始",
                 source="system",
                 confidence=None,
+                video_verified=True,
             ),
             ReviewTimelineEvent(
                 event_id="marker",
@@ -114,6 +115,7 @@ class ReviewViewModelTest(unittest.TestCase):
                 label="重要局面",
                 source="manual",
                 confidence=None,
+                video_verified=True,
             ),
             ReviewTimelineEvent(
                 event_id="candidate",
@@ -124,6 +126,7 @@ class ReviewViewModelTest(unittest.TestCase):
                 label="候補",
                 source="visual",
                 confidence=0.75,
+                video_verified=True,
             ),
             ReviewTimelineEvent(
                 event_id="outside",
@@ -134,6 +137,7 @@ class ReviewViewModelTest(unittest.TestCase):
                 label="範囲外",
                 source="visual",
                 confidence=None,
+                video_verified=True,
             ),
         )
 
@@ -160,6 +164,7 @@ class ReviewViewModelTest(unittest.TestCase):
             label="確認",
             source="manual",
             confidence=None,
+            video_verified=True,
         )
 
         items = build_visual_timeline_items((event,), duration_seconds=None)

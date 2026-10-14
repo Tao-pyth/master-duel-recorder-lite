@@ -10,10 +10,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup, wait_for_gui_tasks
+
 from master_duel_recorder_lite.application import RecorderApplicationService
 from master_duel_recorder_lite.duel_records import DuelRecordRepository, DuelRecordValues
 from master_duel_recorder_lite.duel_workflow import DuelFilterCriteria
-from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
+from test_gui_refresh_and_review_lifecycle import register_video
 
 
 @unittest.skipUnless(importlib.util.find_spec("PySide6"), "PySide6 is optional")
@@ -41,16 +43,14 @@ class HistoryRedesignTest(unittest.TestCase):
             def inspect(_app):
                 app = QApplication.instance()
                 window = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
-                window.record_state_timer.stop()
-                window.show_page("history")
                 try:
+                    wait_for_gui_startup(app, window)
+                    window.show_page("history")
                     scenario(window, service, app)
                 finally:
                     window.history_editor.baseline = None
                     window.settings_baseline = None
-                    window.close()
-                    window.deleteLater()
-                    app.processEvents()
+                    close_gui_test_window(app, window)
                 return 0
 
             with patch.dict(os.environ, {"QT_QPA_PLATFORM": os.environ.get("MDRL_TEST_QPA", "offscreen")}), patch.object(QApplication, "exec", inspect):
@@ -235,9 +235,7 @@ class HistoryRedesignTest(unittest.TestCase):
 
     def test_recording_without_record_and_existing_record_roundtrip_next(self):
         def scenario(w, service, app):
-            history = RecordingHistoryRepository.from_runtime_paths(service.paths)
-            history.register_starting(recording_id="mock-video", output_path=service.paths.recordings / "mock.mkv",
-                                      container="mkv", source="manual", created_at=datetime(2026, 9, 12, tzinfo=timezone.utc))
+            register_video(service, "mock-video")
             w._refresh_history()
             w.widgets["history_table"].selectRow(0)
             editor = w.history_editor
@@ -395,14 +393,13 @@ class HistoryRedesignTest(unittest.TestCase):
                 w.history_menu_actions["history_columns"].trigger()
                 duplicate.assert_called_once()
                 self.assertEqual(information.call_count, 2)
-            history = RecordingHistoryRepository.from_runtime_paths(service.paths)
-            history.register_starting(recording_id="review-route", output_path=service.paths.recordings / "review.mkv",
-                                      container="mkv", source="manual", created_at=datetime(2026, 9, 12, tzinfo=timezone.utc))
+            register_video(service, "review-route")
             w._refresh_history()
             table.selectRow(0)
             preview = QWidget(w)
             with patch("master_duel_recorder_lite.pyside_review.create_review_window", return_value=preview) as create:
                 w.widgets["history_play"].click()
+                wait_for_gui_tasks(app, w)
                 self.assertEqual(create.call_args.kwargs["recording_id"], "review-route")
                 callback = create.call_args.kwargs["on_duel_saved"]
                 w.history_editor.fields["notes"].setPlainText("背景更新で保持")
@@ -410,6 +407,7 @@ class HistoryRedesignTest(unittest.TestCase):
                 self.assertTrue(w.history_editor.is_dirty())
                 w.history_editor.bind(w.history_editor.view)
                 w.history_menu_actions["history_duel"].trigger()
+                wait_for_gui_tasks(app, w)
                 self.assertEqual(create.call_args.kwargs["initial_tab"], "duel")
             with patch.object(w.service, "youtube_preparation_status", return_value=SimpleNamespace(message="確認")), patch.object(w.service, "get_youtube_upload_dialog_data", return_value=SimpleNamespace(youtube_watch_url=None, title="検証")), patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as question, patch.object(w, "_start_youtube_upload") as upload:
                 w.history_menu_actions["history_youtube"].trigger()

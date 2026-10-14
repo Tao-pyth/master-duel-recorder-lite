@@ -12,6 +12,7 @@ import uuid
 
 from .history_database import HISTORY_DATABASE_NAME
 from .runtime_paths import RuntimePaths, local_application_data_root
+from .video_management import VideoManagementError, video_management_gate
 
 
 class DataLocationError(RuntimeError):
@@ -67,6 +68,19 @@ def save_runtime_root_pointer(root: Path) -> Path:
 
 
 def relocate_runtime_data(paths: RuntimePaths, destination: Path) -> DataRelocationResult:
+    from .data_protection import DataProtectionError, DataProtectionService, initialize_protected_history_database
+
+    _validate_target(paths.root.expanduser().resolve(), destination.expanduser().resolve())
+    try:
+        with video_management_gate(paths):
+            initialize_protected_history_database(paths)
+            with DataProtectionService(paths).retained_backup("pre-data-relocation"):
+                return _relocate_locked(paths, destination)
+    except (VideoManagementError, DataProtectionError) as exc:
+        raise DataLocationError(str(exc)) from exc
+
+
+def _relocate_locked(paths: RuntimePaths, destination: Path) -> DataRelocationResult:
     source = paths.root.expanduser().resolve()
     target = destination.expanduser().resolve()
     _validate_target(source, target)
@@ -75,8 +89,10 @@ def relocate_runtime_data(paths: RuntimePaths, destination: Path) -> DataRelocat
         tempfile.mkdtemp(prefix=f".{target.name}.mdrl-move-", dir=target.parent)
     ).resolve()
     try:
-        shutil.rmtree(staging)
-        shutil.copytree(source, staging, copy_function=shutil.copy2)
+        lock_names = {"video-operations.lock", "recording.lock", "data-protection.lock", "youtube-upload.lock"}
+        def ignore_locks(directory: str, names: list[str]) -> set[str]:
+            return set(names) & lock_names if Path(directory).resolve() == paths.data.resolve() else set()
+        shutil.copytree(source, staging, copy_function=shutil.copy2, dirs_exist_ok=True, ignore=ignore_locks)
         _validate_copy(staging)
         copied_bytes = sum(
             item.stat().st_size for item in staging.rglob("*") if item.is_file()
@@ -87,11 +103,19 @@ def relocate_runtime_data(paths: RuntimePaths, destination: Path) -> DataRelocat
         save_runtime_root_pointer(target)
         return DataRelocationResult(source, target, copied_bytes)
     except DataLocationError:
-        shutil.rmtree(staging, ignore_errors=True)
+        _discard_staging(staging, target.parent)
         raise
     except (OSError, sqlite3.Error) as exc:
-        shutil.rmtree(staging, ignore_errors=True)
+        _discard_staging(staging, target.parent)
         raise DataLocationError(f"データ保存先を変更できません: {exc}") from exc
+
+
+def _discard_staging(staging: Path, parent: Path) -> None:
+    resolved = staging.resolve()
+    if resolved.parent != parent.resolve() or ".mdrl-move-" not in resolved.name or staging.is_symlink():
+        raise DataLocationError("移行用の一時フォルダの範囲を確認できません")
+    if resolved.exists():
+        shutil.rmtree(resolved, ignore_errors=True)
 
 
 def _validate_target(source: Path, target: Path) -> None:

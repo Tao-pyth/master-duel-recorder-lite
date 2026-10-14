@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 from master_duel_recorder_lite.application import RecorderApplicationService, DuelManagementQuery
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 from master_duel_recorder_lite.duel_statistics import StatisticsFilter
@@ -66,6 +68,7 @@ class AuditWidgetTest(unittest.TestCase):
                 app = QApplication.instance()
                 window = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
                 try:
+                    wait_for_gui_startup(app, window)
                     window.show_page("statistics")
                     widgets = window.widgets
                     selector = widgets["statistics_filters"]
@@ -110,7 +113,7 @@ class AuditWidgetTest(unittest.TestCase):
                     self.assertEqual(types.rowCount(), 5)
                     self.assertEqual(window.statistics_cards[1][1].text(), "2勝 / 6戦")
                 finally:
-                    window.close()
+                    close_gui_test_window(app, window)
                 return 0
 
             platform = os.environ.get("MDRL_TEST_QPA", "offscreen")
@@ -145,6 +148,7 @@ class AuditWidgetTest(unittest.TestCase):
                 app = QApplication.instance()
                 window = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
                 try:
+                    wait_for_gui_startup(app, window)
                     window.show_page("statistics")
                     widgets = window.widgets
                     table = widgets["statistics_order_table"]
@@ -190,7 +194,7 @@ class AuditWidgetTest(unittest.TestCase):
                     widgets["statistics_period_enabled"].setChecked(False)
                     self.assertEqual(rows(), expected)
                 finally:
-                    window.close()
+                    close_gui_test_window(app, window)
                 return 0
 
             platform = os.environ.get("MDRL_TEST_QPA", "offscreen")
@@ -218,6 +222,7 @@ class AuditWidgetTest(unittest.TestCase):
                 app = QApplication.instance()
                 window = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
                 try:
+                    wait_for_gui_startup(app, window)
                     widgets = window.widgets
                     window.show_page("statistics")
                     self.assertEqual(window.statistics_cards[0][0].text(), "80.0%")
@@ -278,7 +283,7 @@ class AuditWidgetTest(unittest.TestCase):
                         self.assertGreater(widgets["history_table"].height(), 310)
                 finally:
                     window.settings_baseline = None
-                    window.close()
+                    close_gui_test_window(app, window)
                 return 0
 
             with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}), patch.object(QApplication, "exec", inspect):

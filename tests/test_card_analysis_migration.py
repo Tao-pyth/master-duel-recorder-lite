@@ -11,7 +11,7 @@ from master_duel_recorder_lite.card_analysis_models import CardInputFingerprint,
 from master_duel_recorder_lite.card_analysis_repository import CardAnalysisRepository
 from master_duel_recorder_lite.data_protection import DataProtectionService
 from master_duel_recorder_lite.history_database import (
-    HISTORY_DATABASE_NAME, HistoryDatabaseError, _MIGRATIONS, initialize_history_database,
+    CURRENT_SCHEMA_VERSION, HISTORY_DATABASE_NAME, HistoryDatabaseError, _MIGRATIONS, initialize_history_database,
 )
 from master_duel_recorder_lite.recording_history import RecordingHistoryRepository
 from master_duel_recorder_lite.runtime_paths import default_runtime_paths, ensure_runtime_dirs
@@ -53,7 +53,7 @@ class CardAnalysisMigrationTest(unittest.TestCase):
                 before = {table: connection.execute(f"SELECT * FROM {table}").fetchall()
                           for table in ("recordings", "duel_records", "duel_events")}
             migrated = initialize_history_database(path)
-            self.assertEqual(migrated.version, 18)
+            self.assertEqual(migrated.version, CURRENT_SCHEMA_VERSION)
             self.assertTrue(migrated.backup_path.is_file())
             with closing(sqlite3.connect(path)) as connection:
                 for table, rows in before.items():
@@ -137,17 +137,19 @@ class CardAnalysisMigrationTest(unittest.TestCase):
             backup = protection.create_backup("card-analysis-test")
             counts = protection.preview_restore(backup.path).backup_counts
             self.assertEqual({key: counts[key] for key in (
-                "card_targets", "card_analysis_jobs", "card_observations", "card_nonuse_confirmations", "card_opener_confirmations"
+                "card_targets", "card_analysis_jobs", "card_observations", "duel_card_information", "duel_card_openers"
             )}, {"card_targets": 2, "card_analysis_jobs": 1, "card_observations": 1,
-                  "card_nonuse_confirmations": 1, "card_opener_confirmations": 1})
+                  "duel_card_information": 2, "duel_card_openers": 1})
             repository.reject_observation(row.event_id, expected_revision=row.revision)
             repository.save_target(target_id=target.target_id, name="changed after backup")
             protection.restore(backup.path)
             restored = CardAnalysisRepository.from_runtime_paths(paths).get_review("video")
-            self.assertEqual(restored.observations, (row,))
+            self.assertEqual(restored.observations, (replace(row, video_verified=False),))
             self.assertEqual(restored.openers[0].status, "confirmed")
             self.assertTrue(restored.nonuses[0].confirmed)
             self.assertEqual(video.read_bytes(), b"preserve original video")
+            self.assertGreater(repository.verify_video_sources("video", fingerprint), 0)
+            self.assertEqual(repository.get_review("video").observations, (row,))
 
 
 if __name__ == "__main__":

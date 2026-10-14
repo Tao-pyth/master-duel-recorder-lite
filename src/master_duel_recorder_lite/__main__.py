@@ -2417,6 +2417,8 @@ def _youtube_upload_service(
     user_data_dir: Path | None,
     store: WindowsCredentialStore,
 ) -> YouTubeUploadService:
+    from .post_upload_cleanup import PostUploadCleanupHandler
+
     loaded = _load_config_or_report(project_root, user_data_dir)
     if loaded is None:
         raise YouTubeServiceError("設定を読み込めません")
@@ -2442,6 +2444,7 @@ def _youtube_upload_service(
         credential_store=store,
         youtube_client=HttpYouTubeClient(),
         preparation_service=preparation,
+        post_upload_cleanup=PostUploadCleanupHandler(paths),
     )
 
 

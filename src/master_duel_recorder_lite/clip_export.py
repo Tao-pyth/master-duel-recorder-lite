@@ -8,9 +8,10 @@ import subprocess
 import uuid
 
 from .ffmpeg import CommandRunner, run_command
-from .recording_history import RecordingHistoryRepository
+from .recording_history import RecordingHistoryEntry, RecordingHistoryRepository
 from .runtime_paths import RuntimePaths
 from .upload_media import UploadMediaValidator
+from .video_source_use import VideoSourceUseError, video_source_use
 
 
 class ClipExportError(RuntimeError):
@@ -86,10 +87,21 @@ class ClipExportService:
             raise ClipExportError(f"録画履歴が見つかりません: {identifier}")
         if history.state != "completed":
             raise ClipExportError(f"正常完了した録画だけをクリップ出力できます: {history.state}")
-        source = (self.paths.recordings / history.output_path).resolve()
-        source.relative_to(self.paths.recordings.resolve())
-        if not source.is_file() or source.stat().st_size <= 0:
-            raise ClipExportError(f"元録画が存在しないか空です: {source}")
+        try:
+            with video_source_use(self.paths, identifier, purpose="clip_export") as source:
+                if source.asset.path != history.output_path.as_posix():
+                    raise ClipExportError("録画履歴と現在の元動画の参照が一致しません")
+                return self._export_source(
+                    identifier, history, source.path, center_seconds=center_seconds,
+                    before_seconds=before_seconds, after_seconds=after_seconds,
+                )
+        except VideoSourceUseError as exc:
+            raise ClipExportError(str(exc)) from exc
+
+    def _export_source(
+        self, identifier: str, history: RecordingHistoryEntry, source: Path, *,
+        center_seconds: float, before_seconds: float, after_seconds: float,
+    ) -> ClipExportResult:
         validation = self.validator.validate(source)
         if not validation.eligible:
             raise ClipExportError("元録画を検証できません: " + "; ".join(validation.errors))

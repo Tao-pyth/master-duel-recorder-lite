@@ -207,7 +207,7 @@ class CardAnalysisRepositoryTest(unittest.TestCase):
         with self.assertRaises(CardAnalysisConflictError):
             self.repository.set_nonuse("video", self.target.target_id, "opponent", True)
 
-    def test_opener_is_explicit_and_rejection_or_actor_change_invalidates_it(self) -> None:
+    def test_marker_rejection_or_actor_correction_preserves_canonical_opener(self) -> None:
         row = self.finish(self.values())[0]
         with self.assertRaises(ValueError):
             self.repository.set_opener("video", "opponent", event_id=row.event_id)
@@ -217,10 +217,12 @@ class CardAnalysisRepositoryTest(unittest.TestCase):
             self.repository.set_opener("video", "opponent", status="unknown", expected_revision=opener.revision - 1)
         corrected = self.repository.update_observation(confirmed.event_id, expected_revision=confirmed.revision, actor="self")
         self.assertFalse(corrected.is_opener)
-        self.assertEqual(self.repository.get_review("video").openers[0].status, "unknown")
-        self.repository.set_opener("video", "self", event_id=row.event_id)
+        self.assertEqual(self.repository.get_review("video").openers[0].status, "confirmed")
+        self.assertEqual(self.repository.get_review("video").openers[0].actor, "opponent")
         self.repository.reject_observation(row.event_id, expected_revision=corrected.revision)
-        self.assertTrue(all(item.status == "unknown" for item in self.repository.get_review("video").openers))
+        self.assertEqual(self.repository.get_review("video").openers[0].status, "confirmed")
+        self.assertEqual(self.repository.get_review("video").information[0].actor, "opponent")
+        self.assertEqual(self.repository.get_review("video").information[0].state, "used")
 
     def test_detail_display_does_not_support_use_until_human_supplies_evidence(self) -> None:
         row = self.finish(self.values(supports=False, action="unknown"))[0]
@@ -229,13 +231,13 @@ class CardAnalysisRepositoryTest(unittest.TestCase):
             self.repository.set_opener("video", "opponent", event_id=row.event_id)
         edited = self.repository.update_observation(confirmed.event_id, expected_revision=confirmed.revision,
                                                     action="activate", evidence={"supports_use": True, "manually_confirmed_use": True},
-                                                    is_opener=True)
+                                                    status="confirmed", is_opener=True)
         self.assertTrue(edited.is_opener)
         self.assertTrue(edited.values.supports_use)
         json.dumps(self.repository.get_review("video").to_dict(), ensure_ascii=False)
 
     def test_opener_revision_prevents_a_stale_editor_from_overwriting_another_choice(self) -> None:
-        first, second = self.finish(self.values("first", actor="self"), self.values("second", actor="self", time=2000))
+        first, second = self.finish(self.values("first", actor="self"), self.values("second", actor="self", target=self.other.target_id, time=2000))
         first = self.repository.confirm_observation(first.event_id, expected_revision=1)
         second = self.repository.confirm_observation(second.event_id, expected_revision=1)
         initial = self.repository.set_opener("video", "self", event_id=first.event_id)

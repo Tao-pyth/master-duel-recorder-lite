@@ -92,6 +92,11 @@ CONFIG_FIELDS: Mapping[str, ConfigField] = MappingProxyType(
             "windows_notifications_enabled", _boolean
         ),
         "upload.privacy_status": ConfigField("upload_privacy_status", _lower_text),
+        "upload.delete_source_after_upload": ConfigField(
+            "upload_delete_source_after_upload", _boolean
+        ),
+        "storage.max_gib": ConfigField("recording_storage_max_gib", _integer),
+        "storage.retention_days": ConfigField("recording_retention_days", _integer),
         "interaction.readiness_check_seconds": ConfigField(
             "readiness_check_seconds", _integer
         ),

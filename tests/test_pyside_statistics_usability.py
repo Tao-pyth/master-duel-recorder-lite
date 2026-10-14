@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from gui_test_helpers import close_gui_test_window, wait_for_gui_startup
+
 from master_duel_recorder_lite.application import RecorderApplicationService
 from master_duel_recorder_lite.duel_records import DuelRecordValues
 
@@ -59,10 +61,11 @@ class StatisticsUsabilityWidgetTest(unittest.TestCase):
                 window = next(w for w in app.topLevelWidgets()
                               if isinstance(w, QMainWindow) and w.isVisible())
                 try:
+                    wait_for_gui_startup(app, window)
                     window.show_page("statistics")
                     callback(app, window)
                 finally:
-                    window.close()
+                    close_gui_test_window(app, window)
                 return 0
 
             platform = os.environ.get("MDRL_TEST_QPA", "offscreen")

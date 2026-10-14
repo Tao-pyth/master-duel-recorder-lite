@@ -81,7 +81,8 @@ def _fill_targets(combo: QComboBox, targets, *, optional: bool = False) -> None:
     if optional:
         combo.addItem("すべての初動", None)
     for target in targets:
-        combo.addItem(target.name + ("（無効）" if not target.enabled else ""), target.target_id)
+        combo.addItem(target.name + ("（無効）" if not getattr(target, "enabled", True) else ""),
+                      getattr(target, "target_id", None) or target.card_id)
         combo.setItemData(combo.count() - 1, target.name, Qt.ItemDataRole.ToolTipRole)
     index = combo.findData(selected)
     if index >= 0:
@@ -246,7 +247,7 @@ class CardReviewPanel(QWidget):
         operations.addWidget(self.analyze, 0, 0)
         operations.addWidget(self.refresh_button, 0, 1)
         layout.addLayout(operations)
-        hint = QLabel("候補は動画で確認してください。観測位置はログが表示された位置です。実使用時刻・初動・未使用は確認して保存します。")
+        hint = QLabel("候補は動画で確認してください。「使用を確定」は対戦のカード情報へ保存します。時刻の訂正や候補の却下では、保存した使用情報・初動は変わりません。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.table = _table("review_cards_table", ("観測位置", "カード", "状態"))
@@ -334,7 +335,7 @@ class CardReviewPanel(QWidget):
     def load_observation(self, observation) -> None:
         self.current = observation
         for button in self.edit_buttons:
-            button.setEnabled(observation is not None)
+            button.setEnabled(observation is not None and getattr(observation, "video_verified", False))
         for widget in (self.name, self.actor, self.action, self.actual_known, self.opener):
             widget.setEnabled(observation is not None)
         if observation is not None:
@@ -431,7 +432,7 @@ class CardReviewPanel(QWidget):
                                           + "\n初動確認: " + ("、".join(openers) or "なし（未確認）"))
 
     def seek_current(self) -> None:
-        if self.current is not None:
+        if self.current is not None and getattr(self.current, "video_verified", False):
             self.seek(self.current.values.observed_ms)
 
     def save(self, status: str | None) -> None:
@@ -442,7 +443,7 @@ class CardReviewPanel(QWidget):
             QMessageBox.warning(self, "名称を選択してください", "対象管理で登録したカードを選択してください。")
             return
         selected_status = status or self.current.status
-        if selected_status == "confirmed" and (
+        if status == "confirmed" and (
             self.actor.currentData() == "unknown" or self.action.currentData() == "unknown"
         ):
             QMessageBox.warning(self, "使用者と行動の確認", "動画で使用を確認し、使用者と行動を選択してから確定してください。")
@@ -452,16 +453,21 @@ class CardReviewPanel(QWidget):
             return
         try:
             previous_opener = next((item for item in self.review.openers if item.actor == self.actor.currentData()), None)
+            information = next((item for item in getattr(self.review, "information", ())
+                                if item.card_id == getattr(target, "card_id", target.target_id)
+                                and item.actor == self.actor.currentData()), None)
             updated = self.service.update_card_observation(
                 self.current.event_id, expected_revision=self.current.revision,
                 opener_expected_revision=previous_opener.revision if previous_opener else 0,
+                information_expected_revision=information.revision if information else 0,
+                expected_generation=self.current.generation,
                 target_id=target.target_id, card_name=target.name,
                 actor=self.actor.currentData(), action=self.action.currentData(),
                 actual_ms=round(self.actual_seconds.value() * 1000) if self.actual_known.isChecked() else None,
                 time_kind="actual_use" if self.actual_known.isChecked() else (
                     self.current.values.time_kind if self.current.values.time_kind != "actual_use" else "log_observed"
                 ),
-                status=selected_status, is_opener=self.opener.isChecked() and selected_status == "confirmed",
+                status=status, is_opener=True if self.opener.isChecked() and status == "confirmed" else None,
             )
         except Exception as exc:
             _error(self, "カード使用を保存できません", exc)
@@ -554,7 +560,8 @@ class CardStatisticsPanel(QWidget):
 
     def reload_targets(self) -> None:
         try:
-            targets = self.service.list_card_targets(include_disabled=True)
+            identities = getattr(self.service, "list_card_identities", None)
+            targets = identities() if callable(identities) else self.service.list_card_targets(include_disabled=True)
         except Exception as exc:
             self.status.setText(f"対象カードを読み込めません: {exc}")
             return

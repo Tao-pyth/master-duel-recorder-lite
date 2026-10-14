@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -27,17 +28,42 @@ class YouTubeConnectionGuiTest(unittest.TestCase):
             service = RecorderApplicationService(
                 project_root=root, user_data_dir=root / "data", youtube_credential_store=store,
                 youtube_oauth_environ={"MDRL_YOUTUBE_OAUTH_CLIENT_ID": "fake-client"},
+                require_gui_startup=True,
             )
 
             def inspect(_app):
                 app = QApplication.instance()
                 window = next(w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible())
-                window.record_state_timer.stop()
-                window.show_page("settings")
+
+                def wait_background(*, startup_only=False):
+                    deadline = time.monotonic() + 5
+                    while (window.startup_maintenance_running if startup_only else bool(window.background_tasks)):
+                        if time.monotonic() >= deadline:
+                            return False
+                        app.processEvents()
+                        window._poll_background_tasks()
+                        # qWaitのnative待機がPython workerのGIL取得を遅らせないようにします。
+                        time.sleep(0.005)
+                    return True
+
                 try:
+                    completed = wait_background(startup_only=True)
+                    self.assertTrue(
+                        completed,
+                        f"通常起動の保存チェックが終端になりません: {service.startup_maintenance_message}; "
+                        f"tasks={[(label, future.done(), future.running()) for label, future, _callback in window.background_tasks]}",
+                    )
+                    self.assertTrue(service.gui_startup_ready)
+                    window.record_state_timer.stop()
+                    window.show_page("settings")
                     scenario(window, service, store, app)
                 finally:
+                    if not wait_background():
+                        service.close()
+                    window.background_executor.shutdown(wait=True, cancel_futures=True)
+                    window._poll_background_tasks()
                     window.youtube_connection_running = False
+                    window.close_after_background = False
                     window.history_editor.baseline = None
                     window.settings_baseline = None
                     window.close()

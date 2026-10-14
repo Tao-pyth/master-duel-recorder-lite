@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import Callable, Iterator
-import uuid
 
 from .history_database import (
     HISTORY_DATABASE_NAME,
@@ -457,98 +456,72 @@ class RecordingHistoryRepository:
             rows = connection.execute(sql, parameters).fetchall()
         return tuple(self._entry_from_row(row) for row in rows)
 
-    def delete(self, recording_id: str) -> HistoryDeletionResult:
-        identifier = _required_text(recording_id, "recording_id")
-        entry = self.get(identifier)
-        if entry is None:
-            raise RecordingHistoryError(f"録画履歴が見つかりません: {identifier}")
-        relative_paths = (entry.output_path,)
-        paths: list[Path] = []
-        for relative_path in relative_paths:
-            path = self._resolved_recording_path(relative_path)
-            if path not in paths:
-                paths.append(path)
-
-        staging_root = self.recordings_root / ".delete-staging" / uuid.uuid4().hex
-        moved: list[tuple[Path, Path]] = []
-        missing: list[Path] = []
-        try:
-            for index, path in enumerate(paths):
-                if not path.exists():
-                    missing.append(path)
-                    continue
-                if not path.is_file():
-                    raise RecordingHistoryError(
-                        f"削除対象がファイルではありません: {path}"
-                    )
-                staging_root.mkdir(parents=True, exist_ok=True)
-                staged = staging_root / f"{index:04d}-{path.name}"
-                path.replace(staged)
-                moved.append((path, staged))
-
-            with self._connection() as connection:
-                duel_row = connection.execute(
-                    "SELECT duel_id FROM duel_records WHERE recording_id = ?",
-                    (identifier,),
-                ).fetchone()
-                duel_id = str(duel_row["duel_id"]) if duel_row is not None else None
-                if duel_id is not None:
-                    connection.execute(
-                        "DELETE FROM duel_record_tags WHERE duel_id = ?", (duel_id,)
-                    )
-                    connection.execute(
-                        "DELETE FROM duel_record_tag_links WHERE duel_id = ?",
-                        (duel_id,),
-                    )
-                    connection.execute(
-                        "DELETE FROM duel_record_changes WHERE duel_id = ?",
-                        (duel_id,),
-                    )
-                connection.execute(
-                    "DELETE FROM duel_events WHERE recording_id = ?", (identifier,)
-                )
-                if duel_id is not None:
-                    connection.execute(
-                        "DELETE FROM duel_records WHERE duel_id = ?", (duel_id,)
-                    )
-                cursor = connection.execute(
-                    "DELETE FROM recordings WHERE recording_id = ?", (identifier,)
-                )
-                if cursor.rowcount != 1:
-                    raise RecordingHistoryError(
-                        f"録画履歴が見つかりません: {identifier}"
-                    )
-        except (OSError, RecordingHistoryError) as exc:
-            restore_errors: list[str] = []
-            for original, staged in reversed(moved):
-                try:
-                    original.parent.mkdir(parents=True, exist_ok=True)
-                    staged.replace(original)
-                except OSError as restore_exc:
-                    restore_errors.append(f"{original}: {restore_exc}")
-            self._remove_empty_staging(staging_root)
-            detail = f"録画履歴を削除できません: {identifier}: {exc}"
-            if restore_errors:
-                detail += f" / ファイル復元失敗: {'; '.join(restore_errors)}"
-            raise RecordingHistoryError(detail) from exc
-
-        cleanup_errors: list[str] = []
-        for _original, staged in moved:
-            try:
-                staged.unlink(missing_ok=True)
-            except OSError as exc:
-                cleanup_errors.append(f"{staged}: {exc}")
-        self._remove_empty_staging(staging_root)
-        if cleanup_errors:
-            raise RecordingHistoryError(
-                "履歴は削除しましたが、退避した録画ファイルを削除できません: "
-                + "; ".join(cleanup_errors)
-            )
-        return HistoryDeletionResult(
-            recording_id=identifier,
-            deleted_files=tuple(original for original, _staged in moved),
-            missing_files=tuple(missing),
+    def delete(self, recording_id: str, *, allow_protected: bool = False) -> HistoryDeletionResult:
+        from .data_ownership import (
+            DataOwnershipError, delete_recording_related, scoped_data_protection, scoped_runtime_paths,
         )
+        from .recording_retention import RecordingDeletionService, safe_file_path
+        from .video_lifecycle import VideoLifecycleRepository
+        from .video_management import assert_video_management_allowed
+
+        identifier = _required_text(recording_id, "recording_id")
+        if not isinstance(allow_protected, bool):
+            raise RecordingHistoryError("保護動画の削除許可は真偽値で指定してください")
+        physically_deleted = False
+        try:
+            paths = scoped_runtime_paths(self.database_path, recordings_root=self.recordings_root)
+            protection = scoped_data_protection(paths, self.database_path)
+            lifecycle = VideoLifecycleRepository(database_path=self.database_path, recordings_root=self.recordings_root,
+                                                operation_lock_path=paths.data / "video-operations.lock")
+            service = RecordingDeletionService(paths, repository=lifecycle, protection=protection)
+            with service.operation_lock():
+                assert_video_management_allowed(paths, database_path=self.database_path)
+                entry = self.get(identifier)
+                if entry is None:
+                    raise RecordingHistoryError(f"録画履歴が見つかりません: {identifier}")
+                if lifecycle.get_protection(identifier).protected and not allow_protected:
+                    raise RecordingHistoryError("削除対象外の動画です。追加の削除確認が必要です")
+                path = safe_file_path(self.recordings_root, str(entry.output_path), must_exist=False)
+                try:
+                    metadata = path.stat()
+                except FileNotFoundError:
+                    metadata = None
+                if metadata is not None and not path.is_file():
+                    raise RecordingHistoryError(f"削除対象がファイルではありません: {path}")
+                with self._connection(write=False) as connection:
+                    other_paths = connection.execute(
+                        "SELECT output_path FROM recordings WHERE recording_id<>?", (identifier,),
+                    ).fetchall()
+                if any((self.recordings_root / str(row[0])).resolve() == path for row in other_paths):
+                    raise RecordingHistoryError("同じ元動画を参照する別の録画履歴があります")
+                asset = lifecycle.get_current_asset(identifier)
+                if metadata is not None and asset is not None and asset.state == "deleted":
+                    raise RecordingHistoryError("削除済み動画の保存先に別のファイルがあります。再関連付けを確認してください")
+                with service.retained_backup("pre-history-delete") as backup:
+                    if metadata is not None:
+                        result = service.delete_video(identifier, reason="manual", allow_protected=allow_protected)
+                        if result.status != "deleted":
+                            raise RecordingHistoryError(f"元動画を削除できません: {result.message}")
+                        physically_deleted = True
+                    # 動画と履歴の削除が終わるまで、同じ事前世代の実在を保証します。
+                    assert_video_management_allowed(paths, database_path=self.database_path)
+                    if protection.inspect_backup(backup.path).sha256 != backup.sha256:
+                        raise RecordingHistoryError("完全削除前のバックアップを保持できません")
+                    if lifecycle.get_protection(identifier).protected and not allow_protected:
+                        raise RecordingHistoryError("削除対象外の設定が変更されました。追加確認が必要です")
+                    with self._connection() as connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        if delete_recording_related(connection, identifier) != 1:
+                            raise DataOwnershipError("対象の録画履歴が変更されました")
+                        if connection.execute("PRAGMA foreign_key_check").fetchall():
+                            raise DataOwnershipError("完全削除後のDB参照関係が不正です")
+                    return HistoryDeletionResult(identifier, (path,) if physically_deleted else (),
+                                                 () if physically_deleted else (path,))
+        except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
+            detail = f"録画履歴を削除できません: {identifier}: {exc}"
+            if physically_deleted:
+                detail += " / 元動画の削除は完了しています。戦績・カード情報と削除理由を残しました。履歴削除を再操作してください"
+            raise RecordingHistoryError(detail) from exc
 
     def check_consistency(self) -> tuple[ConsistencyIssue, ...]:
         with self._connection(write=False) as connection:
