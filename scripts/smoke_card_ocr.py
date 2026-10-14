@@ -46,6 +46,8 @@ def run(command: list[str], environment: dict[str, str]) -> subprocess.Completed
 
 
 def verify(executable: Path, *, gui: bool, root: Path, source: Path) -> dict[str, object]:
+    # Windows TEMPの8.3短名もworkerと同じ実パスへ正規化する。
+    source = source.resolve()
     environment = os.environ.copy()
     environment.update({"MDRL_USER_DATA_DIR": str(root / "unused-runtime"),
                         "HTTP_PROXY": "http://127.0.0.1:9", "HTTPS_PROXY": "http://127.0.0.1:9",
@@ -72,7 +74,9 @@ def verify(executable: Path, *, gui: bool, root: Path, source: Path) -> dict[str
         raise RuntimeError("実推論workerが正常完了していません")
     result = results[0]
     if result.get("source_fingerprint") != fingerprint or result.get("analyzer_version") != "rapidocr-ppocrv6-v1":
-        raise RuntimeError("実推論の入力または方式が一致しません")
+        raise RuntimeError("実推論の入力または方式が一致しません: " + json.dumps({
+            "expected_fingerprint": fingerprint, "actual_fingerprint": result.get("source_fingerprint"),
+            "actual_analyzer_version": result.get("analyzer_version")}, ensure_ascii=True))
     observations = result.get("observations", [])
     if not any(row.get("target_id") == "smoke-target" and row.get("card_name") == "増殖するG"
                and row.get("time_kind") == "detail_observed" and row.get("evidence", {}).get("supports_use") is False
